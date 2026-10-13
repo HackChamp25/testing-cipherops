@@ -5,7 +5,7 @@ AIORI Hackathon 3 · Problem statement PS-036 · Team A3-PS036-TC161
 
 [![Cipherops project video](https://img.youtube.com/vi/FaVfeO5WTV8/hqdefault.jpg)](https://youtu.be/FaVfeO5WTV8?si=PtrE4kbB7UlKj6lL)
 
-▶ [Watch the project video on YouTube](https://youtu.be/FaVfeO5WTV8?si=PtrE4kbB7UlKj6lL)
+▶ [Watch the project introduction video on YouTube](https://youtu.be/FaVfeO5WTV8?si=PtrE4kbB7UlKj6lL)
 
 ---
 
