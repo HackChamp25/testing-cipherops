@@ -186,7 +186,7 @@ docs/           methodology, architecture and guides
 
 ## Team
 
-Akash Joshi · Anitha · Induradhakrishnan
+Akash Joshi · Anitha Natarajan · Indu Radhakrishnan
 
 ## License
 
