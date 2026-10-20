@@ -15,8 +15,8 @@ services:
       CIPHEROPS_HOST_IMAGE_ID: "${CIPHEROPS_HOST_IMAGE_ID:-unknown}"
       CIPHEROPS_GIT_SHA: "${CIPHEROPS_GIT_SHA:-unknown}"
     volumes:
-      - ../results:/work/results
-      - ../configs:/work/configs:ro
+      - ../results:/work/results:z
+      - ../configs:/work/configs:ro,z
     command: ["python3 -m cipherops.runner run --config configs/scenarios.yaml"]
 
   # Live mode: still no outside network, but tc-netem and the MTU of the
