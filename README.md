@@ -21,6 +21,26 @@ from your shell or from a client container and capture everything in Wireshark.
 Nothing here touches your system DNS. Everything is reached on ports 5301 and
 5302 only.
 
+## Pick a mode
+
+There are two ways to run this lab. Both drive the same `docker compose`
+services and the same `./zones` folder — pick one and stick with it for a
+given run.
+
+| | **CLI mode** | **UI mode** |
+|---|---|---|
+| What it is | Typing the commands in steps 1–6 yourself | The Flask dashboard in [step 7](#7-ui-mode-visual-simulator) |
+| Best for | Full control, Wireshark captures, custom `dig` flags | Quick comparisons, charts, no command memorizing |
+| Covers | Build, sign, serve, query, capture, cache test | Sign, start/stop servers, query, verify, cache test (no packet capture) |
+| Start here | [Step 1](#1-build-the-images-once-2040-min) | [Step 1](#1-build-the-images-once-2040-min), then skip to [Step 7](#7-ui-mode-visual-simulator) |
+
+**Do not mix the two at the same time** — e.g. clicking "Sign" in the UI while
+also running `docker compose run --rm signer` in a terminal. Both write to
+the same `./zones` files concurrently, which has caused duplicate/stale rows
+in `signing-times.csv` and mismatched keytags in `trust-anchors.txt` in
+practice. Use one mode per sign/run cycle; `docker compose down` between
+switches if unsure.
+
 ## 1. Build the images (once, 20–40 min)
 
 ```bash
@@ -53,7 +73,10 @@ worth reporting to your mentor (and upstream to Verisign):
 If your mentor gives you different "mentor-tested" commits, change the pins in
 `build-images.sh` and check whether these patches are still needed.
 
-## 2. Sign the zones
+Images are shared by both modes — once built, jump to [CLI mode](#2-sign-the-zones-cli-mode)
+or [UI mode](#7-ui-mode-visual-simulator).
+
+## 2. Sign the zones (CLI mode)
 
 ```bash
 docker compose run --rm signer                 # 100 records per zone
@@ -71,14 +94,18 @@ roughly 20+ minutes for 1,000 and several hours for 10,000. MTL signs the
 ladder once, so it took 1.3 s for 100 records. That gap *is* one of your
 benchmark results, but run the 10,000-record SLH-DSA signing overnight.
 
-## 3. Start the servers
+## 3. Start the servers (CLI mode)
 
 ```bash
 docker compose up -d nsd unbound client
 docker compose logs unbound | tail      # should show no errors
 ```
 
-## 4. Query
+If `unbound` immediately exits, check `docker compose logs unbound` — the
+most common cause is `./zones/trust-anchors.txt` missing because zones
+haven't been signed yet (step 2).
+
+## 4. Query (CLI mode)
 
 **From your shell:**
 
@@ -123,7 +150,7 @@ Things to compare:
   ladder). A validator needs it once per ladder; after that, condensed
   answers are enough.
 
-## 5. Capture in Wireshark
+## 5. Capture in Wireshark (CLI mode only — the UI doesn't do packet capture)
 
 **Linux host:** start Wireshark and capture on the **`pqclab0`** interface. It
 sees client→Unbound, Unbound→NSD and host→container traffic (port-mapped
@@ -164,7 +191,7 @@ That's expected.
 `tshark -r captures/unbound.pcap -q -z io,stat,0,"SUM(frame.len)frame.len"`.
 Run the same query set against each zone and compare totals.
 
-## 6. Cache behaviour (for "measured" cache numbers)
+## 6. Cache behaviour (CLI mode; UI mode has an equivalent "Cache test" button)
 
 ```bash
 docker compose exec unbound unbound-control -c /etc/lab/unbound.conf stats_noreset | grep -E 'total.num|cache|mem'
@@ -190,11 +217,13 @@ analytical estimate is the formula in your report.
   to see IP fragmentation instead of TCP fallback.
 - `cache-max-ttl: 0` in `config/unbound.conf` to make every query hit NSD.
 
-## 7. Visual simulator (optional)
+## 7. UI mode: Visual simulator
 
 A small local web dashboard that drives the same docker compose workflow
 with buttons instead of typing commands, and charts the results (sign time,
-verify time, response size/transport, cache hits).
+verify time, response size/transport, cache hits). It replaces steps 2–4 and
+6 above (not step 5, Wireshark capture — do that separately in CLI mode if
+you need it).
 
 ```bash
 pip install -r simulator/requirements.txt
@@ -206,6 +235,26 @@ It runs `docker compose` and `dig` under the hood with fixed arguments (no
 shell injection from form input) and only binds to localhost. Signing is
 run as a background job since plain SLH-DSA at high `RECORDS` can take
 hours; the page polls until it's done.
+
+**UI walkthrough, in order:**
+
+1. **Server status panel** — shows nsd/unbound/client up or down, and
+   whether signed zones already exist. If a container shows down after a
+   fresh checkout, that's expected — nothing is signed yet.
+2. **"1. Sign zones"** — enter a record count, click Sign. Runs
+   `docker compose run --rm signer` as a background job; poll until it
+   reports done (plain SLH-DSA at high record counts can take hours).
+3. **"Start servers"** button in the status panel — runs
+   `docker compose up -d nsd unbound client`. Do this only after signing
+   finishes, since `unbound` needs `./zones/trust-anchors.txt` to start.
+4. **"2. Verify zones"** — runs `ldns-verify-zone` against each signed zone
+   and charts the verification time.
+5. **"3. Query"** — pick a zone, optionally validate through Unbound or
+   request the full MTL signature, and see the parsed `dig` result
+   (size/transport/flags).
+6. **"4. Cache behaviour"** — flushes the zone's cache, does a cold query,
+   then three warm queries, and reports cache hit/miss counts — the UI
+   equivalent of step 6.
 
 ## Clean up
 
