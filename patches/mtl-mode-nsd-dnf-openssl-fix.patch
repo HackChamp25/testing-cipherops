@@ -1,5 +1,5 @@
 diff --git a/docker/Dockerfile b/docker/Dockerfile
-index 3177971..d1dab7a 100644
+index 3177971..0be4a0e 100644
 --- a/docker/Dockerfile
 +++ b/docker/Dockerfile
 @@ -35,7 +35,9 @@
@@ -24,3 +24,12 @@ index 3177971..d1dab7a 100644
  
  RUN mkdir -p /usr/local/sbin /usr/local/etc/nsd
  COPY --from=nsd-mtl-build /usr/local/app/nsd /usr/local/sbin
+@@ -70,7 +74,7 @@ COPY --from=nsd-mtl-build /usr/local/app/nsd-control-setup.sh /usr/local/sbin/ns
+ COPY deploy/nsd.conf /usr/local/etc/nsd
+ RUN mkdir -p /var/nsd/data/zones
+ 
+-COPY deploy/update_cfg.py deploy/docker-entrypoint.sh /var/nsd
++COPY deploy/update_cfg.py deploy/docker-entrypoint.sh /var/nsd/
+ RUN chown -R nsd:nsd /var/nsd
+ RUN mkdir -p /var/db/nsd && chown  nsd:nsd /var/db/nsd
+ RUN chmod 744 /var/nsd/docker-entrypoint.sh
