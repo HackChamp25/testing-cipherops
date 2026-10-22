@@ -1,0 +1,11 @@
+vendor/
+zones/*
+!zones/.gitkeep
+captures/*.pcap
+!captures/sample-*.pcap
+
+# Simulator (Python/Flask)
+__pycache__/
+*.pyc
+.venv/
+simulator/*.log

@@ -1,0 +1,15 @@
+diff --git a/docker/Dockerfile b/docker/Dockerfile
+index 57ab3e7..dc62d5a 100644
+--- a/docker/Dockerfile
++++ b/docker/Dockerfile
+@@ -35,7 +35,9 @@
+ FROM pqc_mtl_mode:latest
+ 
+ USER root
+-RUN dnf -y install gcc autoconf libtool expat-devel tcpdump bison net-tools iputils flex bind-utils vim
++RUN mv /etc/ld.so.conf.d/crypto.conf /tmp/crypto.conf.bak && ldconfig && \
++    dnf -y install gcc autoconf libtool expat-devel tcpdump bison net-tools iputils flex bind-utils vim && \
++    mv /tmp/crypto.conf.bak /etc/ld.so.conf.d/crypto.conf && ldconfig
+ 
+ # Set the working directory in the container
+ RUN mkdir -p /usr/local/app

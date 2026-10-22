@@ -1,0 +1,30 @@
+diff --git a/docker/Dockerfile_DEMO b/docker/Dockerfile_DEMO
+index b9b0721..6469e01 100644
+--- a/docker/Dockerfile_DEMO
++++ b/docker/Dockerfile_DEMO
+@@ -36,7 +36,9 @@ FROM pqc_base:latest AS base_image
+ 
+ # Install python in this container for the notebook
+ # RUN dnf search python3.12
+-RUN dnf install -y python3.12 python3-pip
++RUN mv /etc/ld.so.conf.d/crypto.conf /tmp/crypto.conf.bak && ldconfig && \
++    dnf install -y python3.12 python3-pip && \
++    mv /tmp/crypto.conf.bak /etc/ld.so.conf.d/crypto.conf && ldconfig
+ # RUN dnf install python3-pip
+ 
+ # Install Python dependencies
+diff --git a/docker/Dockerfile_mtl_mode b/docker/Dockerfile_mtl_mode
+index 1e573e4..27d4758 100644
+--- a/docker/Dockerfile_mtl_mode
++++ b/docker/Dockerfile_mtl_mode
+@@ -35,7 +35,9 @@
+ FROM pqc_base:latest AS base_image
+ 
+ USER root
+-RUN dnf -y install gcc git make libtool autoconf bc
++RUN mv /etc/ld.so.conf.d/crypto.conf /tmp/crypto.conf.bak && ldconfig && \
++    dnf -y install gcc git make libtool autoconf bc && \
++    mv /tmp/crypto.conf.bak /etc/ld.so.conf.d/crypto.conf && ldconfig
+ 
+ # Set the working directory in the container
+ RUN mkdir -p /usr/local/app

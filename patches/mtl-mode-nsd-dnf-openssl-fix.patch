@@ -1,0 +1,26 @@
+diff --git a/docker/Dockerfile b/docker/Dockerfile
+index 3177971..d1dab7a 100644
+--- a/docker/Dockerfile
++++ b/docker/Dockerfile
+@@ -35,7 +35,9 @@
+ FROM pqc_mtl_mode:latest as nsd-mtl-build
+ 
+ USER root
+-RUN dnf -y install autoconf automake gcc make libevent-devel flex bison libtool
++RUN mv /etc/ld.so.conf.d/crypto.conf /tmp/crypto.conf.bak && ldconfig && \
++    dnf -y install autoconf automake gcc make libevent-devel flex bison libtool && \
++    mv /tmp/crypto.conf.bak /etc/ld.so.conf.d/crypto.conf && ldconfig
+ 
+ # Set the working directory in the container
+ RUN mkdir -p /usr/local/app 
+@@ -57,7 +59,9 @@ FROM pqc_mtl_mode:latest
+ 
+ # Setup the nsd use
+ RUN groupadd nsd; adduser nsd -g nsd
+-RUN dnf install -y libevent net-tools tcpdump python3.14
++RUN mv /etc/ld.so.conf.d/crypto.conf /tmp/crypto.conf.bak && ldconfig && \
++    dnf install -y libevent net-tools tcpdump python3.14 && \
++    mv /tmp/crypto.conf.bak /etc/ld.so.conf.d/crypto.conf && ldconfig
+ 
+ RUN mkdir -p /usr/local/sbin /usr/local/etc/nsd
+ COPY --from=nsd-mtl-build /usr/local/app/nsd /usr/local/sbin

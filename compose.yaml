@@ -1,0 +1,90 @@
+# PQC DNSSEC lab: ECDSA vs SLH-DSA vs SLH-DSA-MTL, served and validated locally.
+#
+#   host:5301  -> nsd      172.30.0.53  authoritative for ecdsa.lab, slh.lab, mtl.lab
+#   host:5302  -> unbound  172.30.0.54  validating resolver (stubs to nsd)
+#                 client   172.30.0.60  shell with dig + tcpdump
+#
+# Build images first:   ./build-images.sh
+# Sign zones:           docker compose run --rm signer
+# Start servers:        docker compose up -d nsd unbound client
+
+services:
+  signer:
+    image: pqc_ldns:latest
+    profiles: ["sign"]
+    environment:
+      - RECORDS=${RECORDS:-100}
+    volumes:
+      - ./zones:/var/dns/zones:z
+      - ./scripts:/scripts:ro,z
+    entrypoint: ["/bin/bash", "/scripts/sign-zones.sh"]
+    network_mode: none
+
+  nsd:
+    image: mtl-nsd:latest
+    hostname: nsd
+    volumes:
+      - ./zones:/var/nsd/data/zones:z
+    networks:
+      lab:
+        ipv4_address: 172.30.0.53
+    ports:
+      - "5301:53/udp"
+      - "5301:53/tcp"
+
+  unbound:
+    image: mtl-unbound:latest
+    hostname: unbound
+    depends_on: [nsd]
+    entrypoint: ["/usr/local/sbin/unbound", "-d", "-c", "/etc/lab/unbound.conf"]
+    volumes:
+      - ./config/unbound.conf:/etc/lab/unbound.conf:ro,z
+      - ./zones:/zones:ro,z
+    networks:
+      lab:
+        ipv4_address: 172.30.0.54
+    ports:
+      - "5302:53/udp"
+      - "5302:53/tcp"
+
+  client:
+    image: mtl-unbound:latest       # reuses this image for dig and tcpdump
+    hostname: client
+    entrypoint: ["sleep", "infinity"]
+    volumes:
+      - ./captures:/captures:z
+    networks:
+      lab:
+        ipv4_address: 172.30.0.60
+
+  # Packet capture sidecars, for Docker Desktop (Mac/Windows) where the
+  # bridge isn't visible to host Wireshark. Start with:
+  #   docker compose --profile capture up -d
+  # Output: ./captures/nsd.pcap and ./captures/unbound.pcap
+  capture-nsd:
+    image: mtl-nsd:latest
+    profiles: ["capture"]
+    network_mode: "service:nsd"
+    cap_add: [NET_RAW, NET_ADMIN]
+    volumes:
+      - ./captures:/captures:z
+    entrypoint: ["tcpdump", "-i", "any", "-U", "-w", "/captures/nsd.pcap", "port", "53"]
+
+  capture-unbound:
+    image: mtl-nsd:latest
+    profiles: ["capture"]
+    network_mode: "service:unbound"
+    cap_add: [NET_RAW, NET_ADMIN]
+    volumes:
+      - ./captures:/captures:z
+    entrypoint: ["tcpdump", "-i", "any", "-U", "-w", "/captures/unbound.pcap", "port", "53"]
+
+networks:
+  lab:
+    driver: bridge
+    driver_opts:
+      # Fixed name so Wireshark on a Linux host can capture on "pqclab0".
+      com.docker.network.bridge.name: pqclab0
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

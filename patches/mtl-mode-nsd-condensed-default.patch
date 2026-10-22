@@ -1,0 +1,34 @@
+diff --git a/src/edns.c b/src/edns.c
+index fd5d7c3..87ade22 100644
+--- a/src/edns.c
++++ b/src/edns.c
+@@ -71,7 +71,7 @@ edns_init_record(edns_record_type *edns)
+ 	edns->dnssec_ok = 0;
+ 	edns->nsid = 0;
+ #ifdef MTL_MODE_FULL_CODE
+-	edns->mtl_mode_full = 1;
++	edns->mtl_mode_full = 0;
+ #endif
+ 	edns->cookie_status = COOKIE_NOT_PRESENT;
+ 	edns->cookie_len = 0;
+@@ -121,6 +121,7 @@ edns_handle_option(uint16_t optcode, uint16_t optlen, buffer_type* packet,
+ 		break;
+ #ifdef MTL_MODE_FULL_CODE
+ 	case MTL_MODE_FULL_CODE:
++		edns->mtl_mode_full = 1;
+ 		query->reply_full = 0;
+ 		buffer_skip(packet, optlen);
+ 		break;
+diff --git a/src/packet.c b/src/packet.c
+index ff62670..4382026 100644
+--- a/src/packet.c
++++ b/src/packet.c
+@@ -99,6 +99,8 @@ packet_encode_rr(query_type *q, domain_type *owner, rr_type *rr, uint32_t ttl)
+ 			size_t k;
+ 
+ 			// A condensed signature is being turned into a full signature here
++			// (only the first one per response; the rest stay condensed)
++			q->reply_full++;
+ 
+ 			if(val_algo_get_condensed_size(rr, &condensed_sig_size) != 0) {
+ 				RCODE_SET(q->packet, RCODE_SERVFAIL);
