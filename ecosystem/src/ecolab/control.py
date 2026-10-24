@@ -133,21 +133,40 @@ def shaping_report() -> str:
     return exec_("unbound", "tc qdisc show dev eth0; tc filter show dev eth0", check=False)
 
 
-def start_capture(path_in_unbound: str) -> None:
+def start_capture(path_in_container: str, host: str = "unbound") -> None:
+    """Start port-53 tcpdump on ``host`` (``unbound`` or ``client``).
+
+    Capture to container-local /tmp first (bind mounts drop packets on Docker Desktop),
+    then ``stop_capture`` moves the file to ``path_in_container``.
+
+    Use ``unbound`` for Through-Unbound queries (sees client + upstream hops).
+    Use ``client`` for Direct-to-root / Direct-to-SLD (Unbound is idle on that path).
+    """
     # Writing straight to the bind-mounted results folder is slow enough on Docker Desktop for the
     # kernel to drop packets, so capture to container-local /tmp and move the file on stop.
-    exec_("unbound", f"mkdir -p $(dirname {path_in_unbound}) && echo {path_in_unbound} >/tmp/capture.dest && "
-                     ": >/tmp/tcpdump.log && rm -f /tmp/capture.pcap && "
-                     "(nohup tcpdump -i eth0 -s 0 -B 32768 -U --immediate-mode -w /tmp/capture.pcap 'port 53' "
-                     ">/tmp/tcpdump.log 2>&1 &) && "
-                     "for i in $(seq 1 100); do grep -q 'listening on' /tmp/tcpdump.log && exit 0; sleep 0.1; done; "
-                     "cat /tmp/tcpdump.log; exit 1")
+    exec_(host, f"mkdir -p $(dirname {path_in_container}) && echo {path_in_container} >/tmp/capture.dest && "
+                f"echo {host} >/tmp/capture.host && "
+                ": >/tmp/tcpdump.log && rm -f /tmp/capture.pcap && "
+                "(nohup tcpdump -i eth0 -s 0 -B 32768 -U --immediate-mode -w /tmp/capture.pcap 'port 53' "
+                ">/tmp/tcpdump.log 2>&1 &) && "
+                "for i in $(seq 1 100); do grep -q 'listening on' /tmp/tcpdump.log && exit 0; sleep 0.1; done; "
+                "cat /tmp/tcpdump.log; exit 1")
     time.sleep(0.2)
 
 
-def stop_capture() -> int:
+def stop_capture(host: str | None = None) -> int:
     """Stop tcpdump, move the capture into place and return the packets the kernel dropped."""
-    exec_("unbound", "pkill -INT tcpdump; for i in $(seq 1 50); do pgrep tcpdump >/dev/null || break; sleep 0.1; done; "
-                     "mv /tmp/capture.pcap \"$(cat /tmp/capture.dest)\"")
-    log = exec_("unbound", "cat /tmp/tcpdump.log", check=False)
+    if host is None:
+        # Prefer unbound's marker (legacy callers); fall back to client.
+        host = "unbound"
+        marker = exec_("unbound", "cat /tmp/capture.host 2>/dev/null", check=False).strip()
+        if marker in ("unbound", "client", "root"):
+            host = marker
+        else:
+            marker = exec_("client", "cat /tmp/capture.host 2>/dev/null", check=False).strip()
+            if marker:
+                host = marker
+    exec_(host, "pkill -INT tcpdump; for i in $(seq 1 50); do pgrep tcpdump >/dev/null || break; sleep 0.1; done; "
+                "mv /tmp/capture.pcap \"$(cat /tmp/capture.dest)\"")
+    log = exec_(host, "cat /tmp/tcpdump.log", check=False)
     return sum(int(l.split()[0]) for l in log.splitlines() if l.endswith("dropped by kernel"))

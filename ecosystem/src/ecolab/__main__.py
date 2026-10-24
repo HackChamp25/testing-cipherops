@@ -4,6 +4,9 @@
   smoke   CONFIG             resolve a few names per scenario through Unbound and require AD (validated)
   run     CONFIG             full trials; results in ecosystem/results/<lab>/<run id>/
   summary RUN_DIR            rebuild summary.csv from passes.csv
+  activate CONFIG --scenario S   switch a running lab to scenario S (panel live demo)
+  probe   QNAME [QTYPE]      one live lookup as JSON (panel live demo)
+  flush                      restart Unbound to clear all caches including MTL ladders
 """
 
 from __future__ import annotations
@@ -96,6 +99,49 @@ def cmd_summary(a) -> None:
     print(summarize(Path(a.run_dir)).to_string(index=False))
 
 
+def cmd_activate(a) -> int:
+    """Switch the running lab to a scenario (rewrite active configs + restart)."""
+    from . import control
+    from .sign import load_manifest
+    from .topology import write_active
+
+    lab = load(a.config)
+    scenario = a.scenario
+    if scenario not in lab.cfg["scenarios"]:
+        raise SystemExit(f"unknown scenario {scenario!r}; choose from {list(lab.cfg['scenarios'])}")
+    udp = int(a.udp or lab.cfg["resolver"]["udp_limits"][0])
+    write_active(lab, scenario, load_manifest(lab, scenario), udp)
+    control.restart(list(lab.servers) + ["unbound"])
+    control.wait_servers(lab)
+    control.unbound_ready()
+    control.shape(lab, {})
+    print(f"active: {scenario}  udp={udp}  trust-anchor loaded")
+    return 0
+
+
+def cmd_probe(a) -> int:
+    from .probe import main as probe_main
+
+    argv = [a.qname, a.qtype, "--server", a.server, "--udp", str(a.udp)]
+    if a.no_dnssec:
+        argv.append("--no-dnssec")
+    if a.no_ad:
+        argv.append("--no-ad")
+    if a.norecurse:
+        argv.append("--norecurse")
+    if a.mtl_full:
+        argv.append("--mtl-full")
+    return probe_main(argv)
+
+
+def cmd_flush(a) -> int:
+    from . import control
+
+    control.flush_resolver()
+    print("resolver caches cleared (Unbound process restarted)")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="ecolab")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -118,6 +164,23 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("summary")
     p.add_argument("run_dir")
     p.set_defaults(fn=cmd_summary)
+    p = sub.add_parser("activate")
+    p.add_argument("config")
+    p.add_argument("--scenario", required=True)
+    p.add_argument("--udp", type=int)
+    p.set_defaults(fn=cmd_activate)
+    p = sub.add_parser("probe")
+    p.add_argument("qname")
+    p.add_argument("qtype", nargs="?", default="A")
+    p.add_argument("--server", default="10.53.0.53")
+    p.add_argument("--udp", type=int, default=1232)
+    p.add_argument("--no-dnssec", action="store_true")
+    p.add_argument("--no-ad", action="store_true")
+    p.add_argument("--norecurse", action="store_true")
+    p.add_argument("--mtl-full", action="store_true")
+    p.set_defaults(fn=cmd_probe)
+    p = sub.add_parser("flush")
+    p.set_defaults(fn=cmd_flush)
     a = ap.parse_args(argv)
     return a.fn(a) or 0
 
