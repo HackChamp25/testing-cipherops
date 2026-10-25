@@ -289,10 +289,7 @@ def _lab_strip(h: driver.LabHandle, stt: dict) -> None:
 
 def _page_header(mode: str, h: driver.LabHandle, stt: dict) -> None:
     tile = TILES[mode]
-    c1, c2 = st.columns([1, 7])
-    c1.button("← Home", on_click=_go, args=("home",), key=f"back_{mode}", width="stretch")
-    with c2:
-        st.markdown(f"## {tile['icon']} {tile['title']}")
+    st.markdown(f"## {tile['icon']} {tile['title']}")
     st.caption(tile["pitch"])
     _lab_strip(h, stt)
 
