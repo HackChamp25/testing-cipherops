@@ -1,14 +1,15 @@
 # Media
 
-Brand assets for **Cipherops** (AIORI-3 · PS-036 · A3-PS036-TC161).
+Brand assets for **CipherOps** (AIORI-3 · PS-036 · A3-PS036-TC161).
+
+## Primary (README)
 
 | File | Use |
 |------|-----|
-| `cipherops-mark.svg` | Vector source |
-| `cipherops-mark-light.png` | README / light UI |
-| `cipherops-mark-dark.png` | README dark theme |
-| `cipherops-banner-*.png` | Optional wide header |
-| `brand.toml` | Palette |
-| `build_brand.py` | Regenerate PNGs from the mark |
+| `cipherops-logo-light.png` | Light GitHub theme — horizontal lockup |
+| `cipherops-logo-dark.png` | Dark GitHub theme — emblem + wordmark |
+| `cipherops-logo-*-source.jpg` | Full-resolution sources |
 
-Mark: amber apex over a rooted ladder — signed MTL ladder + DNS hierarchy.
+## Earlier mark (optional)
+
+Ladder mark kept for reference / other surfaces: `cipherops-mark.*`, banners, `build_brand.py`, `brand.toml`.

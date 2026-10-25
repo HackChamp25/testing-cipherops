@@ -1,19 +1,19 @@
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/media/cipherops-mark-dark.png">
-    <img src="docs/media/cipherops-mark-light.png" alt="Cipherops" width="160">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/media/cipherops-logo-dark.png">
+    <img src="docs/media/cipherops-logo-light.png" alt="CipherOps" width="480">
   </picture>
 
-  # Cipherops
+  # CipherOps
 
   **PQC DNSSEC MTL benchmark using a reference implementation**
 
   AIORI Hackathon 3 · PS-036 · Team **A3-PS036-TC161**
 
   <p>
-    <a href="https://portal.aiori.in/aiori-3/hackathon-guideline/"><img alt="AIORI 3 Hackathon" src="https://img.shields.io/static/v1?label=AIORI%203&message=Hackathon&color=C4782A&labelColor=102A43&style=for-the-badge"></a>
-    <a href="https://portal.aiori.in/aiori-3/hackathon-guideline/"><img alt="Problem statement PS-036" src="https://img.shields.io/static/v1?label=problem&message=PS-036&color=C4782A&labelColor=102A43&style=for-the-badge"></a>
-    <a href="https://youtu.be/FaVfeO5WTV8"><img alt="Project video" src="https://img.shields.io/static/v1?label=video&message=YouTube&color=486581&labelColor=102A43&style=for-the-badge&logo=youtube&logoColor=white"></a>
+    <a href="https://portal.aiori.in/aiori-3/hackathon-guideline/"><img alt="AIORI 3 Hackathon" src="https://img.shields.io/static/v1?label=AIORI%203&message=Hackathon&color=1E90FF&labelColor=0B1C2C&style=for-the-badge"></a>
+    <a href="https://portal.aiori.in/aiori-3/hackathon-guideline/"><img alt="Problem statement PS-036" src="https://img.shields.io/static/v1?label=problem&message=PS-036&color=1E90FF&labelColor=0B1C2C&style=for-the-badge"></a>
+    <a href="https://youtu.be/FaVfeO5WTV8"><img alt="Project video" src="https://img.shields.io/static/v1?label=video&message=YouTube&color=3A7BD5&labelColor=0B1C2C&style=for-the-badge&logo=youtube&logoColor=white"></a>
   </p>
 </div>
 
