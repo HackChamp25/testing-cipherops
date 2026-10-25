@@ -10,6 +10,7 @@ its controls in the sidebar and its own Results view in the main area.
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 import time
 from datetime import datetime
@@ -21,13 +22,16 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[2]
 ECO_DIR = ROOT / "ecosystem"
+SUITES_DIR = ECO_DIR / "results" / "suites"
 sys.path.insert(0, str(ROOT / "dashboard"))
 
 from live_lab import compare, decode, driver  # noqa: E402
+from live_lab import suite as suite_mod  # noqa: E402
 
 compare = importlib.reload(compare)
 decode = importlib.reload(decode)
 driver = importlib.reload(driver)
+suite_mod = importlib.reload(suite_mod)
 
 st.set_page_config(page_title="Cipherops · MTL DNSSEC Lab", layout="wide", page_icon="🛰️")
 
@@ -79,10 +83,10 @@ TILES = {
     "benchmark": {
         "icon": "📊",
         "title": "Benchmark",
-        "pitch": "Repeatable multi-trial runs, saved under a name you choose.",
+        "pitch": "The PS-036 benchmark: three dataset sizes, repeated trials, on its own.",
         "bullets": [
-            "Scenarios × networks × trials, cold then warm",
-            "Charts and CSVs for every saved run",
+            "Signs, starts the lab, measures and stops it for each size",
+            "Signing, verification and bytes, with the settings recorded",
         ],
         "cta": "Open Benchmark",
     },
@@ -396,7 +400,8 @@ def _page_header(mode: str, h: driver.LabHandle, stt: dict) -> None:
     tile = TILES[mode]
     st.markdown(f"## {tile['icon']} {tile['title']}")
     st.caption(tile["pitch"])
-    _lab_strip(h, stt)
+    if mode in ("setup", "live", "reset"):
+        _lab_strip(h, stt)
 
 
 def _gate(stt: dict, what: str) -> bool:
@@ -433,7 +438,8 @@ def sidebar_home(h: driver.LabHandle, stt: dict) -> None:
         "1. **Setup** (first, once) — pick zone size and scenarios, get the images, "
         "sign the hierarchy, start the lab  \n"
         "2. **Live** — send a lookup, compare cold and warm, read the packets  \n"
-        "3. **Benchmark** — name a run and measure scenarios across networks  \n"
+        "3. **Benchmark** — three dataset sizes, repeated trials; needs only the images, "
+        "not Prepare or a running lab  \n"
         "4. **Compare** — MTL vs SLH-DSA and the other modes, side by side  \n"
         "5. **Reset** — clear only what you choose"
     )
@@ -672,45 +678,64 @@ def sidebar_live(h: driver.LabHandle, stt: dict) -> None:
         st.rerun()
 
 
+SUITE_SIZE_CHOICES = [20, 50, 500, 5000]
+SUITE_DEFAULT_SIZES = list(suite_mod.BENCH_SIZES)
+
+
+def _size_label(n: int) -> str:
+    return f"{n:,} names" + (" (quick check)" if n == suite_mod.SMOKE_SIZE else "")
+
+
 def sidebar_benchmark(h: driver.LabHandle, stt: dict) -> None:
     _sidebar_brand("benchmark")
     r = readiness(stt)
-    runs = driver.list_runs(h)
+    suites = suite_mod.list_suites()
+    done = [s for s in suites if s["complete"]]
+    live = suite_mod.running_suite()
     st.sidebar.markdown("### Benchmark")
-    mark = "🟢" if runs else "⚪"
-    st.sidebar.markdown(f"{mark}  {len(runs)} saved run(s)" if runs else f"{mark}  No run yet")
+    if live:
+        st.sidebar.markdown("🔵  A benchmark is running")
+    else:
+        st.sidebar.markdown(f"🟢  {len(done)} saved benchmark(s)" if done else "⚪  No benchmark yet")
     _hint(
-        "Runs every chosen scenario across the networks you pick (cold cache, then warm). "
-        "The lab must be running. This can take a while."
+        "Runs on its own: for each dataset size it signs the zones, repeats signing and verification, "
+        "starts the lab, measures, and stops it. It only needs the built images (Setup, step 1)."
     )
 
     st.sidebar.markdown("**Run name**")
     label = sb(
-        st.sidebar.text_input, "run_label", "", "Name this run",
-        placeholder="e.g. panel-demo-wan", max_chars=40,
-        help="Stored with the date and time, so you can tell runs apart later.",
+        st.sidebar.text_input, "run_label", "", "Name this benchmark",
+        placeholder="e.g. panel-final", max_chars=30,
+        help="Stored with the date and time, so you can tell benchmarks apart later.",
     )
-    clean = driver.sanitize_label(label)
+    clean = driver.sanitize_label(label)[:30]
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     _hint(f"Saved as {stamp}{'_' + clean if clean else ''} (time = when you press Run)")
-    if label and clean != label.strip():
-        _hint("Letters, digits, - and _ only; other characters become -.")
 
-    try:
-        available = h.scenarios() if h.prepared() else list(cfg("scenarios") or [])
-    except Exception:  # noqa: BLE001
-        available = list(cfg("scenarios") or [])
-    sc = sb(st.sidebar.multiselect, "bench_scenarios", list(available), "Scenarios to measure",
-            options=available, help="Subset of the scenarios prepared in Setup.")
-    shape, _errs, _warns = _shape()
-    default_nq = int((shape or driver.ZONE_SIZE_PRESETS["custom"])["n_queries_default"])
-    sb(st.sidebar.number_input, "n_queries", default_nq, "Queries per trial",
-       min_value=10, max_value=5000, help="How many lookups in each cold/warm pass.")
-    sb(st.sidebar.number_input, "trials", 1, "Trials", min_value=1, max_value=10,
-       help="Each trial repeats a cold pass then a warm pass.")
-    nets = sb(st.sidebar.multiselect, "networks", ["lan"], "Networks", options=["lan", "wan", "lossy"],
+    st.sidebar.markdown("**What to measure**")
+    sizes = sb(st.sidebar.multiselect, "bench_sizes", SUITE_DEFAULT_SIZES, "Dataset sizes",
+               options=SUITE_SIZE_CHOICES, format_func=_size_label,
+               help="Data names in the whole hierarchy. PS-036 asks for three sizes: 50, 500 and 5,000.")
+    sc = sb(st.sidebar.multiselect, "bench_scenarios", ["ecdsa", "slh-dsa", "mtl"], "Scenarios",
+            options=list(driver.SCENARIO_ALGS),
+            help="slh-dsa is the PQC algorithm without MTL, mtl is the same algorithm with MTL. "
+                 "ecdsa is a classical reference.")
+    sb(st.sidebar.number_input, "bench_trials", 3, "Measurement trials", min_value=1, max_value=10,
+       help="Each trial replays the workload with a cold cache, then again warm.")
+    sb(st.sidebar.number_input, "bench_sign_trials", suite_mod.DEFAULT_SIGN_TRIALS, "Signing trials",
+       min_value=1, max_value=10, help="How often signing and verification are repeated on sample zones.")
+    sb(st.sidebar.number_input, "bench_sample", suite_mod.DEFAULT_SAMPLE_NAMES, "Signing sample (names)",
+       min_value=10, max_value=500, step=10,
+       help="Size of the sample zone for the signing trials. The dataset-wide time is extrapolated from "
+            "it and labelled as an estimate; the full zones are signed once as well.")
+    sb(st.sidebar.number_input, "bench_jobs", 1, "Parallel signing jobs", min_value=1, max_value=4,
+       help="Zones signed at the same time when the full dataset is signed. 1 gives clean timings; more is "
+            "faster but inflates the timing of that one full run (the repeated sign trials always run alone).")
+    sb(st.sidebar.number_input, "bench_queries", 500, "Lookups per pass", min_value=10, max_value=5000,
+       help="How many lookups each cold and warm pass replays.")
+    nets = sb(st.sidebar.multiselect, "bench_networks", ["lan"], "Networks", options=["lan", "wan", "lossy"],
               help="lan = local · wan = added delay · lossy = delay plus packet loss.")
-    sb(st.sidebar.selectbox, "udp", 1232, "UDP size limit", options=[1232, 4096],
+    sb(st.sidebar.selectbox, "bench_udp", 1232, "UDP size limit", options=[1232, 4096],
        help="Max UDP answer size before falling back to TCP.")
 
     wl_default = driver.WORKLOAD_DEFAULTS
@@ -733,53 +758,42 @@ def sidebar_benchmark(h: driver.LabHandle, stt: dict) -> None:
             base = driver.PROFILE_DEFAULTS[prof]
             st.markdown(f"**{prof}**")
             cols = st.columns(2)
-            for i, (field, label) in enumerate(PROFILE_FIELDS):
+            for i, (field, flabel) in enumerate(PROFILE_FIELDS):
                 with cols[i % 2]:
                     if field == "loss_pct":
-                        sb(st.number_input, f"{prof}_{field}", float(base[field]), label,
+                        sb(st.number_input, f"{prof}_{field}", float(base[field]), flabel,
                            min_value=0.0, max_value=20.0, step=0.5, format="%.1f")
                     else:
-                        sb(st.number_input, f"{prof}_{field}", int(base[field]), label,
+                        sb(st.number_input, f"{prof}_{field}", int(base[field]), flabel,
                            min_value=0, max_value=500, step=1)
     if not _workload_is_default():
         st.sidebar.caption("Custom workload or network numbers are in use.")
         st.sidebar.button("Restore defaults", on_click=_restore_workload, key="btn_restore_wl",
                           width="stretch")
 
-    bad_shape = bool(st.session_state.get("shape_errors"))
-    if bad_shape:
-        st.sidebar.error("The custom zone numbers in Setup need fixing before a run.")
-    if st.sidebar.button("Run benchmark", key="btn_bench", type="primary", width="stretch",
-                         disabled=not (sc and nets) or bad_shape):
-        if not r["running"]:
-            st.sidebar.error("Start the lab in Setup first.")
-        else:
-            _apply_ui_config(h)
-            trials = int(cfg("trials", 1))
-            activity("step", f"Benchmark{' · ' + clean if clean else ''}",
-                     f"scenarios={sc} profiles={nets} trials={trials}",
-                     phase="run", source="compose", h=h)
-            with st.spinner("Running benchmark…"):
-                try:
-                    t0 = time.perf_counter()
-                    log = driver.run_benchmark(
-                        h, scenarios=list(sc), profiles=list(nets), trials=trials,
-                        udp=int(cfg("udp", 1232)), run_label=clean,
-                    )
-                    secs = time.perf_counter() - t0
-                    st.session_state.last_log = log[-8000:]
-                    newest = driver.list_runs(h)
-                    st.session_state.last_run_dir = str(newest[0]["path"]) if newest else ""
-                    if newest:
-                        st.session_state.bench_run_pick = newest[0]["folder"]
-                    st.session_state.bench_flash = f"Run saved in {secs:.0f}s"
-                    _log_chunks(log, phase="run", source="compose", title="benchmark")
-                    activity("ok", f"Benchmark done ({secs:.0f}s)", st.session_state.last_run_dir,
-                             phase="run", source="compose", h=h)
-                except Exception as e:  # noqa: BLE001
-                    st.sidebar.error(str(e)[:800])
-                    activity("err", "Benchmark failed", str(e)[:2000], phase="run", source="compose", h=h)
-            st.rerun()
+    ready = bool(sizes and sc and nets) and r["images"] and not live
+    if not r["images"]:
+        st.sidebar.warning("Build the images first (Setup, step 1).")
+    if r["running"] and not live:
+        st.sidebar.caption("The lab running in Setup will be stopped while the benchmark uses the containers.")
+    if st.sidebar.button("Run benchmark", key="btn_bench", type="primary", width="stretch", disabled=not ready):
+        params = {
+            "label": clean, "stack": cfg("stack", "draft06"), "sizes": sorted(int(n) for n in sizes),
+            "scenarios": list(sc), "trials": int(cfg("bench_trials", 3)),
+            "sign_trials": int(cfg("bench_sign_trials", suite_mod.DEFAULT_SIGN_TRIALS)),
+            "sample_names": int(cfg("bench_sample", suite_mod.DEFAULT_SAMPLE_NAMES)),
+            "n_queries": int(cfg("bench_queries", 500)), "networks": list(nets),
+            "udp": int(cfg("bench_udp", 1232)), "jobs": int(cfg("bench_jobs", 1)),
+            "workload": _workload(), "profiles": _profiles(),
+        }
+        try:
+            sid = suite_mod.start(params)
+            st.session_state.bench_suite_pick = sid
+            activity("step", f"Benchmark started · {sid}", json.dumps(params)[:1500], phase="run", source="suite",
+                     h=h)
+        except Exception as e:  # noqa: BLE001
+            st.sidebar.error(str(e)[:600])
+        st.rerun()
     st.sidebar.markdown("---")
     if st.sidebar.button("Refresh", width="stretch", key="sb_refresh_bench"):
         st.rerun()
@@ -806,13 +820,17 @@ def _tile_chip(mode: str, stt: dict, h: driver.LabHandle) -> str:
         if r["count"] == 0:
             return _chip("Start here", "warn")
         return _chip(f"In progress · {r['count']}/3", "info")
-    if mode in ("live", "benchmark"):
+    if mode == "benchmark":
+        if suite_mod.running_suite():
+            return _chip("Running", "info")
+        if not r["images"]:
+            return _chip("Needs images", "warn")
+        n = len([s for s in suite_mod.list_suites() if s["complete"]])
+        return _chip(f"Ready · {n} saved" if n else "Ready", "ok")
+    if mode == "live":
         if not r["ready"]:
             return _chip("Needs Setup", "warn")
-        if mode == "live":
-            return _chip(f"Live · {r['active']}", "ok") if r["active"] else _chip("Ready", "ok")
-        n = len(driver.list_runs(h))
-        return _chip(f"Ready · {n} saved" if n else "Ready", "ok")
+        return _chip(f"Live · {r['active']}", "ok") if r["active"] else _chip("Ready", "ok")
     if mode == "compare":
         labs = driver.list_labs()
         return _chip("Has data", "ok") if labs else _chip("No data yet", "idle")
@@ -836,7 +854,8 @@ def home_page(h: driver.LabHandle, stt: dict) -> None:
 
     r = readiness(stt)
     if not r["ready"]:
-        st.info("**Start with Setup.** Live and Benchmark need the lab built, signed and running.")
+        st.info("**Start with Setup** to build the images. Live also needs the lab signed and running; "
+                "Benchmark only needs the images.")
 
     order = [("setup", "live"), ("benchmark", "compare"), ("reset",)]
     for pair in order:
@@ -854,8 +873,10 @@ def home_page(h: driver.LabHandle, stt: dict) -> None:
                         st.markdown(f"- {b}")
                 if mode == "setup":
                     emphasise = not r["ready"]
-                elif mode in ("live", "benchmark"):
+                elif mode == "live":
                     emphasise = r["ready"]
+                elif mode == "benchmark":
+                    emphasise = r["images"]
                 elif mode == "compare":
                     emphasise = bool(driver.list_labs())
                 else:
@@ -1399,32 +1420,55 @@ def live_page(h: driver.LabHandle, stt: dict) -> None:
 
 # ─────────────────────────── BENCHMARK ───────────────────────────
 
-def _bench_plan(h: driver.LabHandle) -> None:
-    sc = list(cfg("bench_scenarios") or cfg("scenarios") or [])
-    nets = list(cfg("networks") or ["lan"])
-    trials = int(cfg("trials", 1))
-    nq = int(cfg("n_queries", 40))
-    passes = len(sc) * len(nets) * trials * 2
-    label = driver.sanitize_label(cfg("run_label", ""))
+def _suite_params() -> dict:
+    return {
+        "sizes": sorted(int(n) for n in (cfg("bench_sizes") or SUITE_DEFAULT_SIZES)),
+        "scenarios": list(cfg("bench_scenarios") or ["ecdsa", "slh-dsa", "mtl"]),
+        "trials": int(cfg("bench_trials", 3)),
+        "sign_trials": int(cfg("bench_sign_trials", suite_mod.DEFAULT_SIGN_TRIALS)),
+        "sample_names": int(cfg("bench_sample", suite_mod.DEFAULT_SAMPLE_NAMES)),
+        "n_queries": int(cfg("bench_queries", 500)),
+        "jobs": int(cfg("bench_jobs", 1)),
+        "networks": list(cfg("bench_networks") or ["lan"]),
+        "udp": int(cfg("bench_udp", 1232)),
+    }
+
+
+def _bench_plan() -> None:
+    p = _suite_params()
+    label = driver.sanitize_label(cfg("run_label", ""))[:30]
     with st.container(border=True):
-        st.markdown("**Planned run**")
-        a = st.columns(4)
-        a[0].metric("Scenarios", len(sc))
-        a[1].metric("Networks", len(nets))
-        a[2].metric("Trials", trials)
-        a[3].metric("Queries / pass", nq)
+        st.markdown("**Planned benchmark**")
+        a = st.columns(5)
+        a[0].metric("Dataset sizes", len(p["sizes"]))
+        a[1].metric("Scenarios", len(p["scenarios"]))
+        a[2].metric("Measurement trials", p["trials"])
+        a[3].metric("Signing trials", p["sign_trials"])
+        a[4].metric("Lookups / pass", p["n_queries"])
+        rows = []
+        for n in p["sizes"]:
+            s = driver.shape_stats(suite_mod.bench_shape(n), p["scenarios"], p["jobs"])
+            rows.append({"Dataset": _size_label(n), "Zones": s["zones"], "Leaf zones": suite_mod.bench_shape(n)["sld_count"],
+                         "Est. RRSIGs": s["est_rrsigs"],
+                         "Est. signing": driver.format_duration(suite_mod.estimate_seconds(
+                             [n], p["scenarios"], p["jobs"], p["sign_trials"], p["sample_names"]))})
+        if rows:
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+        total = suite_mod.estimate_seconds(p["sizes"], p["scenarios"], p["jobs"], p["sign_trials"], p["sample_names"])
+        passes = len(p["scenarios"]) * len(p["networks"]) * p["trials"] * 2 * max(1, len(p["sizes"]))
         st.caption(
-            f"{passes} capture passes (cold then warm) ≈ **{passes * nq:,}** lookups · "
-            f"name **{label or '(none — date and time only)'}** · UDP limit {cfg('udp', 1232)}"
+            f"Signing and sign trials about **{driver.format_duration(total)}** in total, plus measuring "
+            f"({passes} capture passes, about {passes * p['n_queries']:,} lookups). "
+            f"Name **{label or '(none: date and time only)'}** · networks {', '.join(p['networks'])} · "
+            f"UDP limit {p['udp']}"
         )
-        st.caption(f"Scenarios: {', '.join(sc) or '—'} · Networks: {', '.join(nets)}")
         w = _workload()
         st.caption(
             f"Workload: NXDOMAIN **{round(w['nx_fraction'] * 100)}%** · zone skew **{w['zone_zipf_s']:g}** · "
             f"name skew **{w['name_zipf_s']:g}** · timeout **{w['timeout_s']:g} s**"
             + ("" if _workload_is_default() else " · _custom values_")
         )
-        shown = {p: {**driver.PROFILE_DEFAULTS[p], **_profiles().get(p, {})} for p in nets}
+        shown = {n: {**driver.PROFILE_DEFAULTS[n], **_profiles().get(n, {})} for n in p["networks"]}
         if shown:
             st.dataframe(
                 pd.DataFrame(shown).T.rename(columns=dict(PROFILE_FIELDS)).rename_axis("network"),
@@ -1432,15 +1476,165 @@ def _bench_plan(h: driver.LabHandle) -> None:
             )
 
 
+def _cancel_suite(suite_id: str) -> None:
+    suite_mod.cancel(suite_id)
+    activity("warn", f"Benchmark cancelled · {suite_id}", phase="run", source="suite")
+
+
+@st.fragment(run_every=3)
+def _suite_progress(suite_id: str) -> None:
+    s = suite_mod.status(suite_id)
+    state = s.get("state", "unknown")
+    if state not in ("running", "starting"):
+        st.rerun()  # whole page: the sidebar and Results pick up the finished suite
+    total = max(1, int(s.get("total", 1)))
+    done = int(s.get("done", 0))
+    elapsed = time.time() - float(s.get("started") or time.time())
+    with st.container(border=True):
+        st.markdown(f"**Benchmark running** · {suite_id}")
+        st.progress(min(done / total, 1.0), text=f"{done} of {total} steps · {s.get('step', '')}")
+        st.caption(f"Elapsed {driver.format_duration(elapsed).lstrip('~')}. You can leave this page; the benchmark "
+                   "keeps running and the Results tab fills in when it finishes.")
+        st.button("Cancel benchmark", on_click=_cancel_suite, args=(suite_id,), key="btn_cancel_suite")
+        log = SUITES_DIR / suite_id / "progress.log"
+        if log.is_file():
+            with st.expander("Progress log"):
+                st.code(log.read_text(encoding="utf-8", errors="replace")[-3000:], language="text")
+
+
 def benchmark_run(h: driver.LabHandle, stt: dict) -> None:
-    if not _gate(stt, "Benchmarking"):
+    r = readiness(stt)
+    live = suite_mod.running_suite()
+    if live:
+        _suite_progress(live["id"])
         return
-    st.caption("Set the options in the sidebar, then press **Run benchmark**. Results land in the Results tab.")
-    _bench_plan(h)
-    log = st.session_state.get("last_log")
-    if log and st.session_state.get("last_run_dir"):
-        with st.expander("Output of the last benchmark"):
-            st.code(log[-4000:], language="text")
+    last = next(iter(suite_mod.list_suites()), None)
+    if last and last["state"] in ("failed", "stopped", "cancelled"):
+        s = suite_mod.status(last["id"])
+        st.warning(f"The last benchmark ({last['title']}) {s.get('state')}: {s.get('error') or s.get('step', '')}")
+    if not r["images"]:
+        st.warning("The lab images are not built yet. Build them once in **Setup** (step 1); the benchmark "
+                   "does the rest itself.")
+        st.button("Go to Setup", on_click=_go, args=("setup",), key="bench_to_setup")
+    st.caption("Set the options in the sidebar, then press **Run benchmark**. It signs, starts and stops the "
+               "lab on its own, one dataset size after another.")
+    _bench_plan()
+
+
+def _fmt_ci(med: float | None, lo: float | None, hi: float | None) -> str:
+    if med is None or pd.isna(med):
+        return "—"
+    base = compare.fmt_seconds(med)
+    if lo is None or hi is None or pd.isna(lo) or pd.isna(hi) or lo == hi:
+        return base
+    return f"{base} ({compare.fmt_seconds(lo)}–{compare.fmt_seconds(hi)})"
+
+
+def _signing_stats_table(stats: pd.DataFrame) -> pd.DataFrame:
+    return pd.DataFrame({
+        "Scenario": stats["scenario"],
+        "Trials": stats["trials"],
+        "Sample (names)": stats["sample_names"],
+        "Sign per RRSIG (ms)": stats["sign_ms_per_rrsig"].round(3),
+        "Fixed per zone (s)": stats["sign_fixed_s"].round(3),
+        "Dataset sign, estimated (95% CI)": [_fmt_ci(m, a, b) for m, a, b in
+                                             zip(stats["est_sign_s"], stats["est_sign_lo"], stats["est_sign_hi"])],
+        "Dataset verify, estimated (95% CI)": [_fmt_ci(m, a, b) for m, a, b in
+                                               zip(stats["est_verify_s"], stats["est_verify_lo"], stats["est_verify_hi"])],
+        "Full zones sign, measured once": stats["full_sign_s"].map(compare.fmt_seconds),
+        "Full zones verify, measured once": stats["full_verify_s"].map(compare.fmt_seconds),
+        "Signed size": stats["signed_bytes"].map(compare.fmt_bytes),
+    })
+
+
+def _suite_settings(sd: dict) -> None:
+    s = sd["suite"]
+    with st.expander("Settings and environment recorded for this benchmark"):
+        st.markdown(
+            f"**Dataset sizes** {', '.join(f'{n:,}' for n in s['sizes'])} data names · **Scenarios** "
+            f"{', '.join(s['scenarios'])} · **Stack** {s['stack']}  \n"
+            f"**Measurement trials** {s['trials']} (cold then warm) · **Lookups per pass** {s['n_queries']} · "
+            f"**Networks** {', '.join(s['networks'])} · **UDP limit** {s['udp']}  \n"
+            f"**Signing trials** {s['sign_trials']} on samples of {s['sample_names']} names (dataset time is an "
+            f"extrapolation, the full zones are also signed once)"
+        )
+        wl = s.get("workload") or driver.WORKLOAD_DEFAULTS
+        st.markdown(
+            f"**Workload** NXDOMAIN {round(float(wl['nx_fraction']) * 100)}% · zone skew {wl['zone_zipf_s']} · "
+            f"name skew {wl['name_zipf_s']} · timeout {wl['timeout_s']} s · seeded (same seed for every scenario)"
+        )
+        hier = [{"Dataset": f"{n:,}", "Leaf zones": suite_mod.bench_shape(n)["sld_count"],
+                 "Names per leaf zone": ", ".join(str(x) for x in suite_mod.bench_shape(n)["sld_sizes"])}
+                for n in s["sizes"]]
+        st.dataframe(pd.DataFrame(hier), width="stretch", hide_index=True)
+        first = next(iter(sd["runs"].values()), {})
+        env = first.get("environment") or {}
+        if env:
+            dock = env.get("docker") or {}
+            st.markdown(
+                f"**Environment** Docker {dock.get('ServerVersion')} · {dock.get('NCPU')} CPUs · "
+                f"{round((dock.get('MemTotal') or 0) / 1024 ** 3, 1)} GiB · host {s.get('host', {}).get('platform', '')}  \n"
+                f"**Pinned images** " + ", ".join(sorted({(v.get('image') or '') for v in (env.get('images') or {}).values()}))
+            )
+        cpus = ((first.get("lab") or {}).get("cpusets")) or {}
+        if cpus:
+            st.caption(f"CPU pinning: {cpus}")
+        profs = {n: v for n, v in (s.get("profiles") or {}).items() if n in s["networks"]}
+        if profs:
+            st.dataframe(pd.DataFrame(profs).T.rename_axis("network"), width="stretch")
+
+
+def benchmark_results(h: driver.LabHandle) -> None:
+    suites = [s for s in suite_mod.list_suites() if s["complete"]]
+    if not suites:
+        st.info("No finished benchmark yet. Choose the options in the sidebar and press **Run benchmark**.")
+        return
+    by = {s["id"]: s for s in suites}
+    if st.session_state.get("bench_suite_pick") not in by:
+        st.session_state.pop("bench_suite_pick", None)
+    pick = st.selectbox("Benchmark", list(by), key="bench_suite_pick", format_func=lambda i: by[i]["title"])
+    sd = compare.load_suite(by[pick]["path"])
+    if sd is None:
+        st.warning("This benchmark has no stored results.")
+        return
+    s = sd["suite"]
+    m = st.columns(4)
+    m[0].metric("Name", s.get("label") or "—")
+    m[1].metric("Started", by[pick]["when"])
+    m[2].metric("Duration", driver.format_duration(s.get("seconds", 0)).lstrip("~"))
+    m[3].metric("Dataset sizes", ", ".join(f"{n:,}" for n in sd["datasets"]))
+    _suite_settings(sd)
+    st.button("Open in Compare →", on_click=_open_in_compare, args=(pick,), key="bench_to_compare")
+
+    stats = compare.signing_trial_stats(sd["trials"], sd["full"])
+    tabs = st.tabs([f"{n:,} names" for n in sd["datasets"]])
+    for tab, n in zip(tabs, sd["datasets"]):
+        with tab:
+            st.markdown("**Signing and verification**")
+            ds = stats[stats["dataset"] == n]
+            if ds.empty:
+                st.caption("No signing data.")
+            else:
+                st.dataframe(_signing_stats_table(ds), width="stretch", hide_index=True)
+                jobs = int(s.get("jobs", 1))
+                st.caption("Estimated = from the repeated sample trials (run one at a time), extrapolated to every "
+                           "zone of the dataset. Measured once = the full zones that the lab served, signed one time "
+                           f"with {jobs} parallel job(s)"
+                           + ("" if jobs == 1 else "; with more than one job these timings are inflated by contention")
+                           + ".")
+            summary = sd["bench"].get(n)
+            if summary is not None and not summary.empty:
+                st.markdown("**Resolver measurements**")
+                cols = [c for c in ["scenario", "profile", "pass", "udp_limit", "trials", "median_ms", "p95_ms",
+                                    "upstream_bytes", "upstream_queries", "upstream_truncated", "validated_pct",
+                                    "servfail", "timeouts"] if c in summary.columns]
+                st.dataframe(summary[cols], width="stretch", hide_index=True)
+                _bench_charts(summary)
+    d1, d2 = st.columns(2)
+    d1.download_button("Download signing trials (CSV)", data=sd["trials"].to_csv(index=False),
+                       file_name=f"{pick}-signing-trials.csv", mime="text/csv", key="bench_dl_trials")
+    d2.download_button("Download full-zone signing (CSV)", data=sd["full"].to_csv(index=False),
+                       file_name=f"{pick}-signing-full.csv", mime="text/csv", key="bench_dl_full")
 
 
 def _bench_charts(summary: pd.DataFrame) -> None:
@@ -1460,85 +1654,12 @@ def _bench_charts(summary: pd.DataFrame) -> None:
         )
 
 
-def _run_settings(run: dict) -> None:
-    """The numbers a saved run was measured with, read from its run.json."""
-    c = run.get("cfg") or {}
-    hier, wl = c.get("hierarchy") or {}, c.get("workload") or {}
-    if not hier and not wl:
-        return
-    with st.expander("Settings used for this run"):
-        if hier:
-            st.markdown(
-                f"**Zones** · TLDs {', '.join(hier.get('tlds', []))} · {hier.get('sld_count')} leaf zones on "
-                f"{hier.get('sld_servers')} server(s) · names per zone {hier.get('sld_sizes')} · "
-                f"seed {c.get('seed')}"
-            )
-        if wl:
-            st.markdown(
-                f"**Workload** · {wl.get('n_queries')} lookups per pass · NXDOMAIN "
-                f"{round(float(wl.get('nx_fraction', 0)) * 100)}% · zone skew {wl.get('zone_zipf_s')} · "
-                f"name skew {wl.get('name_zipf_s')} · timeout {wl.get('timeout_s')} s"
-            )
-        profiles = (c.get("network") or {}).get("profiles") or {}
-        used = {p: profiles[p] for p in run.get("profiles", []) if p in profiles}
-        if used:
-            st.dataframe(pd.DataFrame(used).T.rename_axis("network"), width="stretch")
-
-
-def benchmark_results(h: driver.LabHandle) -> None:
-    runs = driver.list_runs(h)
-    st.caption(f"Saved runs for lab **{h.tag}**. Change zone size in Setup to see other labs.")
-    flash = st.session_state.pop("bench_flash", None)
-    if flash:
-        st.success(flash)
-    if not runs:
-        st.info("No saved runs yet. Name a run in the sidebar and press **Run benchmark**.")
-        return
-
-    by_folder = {r["folder"]: r for r in runs}
-    folders = list(by_folder)
-    if st.session_state.get("bench_run_pick") not in by_folder:
-        st.session_state.pop("bench_run_pick", None)
-    pick = st.selectbox("Run", folders, key="bench_run_pick", format_func=lambda f: by_folder[f]["title"])
-    run = by_folder[pick]
-    run_dir: Path = run["path"]
-
-    m = st.columns(4)
-    m[0].metric("Name", run["label"] or "—")
-    m[1].metric("Started", run["when"])
-    m[2].metric("Scenarios", len(run["scenarios"]) or "—")
-    m[3].metric("Trials", run["trials"] if run["trials"] is not None else "—")
-    st.caption(f"{run['folder']} · networks: {', '.join(run['profiles']) or '—'}")
-    _run_settings(run)
-
-    summary_csv = run_dir / "summary.csv"
-    if summary_csv.is_file():
-        try:
-            summary = pd.read_csv(summary_csv)
-        except Exception:  # noqa: BLE001
-            summary = pd.DataFrame()
-        if not summary.empty:
-            st.markdown("**Summary**")
-            show_cols = [c for c in ["scenario", "profile", "pass", "udp_limit", "trials", "median_ms", "p95_ms",
-                                     "upstream_bytes", "upstream_queries", "upstream_truncated",
-                                     "validated_pct", "servfail", "timeouts"] if c in summary.columns]
-            st.dataframe(summary[show_cols], width="stretch", hide_index=True)
-            _bench_charts(summary)
-            st.download_button("Download summary.csv", data=summary_csv.read_bytes(),
-                               file_name=f"{run['folder']}-summary.csv", mime="text/csv", key="bench_dl")
-            return
-    # No summary yet: run is unfinished or failed — show what exists.
-    for name in ("passes.csv", "queries.csv"):
-        f = run_dir / name
-        if f.is_file():
-            st.markdown(f"`{name}` (partial)")
-            try:
-                st.dataframe(pd.read_csv(f).head(50), width="stretch", hide_index=True)
-            except Exception:  # noqa: BLE001
-                st.caption("Could not read CSV")
-            return
-    files = sorted(p.name for p in run_dir.iterdir() if p.is_file())[:20]
-    st.caption(("Files: " + ", ".join(files)) if files else "Empty run folder.")
+def _open_in_compare(suite_id: str) -> None:
+    _store()["cmp_source"] = "suite"
+    _store()["cmp_suite"] = suite_id
+    st.session_state.pop("w_cmp_source", None)
+    st.session_state.pop("w_cmp_suite", None)
+    _go("compare")
 
 
 def benchmark_page(h: driver.LabHandle, stt: dict) -> None:
@@ -1568,18 +1689,37 @@ def _cmp_summary(tag: str | None, folder: str | None) -> pd.DataFrame | None:
 def sidebar_compare(h: driver.LabHandle, stt: dict) -> None:
     _sidebar_brand("compare")
     st.sidebar.markdown("### Compare")
-    _hint("Signing numbers come from the lab's last Prepare; bytes and cache from a saved benchmark run.")
-
-    labs = [x["tag"] for x in driver.list_labs()]
-    default_lab = h.tag if h.tag in labs else (labs[0] if labs else h.tag)
-    tag = sb(st.sidebar.selectbox, "cmp_lab", default_lab, "Lab", options=labs or [h.tag],
-             help="Any lab folder that has signing data or saved runs.")
-
-    runs = [r for r in driver.list_runs(h, tag) if (r["path"] / "summary.csv").is_file()]
-    by = {r["folder"]: r for r in runs}
-    folder = sb(st.sidebar.selectbox, "cmp_run", next(iter(by), None), "Benchmark run", options=list(by),
-                format_func=lambda f: by[f]["title"], help="Bytes, truncation, cache and latency come from this run.")
-    summary = _cmp_summary(tag, folder)
+    suites = [s for s in suite_mod.list_suites() if s["complete"]]
+    source = "lab"
+    if suites:
+        source = sb(st.sidebar.radio, "cmp_source", "suite", "Source", options=["suite", "lab"],
+                    format_func=lambda x: {"suite": "Benchmark (dataset sizes)", "lab": "A single lab (Live / older runs)"}[x])
+    summary, names = None, []
+    if source == "suite":
+        _hint("Everything comes from one finished benchmark: signing trials, bytes and cache, per dataset size.")
+        by_s = {s["id"]: s for s in suites}
+        sid = sb(st.sidebar.selectbox, "cmp_suite", next(iter(by_s)), "Benchmark", options=list(by_s),
+                 format_func=lambda i: by_s[i]["title"])
+        sd = compare.load_suite(by_s[sid]["path"]) if sid in by_s else None
+        datasets = sd["datasets"] if sd else []
+        ds = sb(st.sidebar.selectbox, "cmp_dataset", datasets[len(datasets) // 2] if datasets else None,
+                "Dataset size", options=datasets, format_func=lambda n: f"{n:,} names")
+        summary = sd["bench"].get(ds) if sd else None
+        if sd:
+            names = list(sd["trials"]["scenario"].unique()) if not sd["trials"].empty else []
+    else:
+        _hint("Signing numbers come from the lab's last Prepare; bytes and cache from a saved benchmark run.")
+        labs = [x["tag"] for x in driver.list_labs()]
+        default_lab = h.tag if h.tag in labs else (labs[0] if labs else h.tag)
+        tag = sb(st.sidebar.selectbox, "cmp_lab", default_lab, "Lab", options=labs or [h.tag],
+                 help="Any lab folder that has signing data or saved runs.")
+        runs = [r for r in driver.list_runs(h, tag) if (r["path"] / "summary.csv").is_file()]
+        by = {r["folder"]: r for r in runs}
+        folder = sb(st.sidebar.selectbox, "cmp_run", next(iter(by), None), "Benchmark run", options=list(by),
+                    format_func=lambda f: by[f]["title"],
+                    help="Bytes, truncation, cache and latency come from this run.")
+        summary = _cmp_summary(tag, folder)
+        names = list(compare.signing_by_scenario(driver.manifest_rows(h, tag)).scenario)
 
     if summary is not None and not summary.empty:
         profiles = [str(p) for p in summary["profile"].dropna().unique()] if "profile" in summary else []
@@ -1587,8 +1727,7 @@ def sidebar_compare(h: driver.LabHandle, stt: dict) -> None:
         udps = [int(u) for u in summary["udp_limit"].dropna().unique()] if "udp_limit" in summary else []
         sb(st.sidebar.selectbox, "cmp_udp", udps[0] if udps else None, "UDP size limit", options=udps)
 
-    sign = compare.signing_by_scenario(driver.manifest_rows(h, tag))
-    names = list(sign.scenario) + (list(summary["scenario"].unique()) if summary is not None else [])
+    names += list(summary["scenario"].unique()) if summary is not None else []
     scenarios = compare.order_scenarios(names)
     st.sidebar.markdown("---")
     st.sidebar.markdown("**Compare**")
@@ -1609,29 +1748,43 @@ def _plot_cfg(fig, height: int = 360):
 
 def compare_page(h: driver.LabHandle, stt: dict) -> None:
     _page_header("compare", h, stt)
-    tag, folder = cfg("cmp_lab"), cfg("cmp_run")
     base, cand = cfg("cmp_base"), cfg("cmp_cand")
+    use_suite = any(s["complete"] for s in suite_mod.list_suites()) and cfg("cmp_source", "suite") == "suite"
+    sd = None
+    prof, udp = cfg("cmp_profile"), cfg("cmp_udp")
 
-    man_rows = driver.manifest_rows(h, tag)
-    sign = compare.signing_by_scenario(man_rows)
-    summary = _cmp_summary(tag, folder)
-    bench = compare.bench_by_scenario(summary, cfg("cmp_profile"), cfg("cmp_udp")) if summary is not None \
-        else compare.bench_by_scenario(pd.DataFrame())
-    df = compare.merge(sign, bench, compare.analytical_by_scenario(man_rows))
+    if use_suite:
+        by_s = {s["id"]: s for s in suite_mod.list_suites() if s["complete"]}
+        sd = compare.load_suite(by_s[cfg("cmp_suite")]["path"]) if cfg("cmp_suite") in by_s else None
+        ds = cfg("cmp_dataset")
+        if sd is None or ds is None:
+            st.info("Pick a finished benchmark and a dataset size in the sidebar.")
+            return
+        df = compare.suite_frame(sd, int(ds), prof, udp)
+        man_rows = sd["full"][sd["full"]["dataset"] == ds].to_dict("records") if not sd["full"].empty else []
+        n_trials = int(df["sign_trials"].max()) if "sign_trials" in df and df["sign_trials"].notna().any() else 0
+        st.caption(f"Benchmark **{by_s[cfg('cmp_suite')]['title']}** · **{int(ds):,} data names** · "
+                   f"network {prof}, UDP {udp} · signing and verification are estimated from {n_trials} trial(s) "
+                   "on sample zones; bytes and cache are measured in the resolver run")
+    else:
+        tag, folder = cfg("cmp_lab"), cfg("cmp_run")
+        man_rows = driver.manifest_rows(h, tag)
+        sign = compare.signing_by_scenario(man_rows)
+        summary = _cmp_summary(tag, folder)
+        bench = compare.bench_by_scenario(summary, prof, udp) if summary is not None \
+            else compare.bench_by_scenario(pd.DataFrame())
+        df = compare.merge(sign, bench, compare.analytical_by_scenario(man_rows))
+        if not df.empty:
+            run_title = next((r["title"] for r in driver.list_runs(h, tag) if r["folder"] == folder), None)
+            src_sign = f"last Prepare of **{tag}**" if not sign.empty else "no signing data for this lab"
+            src_bench = f"run **{run_title}** ({prof}, UDP {udp})" if not bench.empty \
+                else "no benchmark run with results for this lab"
+            st.caption(f"Signing and verification: {src_sign} · Bytes, truncation, cache: {src_bench}")
 
     if df.empty:
-        st.info("Nothing to compare yet. Run **Prepare** in Setup for signing numbers and a **benchmark** for "
-                "bytes and cache.")
-        a, b, _ = st.columns([1, 1, 2])
-        a.button("Go to Setup", on_click=_go, args=("setup",), key="cmp_to_setup", width="stretch")
-        b.button("Go to Benchmark", on_click=_go, args=("benchmark",), key="cmp_to_bench", width="stretch")
+        st.info("Nothing to compare yet. Run a **benchmark** in the Benchmark tile.")
+        st.button("Go to Benchmark", on_click=_go, args=("benchmark",), key="cmp_to_bench")
         return
-
-    run_title = next((r["title"] for r in driver.list_runs(h, tag) if r["folder"] == folder), None)
-    src_sign = f"last Prepare of **{tag}**" if not sign.empty else "no signing data for this lab"
-    src_bench = f"run **{run_title}** ({cfg('cmp_profile')}, UDP {cfg('cmp_udp')})" if not bench.empty \
-        else "no benchmark run with results for this lab"
-    st.caption(f"Signing and verification: {src_sign} · Bytes, truncation, cache: {src_bench}")
 
     if not (base and cand):
         st.warning("Pick a candidate and a baseline in the sidebar.")
@@ -1639,6 +1792,9 @@ def compare_page(h: driver.LabHandle, stt: dict) -> None:
 
     st.markdown(f"#### {cand} vs {base}")
     cards = compare.headline(df, base, cand)
+    if use_suite:
+        cards[0]["help"] = "Estimated from repeated sample trials, extrapolated to the whole dataset (95% CI in the table)"
+        cards[1]["help"] = "ldns-verify-zone, estimated the same way (offline check, not the resolver)"
     cols = st.columns(len(cards))
     for col, c in zip(cols, cards):
         col.metric(c["label"], c["value"], c["delta"], delta_color="off", delta_arrow="off", help=c["help"])
@@ -1647,8 +1803,12 @@ def compare_page(h: driver.LabHandle, stt: dict) -> None:
         st.caption("No data for: " + ", ".join(missing) + ". "
                    "Signing and verification need Prepare for both scenarios; the rest need both in the benchmark run.")
 
-    glance, signing, wire, cache, allnums = st.tabs(
-        ["At a glance", "Signing & size", "Bytes on the wire", "Cache & latency", "All numbers"])
+    tab_names = ["At a glance", "Signing & size", "Bytes on the wire", "Cache & latency", "All numbers"]
+    if use_suite:
+        tab_names.insert(1, "Across sizes")
+    made = st.tabs(tab_names)
+    glance, signing, wire, cache, allnums = (made[0], *made[-4:])
+    across = made[1] if use_suite else None
 
     scen_order = list(df.scenario)
     colors = compare.COLORS
@@ -1676,7 +1836,11 @@ def compare_page(h: driver.LabHandle, stt: dict) -> None:
         )
 
     with signing:
-        st.markdown(":green-badge[Measured] from the last Prepare")
+        if use_suite:
+            st.markdown(":blue-badge[Estimated] sign and verify time from the repeated sample trials · "
+                        ":green-badge[Measured] signed size and the single full signing run")
+        else:
+            st.markdown(":green-badge[Measured] from the last Prepare")
         sg = df.dropna(subset=["sign_s"]) if "sign_s" in df else df
         if sg.empty:
             st.info("No signing data: run Prepare in Setup.")
@@ -1684,8 +1848,17 @@ def compare_page(h: driver.LabHandle, stt: dict) -> None:
             c1, c2 = st.columns(2)
             long = sg.melt(id_vars="scenario", value_vars=["sign_s", "verify_s"], var_name="what", value_name="seconds")
             long["what"] = long["what"].map({"sign_s": "Sign zones", "verify_s": "Verify zones"})
-            f1 = px.bar(long, x="scenario", y="seconds", color="what", barmode="group", log_y=True,
-                        category_orders={"scenario": scen_order}, title="Signing and verification time (s, log)")
+            if use_suite:
+                long = long.merge(sg[["scenario", "sign_lo_s", "sign_hi_s"]], on="scenario", how="left")
+                is_sign = long["what"] == "Sign zones"
+                long["err_hi"] = (long["sign_hi_s"] - long["seconds"]).where(is_sign)
+                long["err_lo"] = (long["seconds"] - long["sign_lo_s"]).where(is_sign)
+                f1 = px.bar(long, x="scenario", y="seconds", color="what", barmode="group", log_y=True,
+                            error_y="err_hi", error_y_minus="err_lo", category_orders={"scenario": scen_order},
+                            title="Signing and verification time, estimated (s, log; bars = 95% CI)")
+            else:
+                f1 = px.bar(long, x="scenario", y="seconds", color="what", barmode="group", log_y=True,
+                            category_orders={"scenario": scen_order}, title="Signing and verification time (s, log)")
             c1.plotly_chart(_plot_cfg(f1), width="stretch")
             sz = sg.assign(MB=sg.signed_bytes / 1024 ** 2)
             f2 = px.bar(sz, x="scenario", y="MB", color="scenario", color_discrete_map=colors,
@@ -1697,6 +1870,14 @@ def compare_page(h: driver.LabHandle, stt: dict) -> None:
                         title="Sign time per RRSIG (ms, log)", text_auto=".3g")
             f3.update_layout(showlegend=False)
             st.plotly_chart(_plot_cfg(f3, 320), width="stretch")
+            if use_suite:
+                stt_ = compare.signing_trial_stats(sd["trials"], sd["full"])
+                stt_ = stt_[stt_["dataset"] == int(ds)]
+                st.markdown("**Signing trials in detail**")
+                st.dataframe(_signing_stats_table(stt_), width="stretch", hide_index=True)
+                st.caption("Estimated: each trial signs two sample zones; a line through them gives a fixed cost per "
+                           "zone and a cost per RRSIG, applied to every zone of the dataset. Measured once: the full "
+                           "zones the lab served, signed one time. Compare the two to judge the extrapolation.")
             st.caption("Verification here is `ldns-verify-zone` over every signed zone (an offline check). "
                        "How long a resolver takes to validate is part of the cold-pass latency under Cache & latency.")
 
@@ -1776,11 +1957,37 @@ def compare_page(h: driver.LabHandle, stt: dict) -> None:
                    "They are never read from the lab and are kept apart from the measured cache above. "
                    "They describe signature material for the whole zone set, not what the resolver actually cached.")
 
+    if across is not None:
+        with across:
+            sc_all = compare.scaling_frame(sd, prof, udp)
+            order = compare.order_scenarios(sc_all["scenario"].unique())
+            st.markdown(f"##### {cand} vs {base} at every dataset size")
+            rows = []
+            for d in sd["datasets"]:
+                cs = compare.headline(sc_all[sc_all["dataset"] == d].reset_index(drop=True), base, cand)
+                rows.append({"Dataset": f"{d:,} names", **{c["label"]: c["value"] for c in cs}})
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+            st.caption("Each cell reads as 'candidate is N times better than baseline' for that metric and dataset.")
+            panels = [("sign_s", "Signing time, estimated (s)"), ("verify_s", "Zone verification, estimated (s)"),
+                      ("signed_bytes", "Signed size (bytes)"), ("upstream_bytes", "Bytes on the wire, cold pass"),
+                      ("cache_rrset", "Resolver RRset cache (bytes)")]
+            left, right = st.columns(2)
+            for i, (col, title) in enumerate(panels):
+                data = sc_all.dropna(subset=[col])
+                if data.empty:
+                    continue
+                f = px.line(data, x="dataset", y=col, color="scenario", markers=True, log_x=True, log_y=True,
+                            color_discrete_map=colors, category_orders={"scenario": order}, title=title)
+                f.update_xaxes(title="Data names", tickvals=sd["datasets"])
+                (left if i % 2 == 0 else right).plotly_chart(_plot_cfg(f, 340), width="stretch")
+            st.caption("Both axes are logarithmic: a straight line is power-law growth, and a constant gap between "
+                       "two lines is a constant ratio. Sign and verify times are estimates; the rest are measured.")
+
     with allnums:
         t = compare.table(df)
         st.dataframe(t, width="stretch", hide_index=True)
         st.download_button("Download comparison (CSV)", data=df.to_csv(index=False), key="cmp_dl",
-                           file_name=f"comparison-{tag}.csv", mime="text/csv")
+                           file_name=f"comparison-{cfg('cmp_suite') if use_suite else cfg('cmp_lab')}.csv", mime="text/csv")
 
 
 # ─────────────────────────── RESET ───────────────────────────
@@ -1794,12 +2001,12 @@ def _do_reset() -> None:
     ss = st.session_state
     h = _handle()
     scopes = {k: bool(ss.get(f"rs_{k}")) for k in
-              ("session", "activity", "pcaps", "runs", "flush", "work")}
+              ("session", "activity", "pcaps", "runs", "suites", "flush", "work")}
     if not any(scopes.values()):
         return
     removed = driver.clear_demo_data(
         h, session=scopes["session"], activity=scopes["activity"], pcaps=scopes["pcaps"],
-        hide_prepare_metrics=True, work=scopes["work"], benchmarks=scopes["runs"],
+        hide_prepare_metrics=True, work=scopes["work"], benchmarks=scopes["runs"], suites=scopes["suites"],
     )
     flushed = False
     flush_note = ""
@@ -1822,11 +2029,11 @@ def _do_reset() -> None:
     if scopes["pcaps"]:
         for k in _PCAP_KEYS:
             ss.pop(k, None)
-    if scopes["runs"] or scopes["work"]:
-        for k in ("last_run_dir", "bench_run_pick", "bench_flash"):
+    if scopes["runs"] or scopes["work"] or scopes["suites"]:
+        for k in ("last_run_dir", "bench_run_pick", "bench_flash", "bench_suite_pick"):
             ss.pop(k, None)
     names = {"session": "dashboard session", "activity": "activity log", "pcaps": "packet captures",
-             "runs": "saved benchmark runs", "flush": "resolver cache", "work": "signed zones and lab work"}
+             "runs": "saved lab runs", "suites": "benchmarks of all dataset sizes", "flush": "resolver cache", "work": "signed zones and lab work"}
     ss.last_reset = {
         "when": datetime.now().strftime("%d %b %Y, %H:%M:%S"),
         "scopes": [names[k] for k, v in scopes.items() if v],
@@ -1869,8 +2076,12 @@ def reset_controls(h: driver.LabHandle, stt: dict) -> None:
         st.markdown("**Evidence** · you can regenerate it, but not recover it")
         _scope_row("pcaps", "Live captures",
                    f"{pv['pcaps']} file(s) · {_fmt_size(pv['pcap_bytes'])} from the Live tile.", default=False)
-        _scope_row("runs", "Saved benchmark runs",
+        _scope_row("runs", "Saved lab runs (older)",
                    f"{pv['runs']} run(s) · {_fmt_size(pv['run_bytes'])} for lab {h.tag}.", default=False)
+        _scope_row("suites", "Benchmarks (dataset sizes)",
+                   f"{pv['suites']} benchmark(s) · {_fmt_size(pv['suite_bytes'])} with their signed zones and runs."
+                   if not suite_mod.running_suite() else "A benchmark is running; wait or cancel it first.",
+                   default=False, disabled=bool(suite_mod.running_suite()) or not pv["suite_bytes"])
     with st.container(border=True):
         st.markdown("**Lab environment**")
         _scope_row("flush", "Flush resolver cache",
@@ -1884,10 +2095,11 @@ def reset_controls(h: driver.LabHandle, stt: dict) -> None:
     st.caption("Always kept: Docker images, configuration files and repository code.")
 
     ss = st.session_state
-    chosen = [k for k in ("session", "activity", "pcaps", "runs", "flush", "work") if ss.get(f"rs_{k}")]
-    destructive = [k for k in ("pcaps", "runs", "work") if ss.get(f"rs_{k}")]
+    chosen = [k for k in ("session", "activity", "pcaps", "runs", "suites", "flush", "work") if ss.get(f"rs_{k}")]
+    destructive = [k for k in ("pcaps", "runs", "suites", "work") if ss.get(f"rs_{k}")]
     if destructive:
-        wording = {"pcaps": f"{pv['pcaps']} capture file(s)", "runs": f"{pv['runs']} saved benchmark run(s)",
+        wording = {"pcaps": f"{pv['pcaps']} capture file(s)", "runs": f"{pv['runs']} saved lab run(s)",
+                   "suites": f"{pv['suites']} benchmark(s) of all dataset sizes",
                    "work": "the signed zones (the lab will stop)"}
         st.warning("This permanently deletes " + ", ".join(wording[k] for k in destructive) + ".")
         confirmed = st.checkbox("I understand this cannot be undone", key="rs_confirm")
@@ -1911,7 +2123,7 @@ def reset_last() -> None:
     m[0].metric("Session", "cleared" if rm.get("session") else "—")
     m[1].metric("Activity log", "cleared" if rm.get("activity") else "—")
     m[2].metric("Captures removed", rm.get("pcaps", 0))
-    m[3].metric("Runs removed", rm.get("benchmarks", 0))
+    m[3].metric("Runs removed", rm.get("benchmarks", 0) + rm.get("suites", 0))
     m[4].metric("Zones removed", "yes" if rm.get("work") else "no")
     if last.get("flushed"):
         st.caption("Resolver cache flushed.")
@@ -1991,7 +2203,7 @@ def main() -> None:
     err = _apply_ui_config(h) or err
     if h.tag != tag_before:
         st.rerun()  # zone size changed → a different lab; re-read its status
-    if err and mode in ("setup", "benchmark") and not st.session_state.get("shape_errors"):
+    if err and mode == "setup" and not st.session_state.get("shape_errors"):
         st.sidebar.error(err)
 
     if mode == "home":

@@ -7,6 +7,7 @@ truncation, cache memory, cold and warm latency). Nothing here talks to Docker.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -121,6 +122,112 @@ def analytical_per_signature(rows: list[dict]) -> dict | None:
         "ladder": analytical.max_signed_ladder(n, n_msg, SLH_DSA_SHA2_128S_SIG_BYTES),
         "full": analytical.max_full_signature(n, n_msg, SLH_DSA_SHA2_128S_SIG_BYTES),
     }
+
+
+# ─────────────────────────── benchmark suites (several dataset sizes) ───────────────────────────
+
+ECO = Path(__file__).resolve().parents[2] / "ecosystem"
+
+
+def load_suite(suite_dir: Path) -> dict | None:
+    """Everything a finished suite stored: parameters, signing trials, full-zone signing, per-size runs."""
+    meta = suite_dir / "suite.json"
+    if not meta.is_file():
+        return None
+    suite = json.loads(meta.read_text(encoding="utf-8"))
+    parts = [pd.read_csv(f).assign(dataset=int(f.stem.rsplit("_", 1)[1]))
+             for f in sorted(suite_dir.glob("signing_trials_*.csv"))]
+    trials = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    full_csv = suite_dir / "signing_full.csv"
+    full = pd.read_csv(full_csv).rename(columns={"size": "dataset"}) if full_csv.is_file() else pd.DataFrame()
+    bench, runs = {}, {}
+    for key, d in (suite.get("sizes_detail") or {}).items():
+        run_dir = ECO / "results" / d["tag"] / d["run_folder"]
+        f = run_dir / "summary.csv"
+        if f.is_file():
+            bench[int(key)] = pd.read_csv(f)
+        rj = run_dir / "run.json"
+        if rj.is_file():
+            try:
+                runs[int(key)] = json.loads(rj.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                pass
+    return {"suite": suite, "trials": trials, "full": full, "bench": bench, "runs": runs,
+            "datasets": sorted(int(k) for k in (suite.get("sizes_detail") or {}))}
+
+
+def signing_trial_stats(trials: pd.DataFrame, full: pd.DataFrame) -> pd.DataFrame:
+    """Per dataset and scenario: the dataset-wide sign and verify time estimated from the repeated sample trials
+    (median over trials, 95% bootstrap CI), next to the single full signing run that was actually served.
+
+    Each trial signs two sample zones. A straight line through them gives a fixed cost per zone and a cost
+    per RRSIG; applying it to every zone of the dataset gives the estimate. It is an extrapolation and is
+    labelled as one wherever it is shown."""
+    from cipherops.stats import bootstrap_ci
+
+    cols = ["dataset", "scenario", "trials", "sample_names", "sample_rrsigs", "sign_ms_per_rrsig", "sign_fixed_s",
+            "dataset_rrsigs", "est_sign_s", "est_sign_lo", "est_sign_hi", "est_verify_s", "est_verify_lo",
+            "est_verify_hi", "full_sign_s", "full_verify_s", "signed_bytes", "zones"]
+    if trials is None or trials.empty:
+        return pd.DataFrame(columns=cols)
+    def line(points: list[tuple[float, float]]) -> tuple[float, float]:
+        """(fixed seconds per zone, seconds per RRSIG) through the sample points; origin line if only one."""
+        (r1, t1), (r0, t0) = max(points), min(points)
+        slope = (t1 - t0) / (r1 - r0) if len(points) > 1 and r1 != r0 else t1 / r1
+        if slope <= 0:                                   # noise at tiny sizes: fall back to a pure per-RRSIG cost
+            return 0.0, t1 / r1
+        return max(t1 - slope * r1, 0.0), slope
+
+    rows = []
+    for (ds, sc), g in trials.groupby(["dataset", "scenario"], sort=False):
+        f = full[(full["dataset"] == ds) & (full["scenario"] == sc)] if not full.empty else full
+        zone_rr = [float(x) for x in f["rrsig_count"]] if len(f) else [float(g["rrsigs"].max())]
+        est_sign, est_ver, per_sign, fixed_sign = [], [], [], []
+        for _, tg in g.groupby("trial"):
+            s_fix, s_per = line(list(zip(tg["rrsigs"].astype(float), tg["sign_s"].astype(float))))
+            v_fix, v_per = line(list(zip(tg["rrsigs"].astype(float), tg["verify_s"].astype(float))))
+            est_sign.append(sum(s_fix + s_per * r for r in zone_rr))
+            est_ver.append(sum(v_fix + v_per * r for r in zone_rr))
+            per_sign.append(s_per * 1000)
+            fixed_sign.append(s_fix)
+        s_lo, s_hi = bootstrap_ci(est_sign)
+        v_lo, v_hi = bootstrap_ci(est_ver)
+        big = g[g["names"] == g["names"].max()]
+        rows.append({
+            "dataset": int(ds), "scenario": sc, "trials": int(g["trial"].nunique()),
+            "sample_names": " and ".join(str(int(x)) for x in sorted(g["names"].unique(), reverse=True)),
+            "sample_rrsigs": int(big["rrsigs"].iloc[0]),
+            "sign_ms_per_rrsig": float(pd.Series(per_sign).median()),
+            "sign_fixed_s": float(pd.Series(fixed_sign).median()),
+            "dataset_rrsigs": float(sum(zone_rr)), "est_sign_s": float(pd.Series(est_sign).median()),
+            "est_sign_lo": s_lo, "est_sign_hi": s_hi, "est_verify_s": float(pd.Series(est_ver).median()),
+            "est_verify_lo": v_lo, "est_verify_hi": v_hi,
+            "full_sign_s": float(f["sign_seconds"].sum()) if len(f) else None,
+            "full_verify_s": float(f["verify_seconds"].sum()) if len(f) else None,
+            "signed_bytes": float(f["signed_bytes"].sum()) if len(f) else None, "zones": len(f),
+        })
+    return pd.DataFrame(rows, columns=cols)
+
+
+def suite_frame(sd: dict, dataset: int, profile: str | None = None, udp_limit: int | None = None) -> pd.DataFrame:
+    """One dataset of a suite shaped like the single-lab frame, so cards, charts and tables are shared."""
+    st = signing_trial_stats(sd["trials"], sd["full"])
+    st = st[st["dataset"] == dataset]
+    sign = pd.DataFrame({
+        "scenario": st["scenario"], "zones": st["zones"], "sign_s": st["est_sign_s"], "verify_s": st["est_verify_s"],
+        "signed_bytes": st["signed_bytes"], "rrsigs": st["dataset_rrsigs"], "sign_ms_per_rrsig": st["sign_ms_per_rrsig"],
+        "sign_lo_s": st["est_sign_lo"], "sign_hi_s": st["est_sign_hi"], "sign_trials": st["trials"],
+        "full_sign_s": st["full_sign_s"], "full_verify_s": st["full_verify_s"],
+    })
+    bench = bench_by_scenario(sd["bench"].get(dataset), profile, udp_limit)
+    full = sd["full"][sd["full"]["dataset"] == dataset] if not sd["full"].empty else sd["full"]
+    return merge(sign.reset_index(drop=True), bench, analytical_by_scenario(full.to_dict("records")))
+
+
+def scaling_frame(sd: dict, profile: str | None = None, udp_limit: int | None = None) -> pd.DataFrame:
+    """All datasets of a suite stacked, with a ``dataset`` column (data names)."""
+    parts = [suite_frame(sd, d, profile, udp_limit).assign(dataset=d) for d in sd["datasets"]]
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
 
 def merge(signing: pd.DataFrame, bench: pd.DataFrame, analytic: pd.DataFrame | None = None) -> pd.DataFrame:

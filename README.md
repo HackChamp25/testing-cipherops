@@ -79,7 +79,7 @@ pip install -r requirements-dashboard.txt
 streamlit run dashboard/live_lab/app.py
 ```
 
-Needs Docker. Start with **Small** zone size. Walkthrough: [`dashboard/live_lab/README.md`](dashboard/live_lab/README.md).
+Needs Docker. Start with **Small** zone size for Live. The **Benchmark** tile runs the PS-036 benchmark (three dataset sizes, repeated trials) by itself once the images are built, and **Compare** shows MTL against SLH-DSA from it. Walkthrough: [`dashboard/live_lab/README.md`](dashboard/live_lab/README.md).
 
 ---
 

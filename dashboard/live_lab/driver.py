@@ -441,15 +441,21 @@ def write_ui_config(
     custom: dict | None = None,
     workload: dict | None = None,
     profiles: dict | None = None,
+    shape: dict | None = None,
+    out_config: str = DASHBOARD_CONFIG,
 ) -> str:
-    """Write ``configs/_dashboard.yaml`` from UI options; return relative config path.
+    """Write a lab config (``configs/_dashboard.yaml`` by default) from UI options; return its relative path.
 
     ``custom`` holds the Custom zone numbers (used when ``zone_size == "custom"``); ``workload`` and
-    ``profiles`` override WORKLOAD_DEFAULTS / PROFILE_DEFAULTS.
+    ``profiles`` override WORKLOAD_DEFAULTS / PROFILE_DEFAULTS. A ready-made ``shape`` (the benchmark's
+    own dataset sizes) replaces the zone-size choice.
     """
     import yaml
 
-    preset, errors, _warnings = shape_for(zone_size, custom)
+    if shape is not None:
+        preset, errors, _warnings = shape, [], []
+    else:
+        preset, errors, _warnings = shape_for(zone_size, custom)
     if errors or preset is None:
         raise ValueError("; ".join(errors) or "invalid zone shape")
     seed = int(preset.get("seed", seed))
@@ -499,10 +505,10 @@ def write_ui_config(
         "trials": int(trials),
         "cpusets": {"client": "3", "unbound": "2", "nsd": "4-5"},
     }
-    path = ECO / DASHBOARD_CONFIG
+    path = ECO / out_config
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
-    return DASHBOARD_CONFIG
+    return out_config
 
 
 def prepare(h: LabHandle, jobs: int = 2, scenarios: list[str] | None = None) -> str:
@@ -514,6 +520,20 @@ def prepare(h: LabHandle, jobs: int = 2, scenarios: list[str] | None = None) -> 
         "-v", f"{REPO / 'src'}:/work/src:ro",
         img,
         f"python3 -m ecolab prepare {h.config} --jobs {jobs}{extra}",
+    ], timeout=None)
+    return cp.stdout + cp.stderr
+
+
+def sign_trials(h: LabHandle, scenarios: list[str], trials: int, names: list[int], out_container_path: str) -> str:
+    """Repeat sign + verify of sample leaf zones in the tools image; CSV goes to ``out_container_path``."""
+    img = f"cipherops-eco-tools:{h.stack}"
+    cp = _run([
+        "docker", "run", "--rm", "--network", "none",
+        "-v", f"{ECO}:/eco",
+        "-v", f"{REPO / 'src'}:/work/src:ro",
+        img,
+        f"python3 -m ecolab signtrials {h.config} --scenarios {','.join(scenarios)} "
+        f"--trials {int(trials)} --names {','.join(str(int(n)) for n in names)} --out {out_container_path}",
     ], timeout=None)
     return cp.stdout + cp.stderr
 
@@ -894,6 +914,7 @@ def clear_demo_data(
     hide_prepare_metrics: bool = True,
     work: bool = False,
     benchmarks: bool = False,
+    suites: bool = False,
 ) -> dict[str, int]:
     """Wipe live-dashboard artifacts; optionally wipe signed work/ and saved benchmark runs.
 
@@ -904,7 +925,9 @@ def clear_demo_data(
     """
     d = h.capture_dir
     d.mkdir(parents=True, exist_ok=True)
-    removed = {"session": 0, "activity": 0, "pcaps": 0, "work": 0, "benchmarks": 0}
+    removed = {"session": 0, "activity": 0, "pcaps": 0, "work": 0, "benchmarks": 0, "suites": 0}
+    if suites:
+        removed["suites"] = clear_suites()
     if benchmarks:
         import shutil
         for run_dir in list_run_dirs(h):
@@ -947,6 +970,36 @@ def clear_demo_data(
     return removed
 
 
+def _suite_dirs() -> list[Path]:
+    """Everything the Benchmark tile creates: suite records, per-size run folders, per-size signed zones."""
+    out: list[Path] = []
+    suites = ECO / "results" / "suites"
+    if suites.is_dir():
+        out += [p for p in suites.iterdir() if p.is_dir()]
+    out += [p for p in (ECO / "results").glob("eco-bench-*") if p.is_dir()]
+    out += [p for p in (ECO / "work").glob("eco-bench-*") if p.is_dir()]
+    return out
+
+
+def suite_footprint() -> dict:
+    dirs = _suite_dirs()
+    return {"suites": len([p for p in dirs if p.parent.name == "suites"]),
+            "bytes": sum(_dir_size(p) for p in dirs)}
+
+
+def clear_suites() -> int:
+    """Delete benchmark suites, their per-size runs and signed zones; returns the number of suites removed."""
+    import shutil
+    for compose in (ECO / "work").glob("eco-bench-*/compose.yml"):
+        _run(["docker", "compose", "-f", str(compose), "down"], check=False, timeout=120)
+    n = suite_footprint()["suites"]
+    for p in _suite_dirs():
+        shutil.rmtree(p, ignore_errors=True)
+    for cfgf in (ECO / "configs").glob("_bench-*.yaml"):
+        cfgf.unlink(missing_ok=True)
+    return n
+
+
 def _dir_size(path: Path) -> int:
     total = 0
     for p in path.rglob("*"):
@@ -966,7 +1019,10 @@ def reset_preview(h: LabHandle) -> dict:
     session_queries_n = len(load_session(h).get("queries") or []) if session.is_file() else 0
     activity_log = d / "activity.log"
     runs = list_run_dirs(h)
+    sf = suite_footprint()
     return {
+        "suites": sf["suites"],
+        "suite_bytes": sf["bytes"],
         "session_queries": session_queries_n,
         "activity_bytes": activity_log.stat().st_size if activity_log.is_file() else 0,
         "pcaps": len(pcaps),

@@ -2,3 +2,4 @@ work/
 results/
 *.log
 configs/_dashboard.yaml
+configs/_bench-*.yaml
