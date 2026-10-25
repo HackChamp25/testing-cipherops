@@ -23,7 +23,7 @@ The app opens on a hub of five independent tiles. **Setup** comes first and only
 
 On Home the sidebar shows the entry instructions and lab readiness. Inside a tile it shows that tile's settings.
 
-Compare reads what the lab already wrote: signing time, zone verification (`ldns-verify-zone`) and signed size from the last Prepare, and bytes per tier, truncation, cache memory and latency from the saved benchmark run you pick (cold pass).
+Compare reads what the lab already wrote: signing time, zone verification (`ldns-verify-zone`) and signed size from the last Prepare, and bytes per tier, truncation, cache memory and latency from the saved benchmark run you pick (cold pass). Every figure is badged **Measured** or **Analytical**; the analytical ones (signature storage from the draft §12 formulas) are shown in their own section and never mixed with measured cache.
 
 ## Numbers you can change
 

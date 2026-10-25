@@ -7,7 +7,16 @@ truncation, cache memory, cold and warm latency). Nothing here talks to Docker.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pandas as pd
+
+_SRC = Path(__file__).resolve().parents[2] / "src"
+if str(_SRC) not in sys.path:
+    sys.path.append(str(_SRC))
+from cipherops import analytical  # noqa: E402  (formula module: draft section 12 maxima)
+from cipherops.codepoints import MTL_SECURITY_PARAMETER_N, SLH_DSA_SHA2_128S_SIG_BYTES  # noqa: E402
 
 ORDER = ["rsa", "ecdsa", "ed25519", "slh-dsa", "mixed-mtl", "mtl"]
 COLORS = {
@@ -77,8 +86,49 @@ def bench_by_scenario(summary: pd.DataFrame, profile: str | None = None,
     return pd.DataFrame(rows, columns=cols)
 
 
-def merge(signing: pd.DataFrame, bench: pd.DataFrame) -> pd.DataFrame:
+def analytical_by_scenario(rows: list[dict]) -> pd.DataFrame:
+    """Formula-derived (draft section 12) signature storage per scenario; never measured.
+
+    Per zone: direct SLH-DSA is N x 7,856 B; MTL is N maximum condensed signatures plus one maximum
+    signed ladder. N is the zone's RRSIG count. Classical scenarios are left out.
+    """
+    n = MTL_SECURITY_PARAMETER_N
+    total: dict[str, float] = {}
+    for r in rows:
+        alg, cnt = str(r.get("algorithm", "")), int(r.get("rrsig_count") or 0)
+        if cnt <= 0 or not alg.upper().startswith("SLH-DSA"):
+            continue
+        if "MTL" in alg.upper():
+            b = cnt * analytical.max_condensed_signature(n, cnt) + analytical.max_signed_ladder(
+                n, cnt, SLH_DSA_SHA2_128S_SIG_BYTES)
+        else:
+            b = cnt * SLH_DSA_SHA2_128S_SIG_BYTES
+        total[r["scenario"]] = total.get(r["scenario"], 0) + b
+    return pd.DataFrame({"scenario": list(total), "analytic_sig_bytes": list(total.values())},
+                        columns=["scenario", "analytic_sig_bytes"])
+
+
+def analytical_per_signature(rows: list[dict]) -> dict | None:
+    """Maximum size of one signature for the largest MTL zone in the lab (draft section 12)."""
+    counts = [int(r.get("rrsig_count") or 0) for r in rows if "MTL" in str(r.get("algorithm", "")).upper()]
+    if not counts or max(counts) <= 0:
+        return None
+    n_msg, n = max(counts), MTL_SECURITY_PARAMETER_N
+    return {
+        "n_messages": n_msg,
+        "direct": SLH_DSA_SHA2_128S_SIG_BYTES,
+        "condensed": analytical.max_condensed_signature(n, n_msg),
+        "ladder": analytical.max_signed_ladder(n, n_msg, SLH_DSA_SHA2_128S_SIG_BYTES),
+        "full": analytical.max_full_signature(n, n_msg, SLH_DSA_SHA2_128S_SIG_BYTES),
+    }
+
+
+def merge(signing: pd.DataFrame, bench: pd.DataFrame, analytic: pd.DataFrame | None = None) -> pd.DataFrame:
     df = signing.merge(bench, on="scenario", how="outer")
+    if analytic is not None and not analytic.empty:
+        df = df.merge(analytic, on="scenario", how="left")
+    if "analytic_sig_bytes" not in df:
+        df["analytic_sig_bytes"] = float("nan")
     if df.empty:
         return df
     df["_o"] = df.scenario.map({s: i for i, s in enumerate(order_scenarios(df.scenario))})
@@ -137,7 +187,7 @@ def headline(df: pd.DataFrame, base: str, cand: str) -> list[dict]:
         ("Bytes on the wire", "upstream_bytes", "less data", "more data", fmt_bytes,
          "Resolver ↔ authoritative traffic, cold pass"),
         ("Resolver cache", "cache_rrset", "less memory", "more memory", fmt_bytes,
-         "RRset cache memory in Unbound after the cold pass"),
+         "Measured: RRset cache memory in Unbound after the cold pass"),
     ]
     out = []
     for label, col, better, worse, fmt, help_ in spec:
@@ -171,7 +221,8 @@ def table(df: pd.DataFrame) -> pd.DataFrame:
         "Root": df.root_bytes.map(fmt_bytes),
         "TLD": df.tld_bytes.map(fmt_bytes),
         "Leaf": df.sld_bytes.map(fmt_bytes),
-        "RRset cache": df.cache_rrset.map(fmt_bytes),
-        "Message cache": df.cache_message.map(fmt_bytes),
+        "RRset cache (measured)": df.cache_rrset.map(fmt_bytes),
+        "Message cache (measured)": df.cache_message.map(fmt_bytes),
+        "Signature storage, whole zone (analytical)": df.analytic_sig_bytes.map(fmt_bytes),
     })
     return t

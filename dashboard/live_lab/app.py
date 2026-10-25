@@ -1612,11 +1612,12 @@ def compare_page(h: driver.LabHandle, stt: dict) -> None:
     tag, folder = cfg("cmp_lab"), cfg("cmp_run")
     base, cand = cfg("cmp_base"), cfg("cmp_cand")
 
-    sign = compare.signing_by_scenario(driver.manifest_rows(h, tag))
+    man_rows = driver.manifest_rows(h, tag)
+    sign = compare.signing_by_scenario(man_rows)
     summary = _cmp_summary(tag, folder)
     bench = compare.bench_by_scenario(summary, cfg("cmp_profile"), cfg("cmp_udp")) if summary is not None \
         else compare.bench_by_scenario(pd.DataFrame())
-    df = compare.merge(sign, bench)
+    df = compare.merge(sign, bench, compare.analytical_by_scenario(man_rows))
 
     if df.empty:
         st.info("Nothing to compare yet. Run **Prepare** in Setup for signing numbers and a **benchmark** for "
@@ -1675,6 +1676,7 @@ def compare_page(h: driver.LabHandle, stt: dict) -> None:
         )
 
     with signing:
+        st.markdown(":green-badge[Measured] from the last Prepare")
         sg = df.dropna(subset=["sign_s"]) if "sign_s" in df else df
         if sg.empty:
             st.info("No signing data: run Prepare in Setup.")
@@ -1699,6 +1701,7 @@ def compare_page(h: driver.LabHandle, stt: dict) -> None:
                        "How long a resolver takes to validate is part of the cold-pass latency under Cache & latency.")
 
     with wire:
+        st.markdown(":green-badge[Measured] from packet counts in the saved run")
         bw = df.dropna(subset=["upstream_bytes"]) if "upstream_bytes" in df else df
         if bw.empty:
             st.info("No benchmark data: run a benchmark in the Benchmark tile.")
@@ -1727,6 +1730,7 @@ def compare_page(h: driver.LabHandle, stt: dict) -> None:
 
     with cache:
         cc = df.dropna(subset=["cache_rrset"]) if "cache_rrset" in df else df
+        st.markdown("##### Measured :green-badge[Measured]")
         if cc.empty:
             st.info("No benchmark data: run a benchmark in the Benchmark tile.")
         else:
@@ -1745,6 +1749,32 @@ def compare_page(h: driver.LabHandle, stt: dict) -> None:
             c2.plotly_chart(_plot_cfg(f2), width="stretch")
             st.caption("Cold is the first pass after flushing the resolver; warm repeats the same lookups from cache. "
                        "Cache memory is Unbound's RRset and message cache after the cold pass.")
+
+        st.markdown("---")
+        st.markdown("##### Analytical :orange-badge[Analytical]")
+        an = df.dropna(subset=["analytic_sig_bytes"])
+        per = compare.analytical_per_signature(man_rows)
+        if an.empty:
+            st.info("No analytical estimate for these scenarios (needs Prepare for an SLH-DSA or MTL scenario).")
+        else:
+            c1, c2 = st.columns([3, 2])
+            ax = an.assign(MB=an.analytic_sig_bytes / 1024 ** 2)
+            f = px.bar(ax, x="scenario", y="MB", color="scenario", color_discrete_map=colors,
+                       category_orders={"scenario": scen_order}, text_auto=".2f",
+                       title="Signature storage for the whole zone set, draft §12 formulas (MB)")
+            f.update_layout(showlegend=False)
+            c1.plotly_chart(_plot_cfg(f, 320), width="stretch")
+            if per:
+                c2.markdown(f"**One signature, maximum size** (largest zone: {per['n_messages']} RRsets)")
+                c2.markdown(
+                    f"- Direct SLH-DSA: **{per['direct']:,} B**  \n"
+                    f"- MTL condensed: **{per['condensed']:,} B**  \n"
+                    f"- MTL signed ladder (once per zone): **{per['ladder']:,} B**  \n"
+                    f"- MTL full (condensed + ladder): **{per['full']:,} B**"
+                )
+        st.caption("Analytical figures are computed from the draft's size formulas and the zone's RRSIG counts. "
+                   "They are never read from the lab and are kept apart from the measured cache above. "
+                   "They describe signature material for the whole zone set, not what the resolver actually cached.")
 
     with allnums:
         t = compare.table(df)
