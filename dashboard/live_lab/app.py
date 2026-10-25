@@ -51,6 +51,7 @@ LEVEL_ICON = {"info": "ℹ️", "ok": "✅", "warn": "⚠️", "err": "❌", "st
 ACTIVITY_CAP = 500
 
 NAV_MODES = ("home", "setup", "live", "benchmark", "reset")
+TILE_TEXT_HEIGHT = 290  # px; fits heading, pitch and bullets even when the copy wraps
 
 TILES = {
     "setup": {
@@ -672,11 +673,14 @@ def home_page(h: driver.LabHandle, stt: dict) -> None:
         for col, mode in zip(cols, pair):
             tile = TILES[mode]
             with col, st.container(border=True):
-                st.markdown(f"### {tile['icon']} {tile['title']}  {_tile_chip(mode, stt, h)}",
-                            unsafe_allow_html=True)
-                st.markdown(f"**{tile['pitch']}**")
-                for b in tile["bullets"]:
-                    st.markdown(f"- {b}")
+                # Fixed-height text block so all four tiles (and their buttons) line up,
+                # however the copy wraps.
+                with st.container(height=TILE_TEXT_HEIGHT, border=False):
+                    st.markdown(f"### {tile['icon']} {tile['title']}  {_tile_chip(mode, stt, h)}",
+                                unsafe_allow_html=True)
+                    st.markdown(f"**{tile['pitch']}**")
+                    for b in tile["bullets"]:
+                        st.markdown(f"- {b}")
                 if mode == "setup":
                     emphasise = not r["ready"]
                 elif mode in ("live", "benchmark"):
