@@ -20,6 +20,7 @@ import plotly.express as px
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[2]
+ECO_DIR = ROOT / "ecosystem"
 sys.path.insert(0, str(ROOT / "dashboard"))
 
 from live_lab import decode, driver  # noqa: E402
@@ -273,19 +274,80 @@ def _init_nav() -> None:
     st.session_state.nav = tile if tile in NAV_MODES else "home"
 
 
+PROFILE_FIELDS = (
+    ("client_ms", "Client link (ms)"), ("root_ms", "To root (ms)"), ("tld_ms", "To TLD (ms)"),
+    ("sld_ms", "To leaf (ms)"), ("loss_pct", "Loss (%)"),
+)
+EDITABLE_PROFILES = ("wan", "lossy")  # lan stays the zero-delay baseline
+
+
+def _custom_inputs() -> dict:
+    return {
+        "tlds": cfg("custom_tlds", "test"),
+        "sld_count": int(cfg("custom_sld_count", 4)),
+        "sizes": cfg("custom_sizes", "25, 50"),
+        "servers": int(cfg("custom_servers", 1)),
+        "seed": int(cfg("custom_seed", driver.DEFAULT_SEED)),
+    }
+
+
+def _shape() -> tuple[dict | None, list[str], list[str]]:
+    """Zone shape for the current Setup choice, plus validation errors and warnings."""
+    return driver.shape_for(cfg("zone_size", "small"), _custom_inputs())
+
+
+def _workload() -> dict:
+    d = driver.WORKLOAD_DEFAULTS
+    return {
+        "nx_fraction": int(cfg("nx_pct", round(d["nx_fraction"] * 100))) / 100,
+        "zone_zipf_s": float(cfg("zone_zipf", d["zone_zipf_s"])),
+        "name_zipf_s": float(cfg("name_zipf", d["name_zipf_s"])),
+        "timeout_s": float(cfg("timeout_s", d["timeout_s"])),
+    }
+
+
+def _profiles() -> dict:
+    out = {}
+    for p in EDITABLE_PROFILES:
+        base = driver.PROFILE_DEFAULTS[p]
+        out[p] = {f: cfg(f"{p}_{f}", base[f]) for f, _ in PROFILE_FIELDS}
+    return out
+
+
+def _workload_is_default() -> bool:
+    d = driver.WORKLOAD_DEFAULTS
+    w = _workload()
+    if (w["nx_fraction"], w["zone_zipf_s"], w["name_zipf_s"], w["timeout_s"]) != (
+            d["nx_fraction"], d["zone_zipf_s"], d["name_zipf_s"], d["timeout_s"]):
+        return False
+    return all(float(v) == float(driver.PROFILE_DEFAULTS[p][f])
+               for p, vals in _profiles().items() for f, v in vals.items())
+
+
+def _restore_workload() -> None:
+    keys = ["nx_pct", "zone_zipf", "name_zipf", "timeout_s"] + [
+        f"{p}_{f}" for p in EDITABLE_PROFILES for f, _ in PROFILE_FIELDS]
+    for k in keys:
+        _store().pop(k, None)
+        st.session_state.pop(f"w_{k}", None)
+
+
 def _apply_ui_config(h: driver.LabHandle) -> str | None:
     """Write configs/_dashboard.yaml from the stored settings and point the handle at it."""
     sc = list(cfg("scenarios") or ["ecdsa", "slh-dsa", "mtl"])
     if not sc:
         return "Select at least one scenario in Setup."
     zone = cfg("zone_size", "small")
-    preset = driver.ZONE_SIZE_PRESETS[zone]
+    shape, errors, _warnings = _shape()
+    st.session_state.shape_errors = errors
+    if errors or shape is None:
+        return "Fix the custom zone numbers in Setup: " + " ".join(errors)
     if cfg("_zone_prev") != zone:
         # New zone size → queries-per-trial follows that size's default until the user edits it.
-        _store()["n_queries"] = int(preset["n_queries_default"])
+        _store()["n_queries"] = int(shape["n_queries_default"])
         _store()["_zone_prev"] = zone
         st.session_state.pop("w_n_queries", None)
-    nq = int(cfg("n_queries", preset["n_queries_default"]))
+    nq = int(cfg("n_queries", shape["n_queries_default"]))
     try:
         path = driver.write_ui_config(
             zone_size=zone,
@@ -294,6 +356,9 @@ def _apply_ui_config(h: driver.LabHandle) -> str | None:
             trials=int(cfg("trials", 1)),
             network_run=list(cfg("networks") or ["lan"]),
             udp_limits=[int(cfg("udp", 1232))],
+            custom=_custom_inputs(),
+            workload=_workload(),
+            profiles=_profiles(),
         )
     except Exception as e:  # noqa: BLE001
         return str(e)[:400]
@@ -387,10 +452,29 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
     size = sb(
         st.sidebar.selectbox, "zone_size", "small", "Zone size", options=size_keys,
         format_func=lambda k: driver.ZONE_SIZE_PRESETS[k]["label"],
-        help="Controls how many zones and names are generated. Use Small for a first visit.",
+        help="Controls how many zones and names are generated. Use Small for a first visit, "
+             "or Custom to set the numbers yourself.",
     )
-    preset = driver.ZONE_SIZE_PRESETS[size]
-    _hint(f"{preset['sld_count']} leaf zones · TLDs: {', '.join(preset['tlds'])}")
+    if size == driver.CUSTOM_SIZE:
+        st.sidebar.markdown("**Custom zones**")
+        sb(st.sidebar.text_input, "custom_tlds", "test", "TLDs",
+           help="Comma-separated, e.g. test, lab. One server per TLD (up to 9).")
+        sb(st.sidebar.number_input, "custom_sld_count", 4, "Leaf zones", min_value=1, max_value=200, step=1,
+           help="Second-level zones, spread round-robin over the TLDs.")
+        sb(st.sidebar.text_input, "custom_sizes", "25, 50", "Names per leaf zone",
+           help="Comma-separated; the list repeats across the leaf zones, e.g. 25, 100, 250.")
+        sb(st.sidebar.number_input, "custom_servers", 1, "Leaf servers", min_value=1, max_value=9, step=1,
+           help="Servers that host the leaf zones (up to 9, and no more than leaf zones).")
+        sb(st.sidebar.number_input, "custom_seed", driver.DEFAULT_SEED, "Seed", min_value=0,
+           max_value=2**31 - 1, step=1, help="Same numbers and seed give the same zones every time.")
+    shape, shape_errors, shape_warnings = _shape()
+    if shape_errors:
+        for msg in shape_errors:
+            st.sidebar.error(msg)
+    else:
+        _hint(f"{shape['sld_count']} leaf zones · TLDs: {', '.join(shape['tlds'])}")
+        for msg in shape_warnings:
+            st.sidebar.warning(msg)
 
     all_sc = list(driver.SCENARIO_ALGS.keys())
     default_sc = [s for s in ("ecdsa", "slh-dsa", "mtl") if s in all_sc]
@@ -457,7 +541,7 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
     prep_state = "done" if prepared_session else ("partial" if r["prepared"] else "none")
     st.sidebar.markdown(_step_label(2, "Prepare", prep_state))
     _hint("Sign the DNS hierarchy for each selected scenario.")
-    if st.sidebar.button("Prepare", key="btn_prep", width="stretch", disabled=not sc):
+    if st.sidebar.button("Prepare", key="btn_prep", width="stretch", disabled=not sc or bool(shape_errors)):
         _apply_ui_config(h)
         jobs = int(cfg("jobs", 2))
         activity("step", "Prepare", f"size={size} scenarios={sc}", phase="prepare", source="prepare", h=h)
@@ -492,7 +576,8 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
 
     # —— Step 3: start / stop ——
     st.sidebar.markdown(_step_label(3, "Start", "done" if r["running"] else "none"))
-    _hint("Start root, TLD, leaf, and resolver containers.")
+    _hint("Start root, TLD, leaf, and resolver containers. Only one lab runs at a time, "
+          "so starting stops any other zone shape.")
     b3a, b3b = st.sidebar.columns(2)
     if b3a.button("Start", key="btn_up", width="stretch"):
         activity("step", "Start lab", "", phase="compose", source="compose", h=h)
@@ -605,8 +690,9 @@ def sidebar_benchmark(h: driver.LabHandle, stt: dict) -> None:
         available = list(cfg("scenarios") or [])
     sc = sb(st.sidebar.multiselect, "bench_scenarios", list(available), "Scenarios to measure",
             options=available, help="Subset of the scenarios prepared in Setup.")
-    preset = driver.ZONE_SIZE_PRESETS[cfg("zone_size", "small")]
-    sb(st.sidebar.number_input, "n_queries", int(preset["n_queries_default"]), "Queries per trial",
+    shape, _errs, _warns = _shape()
+    default_nq = int((shape or driver.ZONE_SIZE_PRESETS["custom"])["n_queries_default"])
+    sb(st.sidebar.number_input, "n_queries", default_nq, "Queries per trial",
        min_value=10, max_value=5000, help="How many lookups in each cold/warm pass.")
     sb(st.sidebar.number_input, "trials", 1, "Trials", min_value=1, max_value=10,
        help="Each trial repeats a cold pass then a warm pass.")
@@ -615,8 +701,44 @@ def sidebar_benchmark(h: driver.LabHandle, stt: dict) -> None:
     sb(st.sidebar.selectbox, "udp", 1232, "UDP size limit", options=[1232, 4096],
        help="Max UDP answer size before falling back to TCP.")
 
+    wl_default = driver.WORKLOAD_DEFAULTS
+    with st.sidebar.expander("Workload mix", expanded=False):
+        sb(st.number_input, "nx_pct", int(round(wl_default["nx_fraction"] * 100)), "NXDOMAIN share (%)",
+           min_value=0, max_value=50, step=1,
+           help="Share of lookups for names that do not exist. Every such name is distinct.")
+        sb(st.number_input, "zone_zipf", float(wl_default["zone_zipf_s"]), "Zone popularity skew",
+           min_value=0.0, max_value=2.0, step=0.1, format="%.1f",
+           help="0 = every zone equally likely; higher = a few zones get most lookups.")
+        sb(st.number_input, "name_zipf", float(wl_default["name_zipf_s"]), "Name popularity skew",
+           min_value=0.0, max_value=2.0, step=0.1, format="%.1f",
+           help="Same idea inside a zone. Higher skew means more cache hits.")
+        sb(st.number_input, "timeout_s", float(wl_default["timeout_s"]), "Lookup timeout (s)",
+           min_value=1.0, max_value=30.0, step=1.0, format="%.0f")
+    with st.sidebar.expander("Network profiles", expanded=False):
+        st.caption("lan is the zero-delay baseline. Delay is added towards each tier on the resolver; "
+                   "loss applies to the resolver's queries. Only the profiles ticked above are run.")
+        for prof in EDITABLE_PROFILES:
+            base = driver.PROFILE_DEFAULTS[prof]
+            st.markdown(f"**{prof}**")
+            cols = st.columns(2)
+            for i, (field, label) in enumerate(PROFILE_FIELDS):
+                with cols[i % 2]:
+                    if field == "loss_pct":
+                        sb(st.number_input, f"{prof}_{field}", float(base[field]), label,
+                           min_value=0.0, max_value=20.0, step=0.5, format="%.1f")
+                    else:
+                        sb(st.number_input, f"{prof}_{field}", int(base[field]), label,
+                           min_value=0, max_value=500, step=1)
+    if not _workload_is_default():
+        st.sidebar.caption("Custom workload or network numbers are in use.")
+        st.sidebar.button("Restore defaults", on_click=_restore_workload, key="btn_restore_wl",
+                          width="stretch")
+
+    bad_shape = bool(st.session_state.get("shape_errors"))
+    if bad_shape:
+        st.sidebar.error("The custom zone numbers in Setup need fixing before a run.")
     if st.sidebar.button("Run benchmark", key="btn_bench", type="primary", width="stretch",
-                         disabled=not (sc and nets)):
+                         disabled=not (sc and nets) or bad_shape):
         if not r["running"]:
             st.sidebar.error("Start the lab in Setup first.")
         else:
@@ -764,6 +886,41 @@ def _render_prepare_summary(h: driver.LabHandle) -> None:
             st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
+def planned_lab(h: driver.LabHandle) -> None:
+    """The numbers behind the current Setup choice, and the exact config the lab will use."""
+    shape, errors, warnings = _shape()
+    with st.container(border=True):
+        st.markdown("**Planned lab**")
+        if errors or shape is None:
+            for e in errors:
+                st.error(e)
+            return
+        scenarios = list(cfg("scenarios") or [])
+        stats = driver.shape_stats(shape, scenarios, int(cfg("jobs", 2)))
+        m = st.columns(5)
+        m[0].metric("Zones", stats["zones"], help="Root + TLDs + leaf zones")
+        m[1].metric("Leaf names", f"{stats['names']:,}")
+        m[2].metric("Containers", stats["containers"], help="Root, TLD and leaf servers, resolver and client")
+        m[3].metric("Signatures", f"~{stats['est_rrsigs']:,}", help="RRSIGs per scenario (estimate)")
+        m[4].metric("Prepare time", driver.format_duration(stats["est_prepare_s"]),
+                    help="Rough estimate from the Medium lab; SLH-DSA dominates.")
+        sizes = ", ".join(str(s) for s in shape["sld_sizes"])
+        st.caption(
+            f"TLDs **{', '.join(shape['tlds'])}** · {shape['sld_count']} leaf zones on "
+            f"{shape['sld_servers']} server(s) · names per zone cycle **{sizes}** · "
+            f"lab folder **{h.tag}**"
+        )
+        for w in warnings:
+            st.warning(w)
+        cfg_path = ECO_DIR / h.config
+        if cfg_path.is_file():
+            with st.expander("Effective configuration (read-only)"):
+                text = cfg_path.read_text(encoding="utf-8")
+                st.code(text, language="yaml")
+                st.download_button("Download YAML", data=text, file_name=f"{h.lab}.yaml",
+                                   mime="text/yaml", key="cfg_dl")
+
+
 def setup_overview(h: driver.LabHandle, stt: dict) -> None:
     imgs = stt.get("images") or {}
     containers = stt.get("containers") or {}
@@ -792,6 +949,8 @@ def setup_overview(h: driver.LabHandle, stt: dict) -> None:
                else "Run Prepare to sign the zones (Step 2)" if not r["prepared"]
                else "Press Start to launch the containers (Step 3)")
         st.info(f"**Next:** {nxt} — use the sidebar.")
+
+    planned_lab(h)
 
     left, right = st.columns(2)
     with left:
@@ -1242,6 +1401,18 @@ def _bench_plan(h: driver.LabHandle) -> None:
             f"name **{label or '(none — date and time only)'}** · UDP limit {cfg('udp', 1232)}"
         )
         st.caption(f"Scenarios: {', '.join(sc) or '—'} · Networks: {', '.join(nets)}")
+        w = _workload()
+        st.caption(
+            f"Workload: NXDOMAIN **{round(w['nx_fraction'] * 100)}%** · zone skew **{w['zone_zipf_s']:g}** · "
+            f"name skew **{w['name_zipf_s']:g}** · timeout **{w['timeout_s']:g} s**"
+            + ("" if _workload_is_default() else " · _custom values_")
+        )
+        shown = {p: {**driver.PROFILE_DEFAULTS[p], **_profiles().get(p, {})} for p in nets}
+        if shown:
+            st.dataframe(
+                pd.DataFrame(shown).T.rename(columns=dict(PROFILE_FIELDS)).rename_axis("network"),
+                width="stretch",
+            )
 
 
 def benchmark_run(h: driver.LabHandle, stt: dict) -> None:
@@ -1272,6 +1443,31 @@ def _bench_charts(summary: pd.DataFrame) -> None:
         )
 
 
+def _run_settings(run: dict) -> None:
+    """The numbers a saved run was measured with, read from its run.json."""
+    c = run.get("cfg") or {}
+    hier, wl = c.get("hierarchy") or {}, c.get("workload") or {}
+    if not hier and not wl:
+        return
+    with st.expander("Settings used for this run"):
+        if hier:
+            st.markdown(
+                f"**Zones** · TLDs {', '.join(hier.get('tlds', []))} · {hier.get('sld_count')} leaf zones on "
+                f"{hier.get('sld_servers')} server(s) · names per zone {hier.get('sld_sizes')} · "
+                f"seed {c.get('seed')}"
+            )
+        if wl:
+            st.markdown(
+                f"**Workload** · {wl.get('n_queries')} lookups per pass · NXDOMAIN "
+                f"{round(float(wl.get('nx_fraction', 0)) * 100)}% · zone skew {wl.get('zone_zipf_s')} · "
+                f"name skew {wl.get('name_zipf_s')} · timeout {wl.get('timeout_s')} s"
+            )
+        profiles = (c.get("network") or {}).get("profiles") or {}
+        used = {p: profiles[p] for p in run.get("profiles", []) if p in profiles}
+        if used:
+            st.dataframe(pd.DataFrame(used).T.rename_axis("network"), width="stretch")
+
+
 def benchmark_results(h: driver.LabHandle) -> None:
     runs = driver.list_runs(h)
     st.caption(f"Saved runs for lab **{h.tag}**. Change zone size in Setup to see other labs.")
@@ -1296,6 +1492,7 @@ def benchmark_results(h: driver.LabHandle) -> None:
     m[2].metric("Scenarios", len(run["scenarios"]) or "—")
     m[3].metric("Trials", run["trials"] if run["trials"] is not None else "—")
     st.caption(f"{run['folder']} · networks: {', '.join(run['profiles']) or '—'}")
+    _run_settings(run)
 
     summary_csv = run_dir / "summary.csv"
     if summary_csv.is_file():
@@ -1544,7 +1741,7 @@ def main() -> None:
     err = _apply_ui_config(h) or err
     if h.tag != tag_before:
         st.rerun()  # zone size changed → a different lab; re-read its status
-    if err and mode in ("setup", "benchmark"):
+    if err and mode in ("setup", "benchmark") and not st.session_state.get("shape_errors"):
         st.sidebar.error(err)
 
     if mode == "home":
