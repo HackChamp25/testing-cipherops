@@ -59,7 +59,10 @@ ZONE_SIZE_PRESETS: dict[str, dict] = {
     },
 }
 
+# ldns-keygen algorithm names (signer already supports RSASHA256 + -b 2048).
+# Classical trio matches main Cipherops: rsa-2048, ecdsa-p256, ed25519.
 SCENARIO_ALGS: dict[str, dict[str, str]] = {
+    "rsa": {"root": "RSASHA256", "tld": "RSASHA256", "sld": "RSASHA256"},
     "ecdsa": {"root": "ECDSAP256SHA256", "tld": "ECDSAP256SHA256", "sld": "ECDSAP256SHA256"},
     "ed25519": {"root": "ED25519", "tld": "ED25519", "sld": "ED25519"},
     "slh-dsa": {"root": "SLH-DSA-SHA2-128s", "tld": "SLH-DSA-SHA2-128s", "sld": "SLH-DSA-SHA2-128s"},

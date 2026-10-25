@@ -35,15 +35,21 @@ IMAGE_LABELS = {
 }
 
 SCENARIO_BLURB = {
-    "ecdsa": "ECDSA-P256 baseline",
-    "slh-dsa": "SLH-DSA (large sigs, often TCP)",
-    "mtl": "SLH-DSA + MTL (condensed answers)",
-    "ed25519": "Ed25519 baseline",
-    "mixed-mtl": "ECDSA root/TLD, MTL at SLD",
+    "rsa": "RSA-2048 with SHA-256",
+    "ecdsa": "ECDSA P-256",
+    "ed25519": "Ed25519",
+    "slh-dsa": "Post-quantum SLH-DSA (large signatures)",
+    "mtl": "SLH-DSA with MTL condensed signatures",
+    "mixed-mtl": "ECDSA at root/TLD, MTL at the leaf zone",
 }
 
 LEVEL_ICON = {"info": "ℹ️", "ok": "✅", "warn": "⚠️", "err": "❌", "step": "▶️"}
 ACTIVITY_CAP = 500
+
+
+def _hint(text: str) -> None:
+    """One-line sidebar guidance (public-demo friendly, not a wall of text)."""
+    st.sidebar.caption(text)
 
 _DEMO_STATE_KEYS = (
     "activity", "query_log", "last_query", "last_pcap", "last_dropped",
@@ -163,33 +169,48 @@ def sidebar(h: driver.LabHandle) -> dict:
     st.sidebar.title("Cipherops")
     st.sidebar.caption("MTL DNSSEC Lab")
 
-    st.sidebar.markdown("### Lab options")
+    with st.sidebar.expander("Quick start", expanded=False):
+        st.markdown(
+            "1. Choose **zone size** and **scenarios** below  \n"
+            "2. Follow **steps 1–5** to bring the lab up and try a query  \n"
+            "3. Open the **Lab** and **Packets** tabs for results  \n"
+            "4. Use **Batch benchmark** only if you want a long multi-trial run"
+        )
+
+    st.sidebar.markdown("### Setup")
     size_keys = list(driver.ZONE_SIZE_PRESETS.keys())
     st.sidebar.selectbox(
         "Zone size",
         size_keys,
         format_func=lambda k: driver.ZONE_SIZE_PRESETS[k]["label"],
         key="opt_zone_size",
+        help="Controls how many zones and names are generated. Use Small for a first visit.",
     )
     size = st.session_state.get("opt_zone_size", "small")
     preset = driver.ZONE_SIZE_PRESETS[size]
-    st.sidebar.caption(
-        f"{preset['sld_count']} SLDs · sizes {preset['sld_sizes']} · "
-        f"TLDs {', '.join(preset['tlds'])}"
+    _hint(
+        f"{preset['sld_count']} leaf zones · "
+        f"TLDs: {', '.join(preset['tlds'])}"
     )
 
     all_sc = list(driver.SCENARIO_ALGS.keys())
     default_sc = ["ecdsa", "slh-dsa", "mtl"]
     st.sidebar.multiselect(
-        "Scenarios to sign / run",
+        "Scenarios",
         all_sc,
         default=[s for s in default_sc if s in all_sc],
         key="opt_scenarios",
+        help="DNSSEC modes to sign. Change this, then run Prepare again.",
     )
-    st.sidebar.number_input("Sign jobs", min_value=1, max_value=8, value=2, key="opt_jobs")
-    st.sidebar.selectbox("Stack", ["draft06"], key="opt_stack")
+    st.sidebar.number_input(
+        "Sign jobs", min_value=1, max_value=8, value=2, key="opt_jobs",
+        help="How many zones to sign in parallel during Prepare.",
+    )
+    st.sidebar.selectbox(
+        "Image version", ["draft06"], key="opt_stack",
+        help="Pinned server/tooling build used by the lab.",
+    )
 
-    st.sidebar.markdown("### Benchmark options")
     if st.session_state.get("_zone_prev") != size:
         st.session_state.opt_n_queries = int(preset["n_queries_default"])
         st.session_state._zone_prev = size
@@ -197,15 +218,6 @@ def sidebar(h: driver.LabHandle) -> dict:
         st.session_state.opt_n_queries = int(preset["n_queries_default"])
     if "opt_trials" not in st.session_state:
         st.session_state.opt_trials = 1
-    st.sidebar.number_input("Queries / trial", min_value=10, max_value=5000, key="opt_n_queries")
-    st.sidebar.number_input("Trials", min_value=1, max_value=10, key="opt_trials")
-    st.sidebar.multiselect(
-        "Network profiles",
-        ["lan", "wan", "lossy"],
-        default=["lan"],
-        key="opt_networks",
-    )
-    st.sidebar.selectbox("UDP buffer", [1232, 4096], key="opt_udp")
 
     try:
         if st.session_state.get("opt_scenarios"):
@@ -223,12 +235,15 @@ def sidebar(h: driver.LabHandle) -> dict:
     done = progress(h, stt)
     runs = driver.list_run_dirs(h)
     done_bench = bool(runs)
+    udp = int(st.session_state.get("opt_udp", st.session_state.get("ui_udp", 1232)))
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### Steps")
+    _hint("Green means this step is ready.")
 
-    # —— Step 1 Build / Pull ——
+    # —— Step 1 ——
     st.sidebar.markdown(_step_label(1, "Images", done["images"]))
+    _hint("Get the DNS server and tooling containers.")
     img_mode = st.sidebar.radio(
         "Image source",
         ["Build locally", "Pull from registry"],
@@ -241,7 +256,7 @@ def sidebar(h: driver.LabHandle) -> dict:
             "Registry",
             placeholder="ghcr.io/your-org/cipherops",
             key="opt_registry",
-            help="Pulls {registry}/cipherops-eco-{nsd,unbound,tools}:{stack} and retags locally.",
+            help="Pre-built images named cipherops-eco-nsd / unbound / tools.",
         )
         if st.sidebar.button("Pull images", key="btn_pull", use_container_width=True):
             reg = st.session_state.get("opt_registry", "")
@@ -276,9 +291,9 @@ def sidebar(h: driver.LabHandle) -> dict:
                     activity("err", "Build failed", str(e)[:2000], phase="build", source="compose", h=h)
             st.rerun()
 
-    # —— Step 2 Prepare ——
-    st.sidebar.markdown(_step_label(2, "Prepare (sign)", done["prepared"]))
-    st.sidebar.caption(f"Lab `{h.lab}` · {h.config}")
+    # —— Step 2 ——
+    st.sidebar.markdown(_step_label(2, "Prepare", done["prepared"]))
+    _hint("Sign the DNS hierarchy for each selected scenario.")
     if st.sidebar.button("Prepare", key="btn_prep", use_container_width=True):
         _apply_ui_config(h)
         sc = list(st.session_state.get("opt_scenarios") or [])
@@ -313,8 +328,9 @@ def sidebar(h: driver.LabHandle) -> dict:
                 activity("err", "Prepare failed", str(e)[:2000], phase="prepare", source="prepare", h=h)
         st.rerun()
 
-    # —— Step 3 Start ——
-    st.sidebar.markdown(_step_label(3, "Start lab", done["running"]))
+    # —— Step 3 ——
+    st.sidebar.markdown(_step_label(3, "Start", done["running"]))
+    _hint("Start root, TLD, leaf, and resolver containers.")
     b3a, b3b = st.sidebar.columns(2)
     if b3a.button("Start", key="btn_up", use_container_width=True):
         activity("step", "Start lab", "", phase="compose", source="compose", h=h)
@@ -337,8 +353,9 @@ def sidebar(h: driver.LabHandle) -> dict:
                 st.sidebar.error(str(e)[:600])
         st.rerun()
 
-    # —— Step 4 Activate ——
-    st.sidebar.markdown(_step_label(4, "Activate scenario", done["activated"]))
+    # —— Step 4 ——
+    st.sidebar.markdown(_step_label(4, "Scenario", done["activated"]))
+    _hint("Which signed mode the live servers use right now.")
     scenarios = []
     try:
         if h.prepared():
@@ -346,16 +363,15 @@ def sidebar(h: driver.LabHandle) -> dict:
     except Exception:  # noqa: BLE001
         scenarios = []
     active = stt.get("active")
-    udp = int(st.session_state.get("ui_udp", 1232))
     if scenarios:
         if "side_scenario" not in st.session_state:
             st.session_state.side_scenario = active if active in scenarios else scenarios[0]
         elif st.session_state.side_scenario not in scenarios:
             st.session_state.side_scenario = scenarios[0]
 
-        scenario = st.sidebar.selectbox("Scenario", scenarios, key="side_scenario")
+        scenario = st.sidebar.selectbox("Active scenario", scenarios, key="side_scenario")
         st.session_state.selected_scenario = scenario
-        st.sidebar.caption(SCENARIO_BLURB.get(scenario, ""))
+        _hint(SCENARIO_BLURB.get(scenario, ""))
 
         if done["running"] and scenario and scenario != active:
             activity("step", f"Activate {scenario}", "", phase="activate", source="compose", h=h)
@@ -372,59 +388,23 @@ def sidebar(h: driver.LabHandle) -> dict:
                              phase="activate", source="compose", h=h)
             st.rerun()
         elif not done["running"] and scenario != active:
-            st.sidebar.caption("Start lab to apply this scenario")
+            _hint("Start the lab to apply this choice.")
     else:
-        st.sidebar.caption("Prepare first")
+        _hint("Run Prepare first.")
 
-    # —— Step 5 Query ——
+    # —— Step 5 ——
     st.sidebar.markdown(_step_label(5, "Query", done["queried"]))
-    st.sidebar.caption("Lab tab → Run query")
-
-    # —— Step 6 Benchmark ——
-    st.sidebar.markdown(_step_label(6, "Run benchmark", done_bench))
-    if st.sidebar.button("Run benchmark", key="btn_bench", use_container_width=True):
-        if not done["running"]:
-            st.sidebar.error("Start lab first")
-        else:
-            _apply_ui_config(h)
-            sc = list(st.session_state.get("opt_scenarios") or [])
-            nets = list(st.session_state.get("opt_networks") or ["lan"])
-            trials = int(st.session_state.get("opt_trials", 1))
-            activity(
-                "step", "Benchmark",
-                f"scenarios={sc} profiles={nets} trials={trials}",
-                phase="run", source="compose", h=h,
-            )
-            with st.spinner("Running trials (cold/warm)…"):
-                try:
-                    t0 = time.perf_counter()
-                    log = driver.run_benchmark(
-                        h, scenarios=sc, profiles=nets, trials=trials, udp=udp,
-                    )
-                    secs = time.perf_counter() - t0
-                    st.session_state.last_log = log[-8000:]
-                    st.session_state.last_run_dir = (
-                        str(driver.list_run_dirs(h)[0]) if driver.list_run_dirs(h) else ""
-                    )
-                    _log_chunks(log, phase="run", source="compose", title="ecolab run")
-                    activity("ok", f"Benchmark done ({secs:.0f}s)",
-                             st.session_state.last_run_dir, phase="run", source="compose", h=h)
-                    st.sidebar.success(f"Done · {secs:.0f}s")
-                except Exception as e:  # noqa: BLE001
-                    st.sidebar.error(str(e)[:800])
-                    activity("err", "Benchmark failed", str(e)[:2000],
-                             phase="run", source="compose", h=h)
-            st.rerun()
+    _hint("Use the Lab tab to send a lookup; Packets shows the capture.")
 
     st.sidebar.markdown("---")
     if st.sidebar.button("Refresh", use_container_width=True):
         st.rerun()
 
     st.sidebar.markdown("### Reset")
-    wipe_pcaps = st.sidebar.checkbox("Delete pcaps", value=True, key="reset_pcaps")
-    wipe_work = st.sidebar.checkbox("Delete work (signed zones)", value=False, key="reset_work")
-    hide_sign = st.sidebar.checkbox("Hide sign metrics", value=True, key="reset_hide_sign")
-    flush_ub = st.sidebar.checkbox("Flush Unbound", value=False, key="reset_flush_ub")
+    wipe_pcaps = st.sidebar.checkbox("Delete packet captures", value=True, key="reset_pcaps")
+    wipe_work = st.sidebar.checkbox("Delete signed zones", value=False, key="reset_work")
+    hide_sign = st.sidebar.checkbox("Hide prepare timings", value=True, key="reset_hide_sign")
+    flush_ub = st.sidebar.checkbox("Flush resolver cache", value=False, key="reset_flush_ub")
     if st.sidebar.button("Clear results", use_container_width=True, key="reset_demo_btn"):
         driver.clear_demo_data(
             h, session=True, activity=True, pcaps=wipe_pcaps,
@@ -440,6 +420,69 @@ def sidebar(h: driver.LabHandle) -> dict:
                 pass
         activity("ok", "Cleared", "work wiped" if wipe_work else "", phase="ui", source="ui", h=h)
         st.rerun()
+
+    # —— Batch benchmark (own section) ——
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Batch benchmark")
+    mark = "🟢" if done_bench else "⚪"
+    st.sidebar.markdown(f"{mark}  Last run saved" if done_bench else f"{mark}  No run yet")
+    _hint(
+        "Runs every selected scenario across the network profiles you pick "
+        "(cold cache, then warm). The lab must already be started. This can take a while."
+    )
+    st.sidebar.number_input(
+        "Queries per trial", min_value=10, max_value=5000, key="opt_n_queries",
+        help="How many lookups in each cold/warm pass.",
+    )
+    st.sidebar.number_input(
+        "Trials", min_value=1, max_value=10, key="opt_trials",
+        help="Each trial repeats a cold pass then a warm pass.",
+    )
+    st.sidebar.multiselect(
+        "Networks",
+        ["lan", "wan", "lossy"],
+        default=["lan"],
+        key="opt_networks",
+        help="lan = local · wan = added delay · lossy = delay plus packet loss.",
+    )
+    st.sidebar.selectbox(
+        "UDP size limit", [1232, 4096], key="opt_udp",
+        help="Max UDP answer size before falling back to TCP.",
+    )
+    if st.sidebar.button("Run batch benchmark", key="btn_bench", use_container_width=True):
+        if not done["running"]:
+            st.sidebar.error("Start the lab first (steps 1–3).")
+        else:
+            _apply_ui_config(h)
+            sc = list(st.session_state.get("opt_scenarios") or [])
+            nets = list(st.session_state.get("opt_networks") or ["lan"])
+            trials = int(st.session_state.get("opt_trials", 1))
+            udp_run = int(st.session_state.get("opt_udp", 1232))
+            activity(
+                "step", "Benchmark",
+                f"scenarios={sc} profiles={nets} trials={trials}",
+                phase="run", source="compose", h=h,
+            )
+            with st.spinner("Running batch benchmark…"):
+                try:
+                    t0 = time.perf_counter()
+                    log = driver.run_benchmark(
+                        h, scenarios=sc, profiles=nets, trials=trials, udp=udp_run,
+                    )
+                    secs = time.perf_counter() - t0
+                    st.session_state.last_log = log[-8000:]
+                    st.session_state.last_run_dir = (
+                        str(driver.list_run_dirs(h)[0]) if driver.list_run_dirs(h) else ""
+                    )
+                    _log_chunks(log, phase="run", source="compose", title="benchmark")
+                    activity("ok", f"Benchmark done ({secs:.0f}s)",
+                             st.session_state.last_run_dir, phase="run", source="compose", h=h)
+                    st.sidebar.success(f"Done · {secs:.0f}s")
+                except Exception as e:  # noqa: BLE001
+                    st.sidebar.error(str(e)[:800])
+                    activity("err", "Benchmark failed", str(e)[:2000],
+                             phase="run", source="compose", h=h)
+            st.rerun()
 
     return stt
 
@@ -457,13 +500,13 @@ def _render_prepare_summary(h: driver.LabHandle) -> None:
         st.session_state.prepare_summary = summary
     if not summary:
         return
-    with st.expander("Prepare output (paths & what happened)", expanded=True):
+    with st.expander("What Prepare created", expanded=True):
         wall = summary.get("wall_s")
         wall_txt = f"{wall:.1f}" if isinstance(wall, (int, float)) else (wall or "—")
         st.markdown(
-            f"**Lab** `{summary.get('lab')}` · wall **{wall_txt}** s  \n"
-            f"Signed each selected scenario bottom-up (SLD → TLD → root), "
-            f"wrote manifests, compose file, and initial `active/` configs."
+            f"Signed **{summary.get('lab')}** in **{wall_txt}** s — "
+            f"leaf zones first, then TLD, then root. "
+            f"Files below are what the running lab serves."
         )
         st.code(
             "\n".join([
@@ -497,18 +540,18 @@ def status_panel(h: driver.LabHandle, stt: dict) -> None:
     c[2].metric("Containers", str(sum(1 for v in containers.values() if v)))
     c[3].metric("Scenario", active)
     if selected and active and selected != active and selected != "—":
-        st.caption(f"Sidebar selection **{selected}** — start lab to apply.")
+        st.caption(f"Selected **{selected}** — start the lab to apply it.")
 
     left, right = st.columns(2)
     with left:
-        st.markdown("**Docker images**")
+        st.markdown("**Images**")
         for name, ok in imgs.items():
             repo = name.split(":")[0]
             tag = name.split(":")[1] if ":" in name else ""
             label = IMAGE_LABELS.get(repo, repo)
-            st.write(("🟢" if ok else "🔴"), f"{label} (`{repo}:{tag}`)" if tag else f"{label} (`{repo}`)")
+            st.write(("🟢" if ok else "🔴"), f"{label}" + (f" · {tag}" if tag else ""))
     with right:
-        st.markdown("**Containers**")
+        st.markdown("**Running services**")
         for name, ok in sorted(containers.items()):
             st.write(("🟢" if ok else "🔴"), name)
 
@@ -528,8 +571,9 @@ def show_sequence_diagram(steps: list) -> None:
 
 def query_panel(h: driver.LabHandle, stt: dict) -> None:
     st.subheader("Query")
+    st.caption("Send one DNS lookup. Enable Capture to inspect packets afterward.")
     if not any((stt.get("containers") or {}).values()):
-        st.warning("Complete Step 3 — Start lab.")
+        st.warning("Start the lab first (sidebar step 3).")
         return
 
     presets = driver.query_presets(h)
@@ -565,7 +609,7 @@ def query_panel(h: driver.LabHandle, stt: dict) -> None:
     if path.startswith("Direct to SLD") and (
         qname.strip() in (".", "") or (qtype.upper() == "DNSKEY" and qname.rstrip(".").count(".") == 0)
     ):
-        st.warning("SLD path is for leaf names — not root `. DNSKEY`.")
+        st.warning("Direct-to-leaf works for host names, not for root DNSKEY queries.")
 
     c1, c2, c3 = st.columns(3)
     dnssec = c1.checkbox("DO (DNSSEC RRs)", value=True)
@@ -573,7 +617,7 @@ def query_panel(h: driver.LabHandle, stt: dict) -> None:
     capture = c3.checkbox("Capture", value=True)
     if capture:
         sniffer = "unbound (full chain)" if recurse else "client (direct to auth — no Unbound hops)"
-        st.caption(f"Capture sniffer: **{sniffer}**")
+        st.caption(f"Recording packets on **{sniffer}**")
 
     if st.button("Run query", type="primary"):
         pcap_path = None
@@ -669,7 +713,8 @@ def cache_panel(h: driver.LabHandle, stt: dict) -> None:
     presets = driver.query_presets(h)
     qname = st.text_input("QNAME", presets[2][0] if len(presets) > 2 else "host000000.zone00.test.", key="cache_q")
     qtype = st.text_input("QTYPE", "A", key="cache_t")
-    if st.button("Flush + cold + warm ×3"):
+    st.caption("Compare a first lookup (cold cache) with repeats (warm cache).")
+    if st.button("Run cold then warm ×3"):
         activity("step", "Cold/warm", qname, phase="cache", source="unbound", h=h)
         try:
             with st.spinner("Flushing…"):
@@ -763,9 +808,9 @@ def metrics_panel(h: driver.LabHandle) -> None:
             c2.plotly_chart(px.bar(agg, x="scenario", y="verify_seconds", title="Zone verify (s)"),
                             use_container_width=True)
     else:
-        st.info("Sign/verify appear after **Prepare**.")
+        st.info("Sign and verify timings appear after Prepare.")
 
-    st.markdown("**Session queries**")
+    st.markdown("**Recent queries**")
     qlog = driver.session_queries(
         h, st.session_state.query_log if "query_log" in st.session_state else None,
     )
@@ -783,11 +828,10 @@ def metrics_panel(h: driver.LabHandle) -> None:
 
     runs = driver.list_run_dirs(h)
     if runs:
-        st.markdown("**Benchmark runs**")
+        st.markdown("**Saved benchmark runs**")
         labels = [p.name for p in runs[:10]]
-        pick = st.selectbox("Run folder", labels, key="metrics_run_pick")
+        pick = st.selectbox("Run", labels, key="metrics_run_pick")
         run_dir = next(p for p in runs if p.name == pick)
-        st.caption(str(run_dir))
         for name in ("passes.csv", "summary.csv", "client.csv"):
             f = run_dir / name
             if f.is_file():
@@ -812,26 +856,23 @@ def _pcap_options(h: driver.LabHandle) -> list[str]:
 
 
 def pcap_panel(h: driver.LabHandle) -> None:
-    st.subheader("Packet story")
-    st.caption(
-        "Through Unbound → sniffer on Unbound. "
-        "Direct to root/SLD → sniffer on client (referral / AA only)."
-    )
+    st.subheader("Packets")
+    st.caption("Decode a capture from a Lab query, or draw its message sequence.")
 
     story_tab, diagram_tab = st.tabs(["Capture decode", "Sequence diagram"])
     options = _pcap_options(h)
 
     with story_tab:
         if not options:
-            st.caption("Run a query with Capture enabled.")
+            st.caption("No captures yet — run a Lab query with Capture on.")
         else:
             choice = st.selectbox("Capture", options, index=0, key="pcap_story_choice")
-            hide_tcp = st.checkbox("Hide TCP noise", value=True, key="pcap_hide_tcp")
+            hide_tcp = st.checkbox("Hide TCP handshake noise", value=True, key="pcap_hide_tcp")
             if st.button("Decode", key="pcap_story_decode") or st.session_state.get("auto_decode"):
                 st.session_state.auto_decode = False
                 df = decode.decode_pcap(choice)
                 if df.empty:
-                    st.warning("Empty capture.")
+                    st.warning("This capture has no DNS packets.")
                 else:
                     wire = decode.wire_summary(df)
                     story = decode.build_story(df)
@@ -840,7 +881,7 @@ def pcap_panel(h: driver.LabHandle) -> None:
                     w[1].metric("Client B", f"{wire['client_bytes']:,}")
                     w[2].metric("Upstream B", f"{wire['upstream_bytes']:,}")
                     w[3].metric("MTL-FULL", wire["mtl_full_packets"])
-                    st.markdown("**Story**")
+                    st.markdown("**What happened**")
                     for line in story:
                         st.markdown(line)
                     show = df[df["phase"] != "tcp_noise"] if hide_tcp and "phase" in df.columns else df
@@ -850,17 +891,17 @@ def pcap_panel(h: driver.LabHandle) -> None:
 
     with diagram_tab:
         if not options:
-            st.caption("Run a query with Capture enabled, then decode here.")
+            st.caption("No captures yet — run a Lab query with Capture on.")
         else:
             idx = 0
             pref = st.session_state.get("last_seq_pcap") or st.session_state.get("last_pcap")
             if pref in options:
                 idx = options.index(pref)
             seq_choice = st.selectbox("Capture", options, index=idx, key="pcap_seq_choice")
-            if st.button("Decode → sequence", key="pcap_seq_decode", type="primary"):
+            if st.button("Show sequence", key="pcap_seq_decode", type="primary"):
                 df = decode.decode_pcap(seq_choice)
                 if df.empty:
-                    st.warning("Empty capture.")
+                    st.warning("This capture has no DNS packets.")
                     st.session_state.pop("last_seq_steps", None)
                     st.session_state.pop("last_seq_pcap", None)
                 else:
@@ -868,10 +909,10 @@ def pcap_panel(h: driver.LabHandle) -> None:
                     st.session_state.last_seq_pcap = seq_choice
             steps = st.session_state.get("last_seq_steps")
             if steps:
-                st.caption(f"Sequence for `{Path(st.session_state.get('last_seq_pcap') or seq_choice).name}`")
+                st.caption(Path(st.session_state.get("last_seq_pcap") or seq_choice).name)
                 show_sequence_diagram(steps)
             else:
-                st.info("Pick a pcap and click **Decode → sequence**.")
+                st.caption("Choose a capture and click Show sequence.")
 
 
 def activity_tab(h: driver.LabHandle) -> None:

@@ -21,6 +21,7 @@ signing:
 # Algorithm per tier, as ldns-keygen names them (ldns-keygen -a list), except
 # SLH-DSA-SHA2-128s, which the signer translates per stack (algorithm 246).
 scenarios:
+  rsa:     {root: RSASHA256, tld: RSASHA256, sld: RSASHA256}
   ecdsa:   {root: ECDSAP256SHA256, tld: ECDSAP256SHA256, sld: ECDSAP256SHA256}
   ed25519: {root: ED25519, tld: ED25519, sld: ED25519}
   slh-dsa: {root: SLH-DSA-SHA2-128s, tld: SLH-DSA-SHA2-128s, sld: SLH-DSA-SHA2-128s}

@@ -1,38 +1,23 @@
 # Cipherops · MTL DNSSEC Lab
 
+Public lab UI for a multi-zone DNSSEC hierarchy (root → TLD → leaf) with a validating resolver and MTL mode.
+
 ```powershell
-cd C:\MTL\Cipherops_new\A3-PS036-TC161
+pip install -r requirements-dashboard.txt
 streamlit run dashboard/live_lab/app.py
 ```
 
-## Sidebar · Lab options
+Needs Docker. Use **Small** zone size for a first visit.
 
-| Control | Effect |
-|---------|--------|
-| **Zone size** | Small / Medium / Large → writes `configs/_dashboard.yaml` |
-| **Scenarios** | Which algorithms to sign and benchmark |
-| **Sign jobs** | Parallelism for Prepare |
-| **Queries / trial** | Workload size for Step 6 |
-| **Trials** | Cold+warm repetitions for Step 6 |
-| **Network profiles** | lan / wan / lossy |
-| **UDP buffer** | 1232 or 4096 |
+## Sidebar
 
-## Requirements
+| Section | Purpose |
+|---------|---------|
+| **Setup** | Zone size and scenarios to sign |
+| **Steps 1–5** | Images → Prepare → Start → Scenario → Query |
+| **Reset** | Clear captures / results |
+| **Batch benchmark** | Long multi-trial run across scenarios and networks |
 
-- Docker (eco images: build in UI or pull from a registry)
-- `pip install -r requirements-dashboard.txt`
+## Tabs
 
-## Steps
-
-1. **Images** — Build locally or Pull from registry  
-2. **Prepare** — sign zones; Lab tab shows work/zones/active/compose paths  
-3. **Start** — bring lab up  
-4. **Activate** — change scenario (auto when running)  
-5. **Query** — Lab tab live probe + capture  
-6. **Run benchmark** — `ecolab run`
-
-**Packets:** Capture decode (story + table) · Sequence diagram (pcap → Decode → local PNG)
-
-## Reset
-
-Sidebar: clear results / pcaps / optional work wipe.
+**Lab** · **Metrics** · **Packets** · **Activity**
