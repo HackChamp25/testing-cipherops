@@ -111,6 +111,34 @@ _CSS = """
 """
 
 
+@st.cache_resource(show_spinner=False)
+def _brand():
+    """(symbol, full logo) from the team logo, with its black backdrop made transparent.
+
+    Returns (None, None) if the logo file is missing so the app still runs without it.
+    """
+    try:
+        import numpy as np
+        from PIL import Image
+
+        src = ROOT / "docs" / "media" / "cipherops-logo-dark.png"
+        rgb = np.asarray(Image.open(src).convert("RGB")).astype(float)
+        alpha = np.clip((rgb.max(axis=2) - 12) * (255 / 70), 0, 255)
+        full = Image.fromarray(np.dstack([rgb, alpha]).astype("uint8"), "RGBA")
+
+        def _crop(img, rows=None, pad=6):
+            a = np.asarray(img)[..., 3]
+            if rows is not None:
+                a = a[:rows]
+            ys, xs = np.where(a > 60)
+            return img.crop((max(xs.min() - pad, 0), max(ys.min() - pad, 0),
+                             xs.max() + pad, ys.max() + pad))
+
+        return _crop(full, rows=605), _crop(full)
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
 def _chip(text: str, kind: str = "idle") -> str:
     return f'<span class="co-chip co-{kind}">{text}</span>'
 
@@ -655,7 +683,13 @@ def _tile_chip(mode: str, stt: dict, h: driver.LabHandle) -> str:
 
 
 def home_page(h: driver.LabHandle, stt: dict) -> None:
-    st.markdown(
+    _symbol, full = _brand()
+    if full is not None:
+        logo_col, title_col = st.columns([1, 4], vertical_alignment="center")
+        logo_col.image(full, width=190)
+    else:
+        title_col = st.container()
+    title_col.markdown(
         f'<div class="co-hero"><h1>{APP_NAME}</h1><p class="co-sub">{APP_TAGLINE}</p></div>',
         unsafe_allow_html=True,
     )
@@ -1494,6 +1528,9 @@ PAGES = {
 
 def main() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
+    symbol, _full = _brand()
+    if symbol is not None:
+        st.logo(symbol, icon_image=symbol, size="large")  # top-left on Home and on every tile
     _init_nav()
     h = _handle()
     mode = st.session_state.nav
