@@ -360,9 +360,13 @@ def run_benchmark(
     profiles: list[str] | None = None,
     trials: int | None = None,
     udp: int | None = None,
+    run_label: str = "",
 ) -> str:
     """Full ecolab run inside the client (lab must be up). Can take a long time."""
     flags = []
+    label = sanitize_label(run_label)
+    if label:
+        flags.append(f"--run-label {label}")
     if scenarios:
         flags.append(f"--scenarios {','.join(scenarios)}")
     if profiles:
@@ -375,12 +379,49 @@ def run_benchmark(
     return client_exec(h, cmd, timeout=None)
 
 
+def sanitize_label(label: str | None) -> str:
+    """Reduce a user-typed run name to a path-safe token (letters, digits, '-', '_'), max 40 chars."""
+    raw = "".join(c if (c.isascii() and c.isalnum()) or c in "-_" else "-" for c in (label or "").strip())
+    return "-".join(p for p in raw.split("-") if p)[:40].strip("_")
+
+
 def list_run_dirs(h: LabHandle) -> list[Path]:
     root = ECO / "results" / h.tag
     if not root.is_dir():
         return []
     dirs = [p for p in root.iterdir() if p.is_dir() and p.name != "live-dashboard"]
     return sorted(dirs, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def list_runs(h: LabHandle) -> list[dict]:
+    """Saved benchmark runs, newest first, with a friendly name, timestamp and what was measured."""
+    out: list[dict] = []
+    for p in list_run_dirs(h):
+        meta: dict = {}
+        mj = p.joinpath("run.json")
+        if mj.is_file():
+            try:
+                meta = json.loads(mj.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                meta = {}
+        stamp, _, tail = p.name.partition("_")
+        label = meta.get("run_label") or tail
+        try:
+            when = datetime.strptime(stamp, "%Y%m%d-%H%M%S").strftime("%d %b %Y, %H:%M:%S")
+        except ValueError:
+            when = datetime.fromtimestamp(p.stat().st_mtime).strftime("%d %b %Y, %H:%M:%S")
+        out.append({
+            "path": p,
+            "folder": p.name,
+            "label": label,
+            "title": f"{label} - {when}" if label else when,
+            "when": when,
+            "scenarios": meta.get("scenarios") or [],
+            "profiles": meta.get("profiles") or [],
+            "trials": meta.get("trials"),
+            "has_results": any(p.glob("*.csv")),
+        })
+    return out
 
 
 def up(h: LabHandle) -> str:
@@ -435,8 +476,11 @@ def capture_target(server: str) -> tuple[str, str]:
     return "client", "/eco/results"
 
 
-def start_capture(h: LabHandle, name: str | None = None, *, server: str = "10.53.0.53") -> Path:
-    name = name or time.strftime("live-%Y%m%d-%H%M%S.pcap")
+def start_capture(h: LabHandle, name: str | None = None, *, server: str = "10.53.0.53",
+                  label: str = "") -> Path:
+    if not name:
+        tag = sanitize_label(label)
+        name = time.strftime(f"live-{tag}-%Y%m%d-%H%M%S.pcap" if tag else "live-%Y%m%d-%H%M%S.pcap")
     path = h.capture_dir / name
     host, results_root = capture_target(server)
     dest = f"{results_root}/{h.tag}/live-dashboard/{name}"
@@ -651,15 +695,23 @@ def clear_demo_data(
     pcaps: bool = True,
     hide_prepare_metrics: bool = True,
     work: bool = False,
+    benchmarks: bool = False,
 ) -> dict[str, int]:
-    """Wipe live-dashboard artifacts; optionally wipe signed work/ too.
+    """Wipe live-dashboard artifacts; optionally wipe signed work/ and saved benchmark runs.
 
     When ``work`` is True, removes ``ecosystem/work/<tag>/`` so Prepare must run again.
+    When ``benchmarks`` is True, removes every saved run folder under ``results/<tag>/``
+    (the live-dashboard folder is handled by the other scopes).
     Does not remove Docker images.
     """
     d = h.capture_dir
     d.mkdir(parents=True, exist_ok=True)
-    removed = {"session": 0, "activity": 0, "pcaps": 0, "work": 0}
+    removed = {"session": 0, "activity": 0, "pcaps": 0, "work": 0, "benchmarks": 0}
+    if benchmarks:
+        import shutil
+        for run_dir in list_run_dirs(h):
+            shutil.rmtree(run_dir, ignore_errors=True)
+            removed["benchmarks"] += 1
     if session:
         p = session_path(h)
         if p.is_file():
@@ -695,6 +747,37 @@ def clear_demo_data(
             shutil.rmtree(tag_dir, ignore_errors=True)
             removed["work"] = 1
     return removed
+
+
+def _dir_size(path: Path) -> int:
+    total = 0
+    for p in path.rglob("*"):
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def reset_preview(h: LabHandle) -> dict:
+    """What each Reset scope would remove right now (counts and bytes), without touching anything."""
+    d = h.capture_dir
+    pcaps = list(d.glob("*.pcap"))
+    session = session_path(h)
+    session_queries_n = len(load_session(h).get("queries") or []) if session.is_file() else 0
+    activity_log = d / "activity.log"
+    runs = list_run_dirs(h)
+    return {
+        "session_queries": session_queries_n,
+        "activity_bytes": activity_log.stat().st_size if activity_log.is_file() else 0,
+        "pcaps": len(pcaps),
+        "pcap_bytes": sum(p.stat().st_size for p in pcaps if p.is_file()),
+        "runs": len(runs),
+        "run_bytes": sum(_dir_size(r) for r in runs),
+        "work_exists": h.work.is_dir(),
+        "work_bytes": _dir_size(h.work) if h.work.is_dir() else 0,
+    }
 
 
 def set_show_prepare_metrics(h: LabHandle, visible: bool) -> None:
