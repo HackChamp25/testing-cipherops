@@ -90,7 +90,7 @@ def cmd_run(a) -> None:
                [int(x) for x in _list(a.udp, lab.cfg["resolver"]["udp_limits"])],
                _list(a.profiles, lab.cfg["network"]["run"]),
                int(a.trials or lab.cfg["trials"]),
-               run_label=a.run_label or "")
+               run_label=a.run_label or "", stamp=a.stamp or "")
     print(f"Results: {rdir}")
 
 
@@ -162,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--profiles")
     p.add_argument("--trials", type=int)
     p.add_argument("--run-label", default="", help="name for this run, appended to the timestamped folder")
+    p.add_argument("--stamp", default="", help="YYYYMMDD-HHMMSS to use in the run folder name (default: now)")
     p.set_defaults(fn=cmd_run)
     p = sub.add_parser("summary")
     p.add_argument("run_dir")

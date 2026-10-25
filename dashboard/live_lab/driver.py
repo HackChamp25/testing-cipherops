@@ -363,7 +363,7 @@ def run_benchmark(
     run_label: str = "",
 ) -> str:
     """Full ecolab run inside the client (lab must be up). Can take a long time."""
-    flags = []
+    flags = [f"--stamp {time.strftime('%Y%m%d-%H%M%S')}"]
     label = sanitize_label(run_label)
     if label:
         flags.append(f"--run-label {label}")

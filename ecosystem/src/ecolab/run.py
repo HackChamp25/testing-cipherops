@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -96,9 +97,10 @@ def clean_label(label: str | None) -> str:
 
 
 def run(lab: Lab, scenarios: list[str], udp_limits: list[int], profiles: list[str], trials: int, log=print,
-        run_label: str = "") -> Path:
+        run_label: str = "", stamp: str = "") -> Path:
     label = clean_label(run_label)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
+    # The dashboard passes its own clock so folder names match the user's time, not the container's.
+    stamp = stamp if re.fullmatch(r"\d{8}-\d{6}", stamp or "") else time.strftime("%Y%m%d-%H%M%S")
     run_id = f"{stamp}_{label}" if label else stamp
     rdir = ECO / "results" / lab.tag / run_id
     (rdir / "pcap").mkdir(parents=True)

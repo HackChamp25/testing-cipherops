@@ -569,7 +569,7 @@ def sidebar_benchmark(h: driver.LabHandle, stt: dict) -> None:
     )
     clean = driver.sanitize_label(label)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    _hint(f"Saved as {stamp}{'_' + clean if clean else ''}")
+    _hint(f"Saved as {stamp}{'_' + clean if clean else ''} (time = when you press Run)")
     if label and clean != label.strip():
         _hint("Letters, digits, - and _ only; other characters become -.")
 
