@@ -559,9 +559,9 @@ def status_panel(h: driver.LabHandle, stt: dict) -> None:
 
 
 def show_sequence_diagram(steps: list) -> None:
-    """Display one capture sequence (local matplotlib PNG — no Mermaid/Kroki)."""
+    """Display one capture sequence (local matplotlib PNG)."""
     if not steps:
-        st.caption("No diagram.")
+        st.warning("Could not build a sequence from this capture’s DNS hops.")
         return
     try:
         st.image(decode.sequence_png_bytes(steps), use_container_width=True)
@@ -905,12 +905,23 @@ def pcap_panel(h: driver.LabHandle) -> None:
                     st.session_state.pop("last_seq_steps", None)
                     st.session_state.pop("last_seq_pcap", None)
                 else:
-                    st.session_state.last_seq_steps = decode.build_sequence_steps(df)
+                    steps = decode.build_sequence_steps(df)
+                    st.session_state.last_seq_steps = steps
                     st.session_state.last_seq_pcap = seq_choice
+                    if not steps:
+                        st.warning(
+                            "Decoded the capture, but no Client/Unbound/Root/TLD/SLD hops "
+                            "were recognized for a sequence diagram."
+                        )
             steps = st.session_state.get("last_seq_steps")
             if steps:
-                st.caption(Path(st.session_state.get("last_seq_pcap") or seq_choice).name)
+                st.caption(
+                    f"{Path(st.session_state.get('last_seq_pcap') or seq_choice).name} · "
+                    f"{len(steps)} messages from this capture"
+                )
                 show_sequence_diagram(steps)
+            elif st.session_state.get("last_seq_pcap"):
+                st.caption("No sequence steps for the last decode.")
             else:
                 st.caption("Choose a capture and click Show sequence.")
 

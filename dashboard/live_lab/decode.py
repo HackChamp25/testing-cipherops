@@ -184,6 +184,7 @@ def decode_pcap(path: Path | str) -> pd.DataFrame:
         src, dst = socket.inet_ntoa(ip[12:16]), socket.inet_ntoa(ip[16:20])
         hop = f"{_name(src)} → {_name(dst)}"
         ms = round((ts - t0) * 1000, 2)
+        base = {"src_ip": src, "dst_ip": dst, "hop": hop, "ms": ms, "#": no}
         if ip[9] == 17 and len(body) >= 8:
             ulen = struct.unpack(">H", body[4:6])[0]
             dns_len = max(ulen - 8, 0)
@@ -194,7 +195,7 @@ def decode_pcap(path: Path | str) -> pd.DataFrame:
             }
             phase = _phase_for_row(hop, info, "UDP")
             rows.append({
-                "#": no, "ms": ms, "hop": hop, "proto": "UDP", "bytes": dns_len,
+                **base, "proto": "UDP", "bytes": dns_len,
                 "phase": phase, "phase_label": PHASE_LABELS.get(phase, phase), **info,
             })
         elif ip[9] == 6 and len(body) >= 20:
@@ -222,7 +223,7 @@ def decode_pcap(path: Path | str) -> pd.DataFrame:
                 info = {**info, "summary": " | ".join(parts) if parts else summary}
             phase = _phase_for_row(hop, info, "TCP")
             rows.append({
-                "#": no, "ms": ms, "hop": hop, "proto": "TCP", "bytes": len(data),
+                **base, "proto": "TCP", "bytes": len(data),
                 "phase": phase, "phase_label": PHASE_LABELS.get(phase, phase), **info,
             })
     return pd.DataFrame(rows)
@@ -253,18 +254,43 @@ def wire_summary(df: pd.DataFrame) -> dict:
 _SEQ_ACTORS = ("Client", "Unbound", "Root", "TLD", "SLD")
 
 
-def _hop_actor(label: str) -> str | None:
-    lab = str(label)
-    if lab == "client":
+def _actor_from_endpoint(label: str) -> str | None:
+    """Map a hop endpoint (name or 10.53.0.x) to a sequence-diagram actor."""
+    lab = str(label or "").strip()
+    if not lab or lab.lower() in {"nan", "none"}:
+        return None
+    low = lab.lower()
+    if low == "client" or lab.endswith(".100"):
         return "Client"
-    if lab == "unbound":
+    if low == "unbound" or lab.endswith(".53"):
         return "Unbound"
-    if lab == "root":
+    if low == "root" or lab.endswith(".2"):
         return "Root"
-    if lab.startswith("tld"):
+    if low.startswith("tld"):
         return "TLD"
-    if lab.startswith("sld"):
+    if low.startswith("sld"):
         return "SLD"
+    # Raw lab addresses: TLD .11-.19, SLD .21-.49
+    if lab.startswith("10.53.0."):
+        try:
+            last = int(lab.rsplit(".", 1)[1])
+        except ValueError:
+            return None
+        if 11 <= last < 20:
+            return "TLD"
+        if 21 <= last < 50:
+            return "SLD"
+    return None
+
+
+def _split_hop(hop: str) -> tuple[str, str] | None:
+    text = str(hop or "")
+    for sep in (" → ", " →", "→ ", "→", " -> ", "->"):
+        if sep in text:
+            a, b = text.split(sep, 1)
+            a, b = a.strip(), b.strip()
+            if a and b:
+                return a, b
     return None
 
 
@@ -290,26 +316,10 @@ def _seq_label(row) -> str:
     return " ".join(str(label).replace("\n", " ").split())[:56] or "msg"
 
 
-def reference_sequence_steps() -> list[dict]:
-    """Teaching sequence for a typical Through-Unbound path."""
-    return [
-        {"src": "Client", "dst": "Unbound", "label": "Query name A", "response": False},
-        {"src": "Unbound", "dst": "Root", "label": "Ask for TLD", "response": False},
-        {"src": "Root", "dst": "Unbound", "label": "Referral NS/DS", "response": True},
-        {"src": "Unbound", "dst": "TLD", "label": "Ask for SLD", "response": False},
-        {"src": "TLD", "dst": "Unbound", "label": "Referral NS/DS", "response": True},
-        {"src": "Unbound", "dst": "SLD", "label": "Ask for name A", "response": False},
-        {"src": "SLD", "dst": "Unbound", "label": "Answer + RRSIGs", "response": True},
-        {"src": "Unbound", "dst": "TLD", "label": "DNSKEY / MTL ladder", "response": False},
-        {"src": "TLD", "dst": "Unbound", "label": "Keys / FULL ladder", "response": True},
-        {"src": "Unbound", "dst": "Client", "label": "Validated A AD=1", "response": True},
-    ]
-
-
 def build_sequence_steps(df: pd.DataFrame) -> list[dict]:
-    """Deduped Client/Unbound/Root/TLD/SLD message steps from a capture decode."""
+    """Build sequence steps only from this capture — never a canned diagram."""
     if df is None or df.empty:
-        return reference_sequence_steps()
+        return []
     interesting = df[df["phase"] != "tcp_noise"].copy() if "phase" in df.columns else df
     if interesting.empty:
         interesting = df
@@ -317,13 +327,15 @@ def build_sequence_steps(df: pd.DataFrame) -> list[dict]:
     steps: list[dict] = []
     seen: set[tuple] = set()
     for _, r in interesting.iterrows():
-        hop = str(r.get("hop") or "")
-        if "→" not in hop and "->" not in hop:
-            continue
-        sep = "→" if "→" in hop else "->"
-        src_l, dst_l = [x.strip() for x in hop.split(sep, 1)]
-        src, dst = _hop_actor(src_l), _hop_actor(dst_l)
-        if not src or not dst:
+        parts = _split_hop(str(r.get("hop") or ""))
+        if not parts:
+            # Prefer explicit IPs when present (added by decode_pcap).
+            src = _actor_from_endpoint(str(r.get("src_ip") or ""))
+            dst = _actor_from_endpoint(str(r.get("dst_ip") or ""))
+        else:
+            src = _actor_from_endpoint(parts[0])
+            dst = _actor_from_endpoint(parts[1])
+        if not src or not dst or src == dst:
             continue
         is_resp = bool(r.get("is_resp"))
         label = _seq_label(r)
@@ -334,17 +346,18 @@ def build_sequence_steps(df: pd.DataFrame) -> list[dict]:
         steps.append({"src": src, "dst": dst, "label": label, "response": is_resp})
         if len(steps) >= 24:
             break
-    return steps or reference_sequence_steps()
+    return steps
 
 
-def sequence_png_bytes(steps: list[dict] | None = None) -> bytes:
+def sequence_png_bytes(steps: list[dict]) -> bytes:
     """Render a high-contrast sequence diagram (white bg, dark ink) via matplotlib."""
     import io
 
     import matplotlib.pyplot as plt
     from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
 
-    steps = steps or reference_sequence_steps()
+    if not steps:
+        raise ValueError("no sequence steps to draw")
     actors = list(_SEQ_ACTORS)
     xpos = {a: i for i, a in enumerate(actors)}
     n = max(len(steps), 1)
