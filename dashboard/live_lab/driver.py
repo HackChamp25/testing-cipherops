@@ -550,18 +550,30 @@ def sanitize_label(label: str | None) -> str:
     return "-".join(p for p in raw.split("-") if p)[:40].strip("_")
 
 
-def list_run_dirs(h: LabHandle) -> list[Path]:
-    root = ECO / "results" / h.tag
+def list_labs() -> list[dict]:
+    """Every lab folder that has signing data and/or saved benchmark runs, newest activity first."""
+    tags: dict[str, float] = {}
+    for p in (ECO / "work").glob("*/zones/*/manifest.json"):
+        t = p.parents[2].name
+        tags[t] = max(tags.get(t, 0.0), p.stat().st_mtime)
+    for p in (ECO / "results").glob("*/*/summary.csv"):
+        t = p.parents[1].name
+        tags[t] = max(tags.get(t, 0.0), p.stat().st_mtime)
+    return [{"tag": t, "mtime": m} for t, m in sorted(tags.items(), key=lambda kv: kv[1], reverse=True)]
+
+
+def list_run_dirs(h: LabHandle, tag: str | None = None) -> list[Path]:
+    root = ECO / "results" / (tag or h.tag)
     if not root.is_dir():
         return []
     dirs = [p for p in root.iterdir() if p.is_dir() and p.name != "live-dashboard"]
     return sorted(dirs, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
-def list_runs(h: LabHandle) -> list[dict]:
+def list_runs(h: LabHandle, tag: str | None = None) -> list[dict]:
     """Saved benchmark runs, newest first, with a friendly name, timestamp and what was measured."""
     out: list[dict] = []
-    for p in list_run_dirs(h):
+    for p in list_run_dirs(h, tag):
         meta: dict = {}
         mj = p.joinpath("run.json")
         if mj.is_file():
@@ -747,8 +759,8 @@ def load_manifest(h: LabHandle, scenario: str) -> dict | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def list_manifests(h: LabHandle) -> dict[str, dict]:
-    zones = h.work / "zones"
+def list_manifests(h: LabHandle, tag: str | None = None) -> dict[str, dict]:
+    zones = (ECO / "work" / tag if tag else h.work) / "zones"
     if not zones.is_dir():
         return {}
     out: dict[str, dict] = {}
@@ -759,10 +771,10 @@ def list_manifests(h: LabHandle) -> dict[str, dict]:
     return out
 
 
-def manifest_rows(h: LabHandle) -> list[dict]:
+def manifest_rows(h: LabHandle, tag: str | None = None) -> list[dict]:
     """Flat rows for Metrics tables: one per zone per scenario."""
     rows = []
-    for scenario, man in list_manifests(h).items():
+    for scenario, man in list_manifests(h, tag).items():
         for z in man.get("zones") or []:
             rows.append({
                 "scenario": scenario,

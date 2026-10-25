@@ -23,8 +23,9 @@ ROOT = Path(__file__).resolve().parents[2]
 ECO_DIR = ROOT / "ecosystem"
 sys.path.insert(0, str(ROOT / "dashboard"))
 
-from live_lab import decode, driver  # noqa: E402
+from live_lab import compare, decode, driver  # noqa: E402
 
+compare = importlib.reload(compare)
 decode = importlib.reload(decode)
 driver = importlib.reload(driver)
 
@@ -51,7 +52,7 @@ SCENARIO_BLURB = {
 LEVEL_ICON = {"info": "ℹ️", "ok": "✅", "warn": "⚠️", "err": "❌", "step": "▶️"}
 ACTIVITY_CAP = 500
 
-NAV_MODES = ("home", "setup", "live", "benchmark", "reset")
+NAV_MODES = ("home", "setup", "live", "benchmark", "compare", "reset")
 TILE_TEXT_HEIGHT = 290  # px; fits heading, pitch and bullets even when the copy wraps
 
 TILES = {
@@ -84,6 +85,16 @@ TILES = {
             "Charts and CSVs for every saved run",
         ],
         "cta": "Open Benchmark",
+    },
+    "compare": {
+        "icon": "⚖️",
+        "title": "Compare",
+        "pitch": "All algorithms side by side: MTL against SLH-DSA in one place.",
+        "bullets": [
+            "Signing, verification, signed size, bytes on the wire, cache",
+            "Headline ratios, charts and one table you can download",
+        ],
+        "cta": "Open Compare",
     },
     "reset": {
         "icon": "🧹",
@@ -423,7 +434,8 @@ def sidebar_home(h: driver.LabHandle, stt: dict) -> None:
         "sign the hierarchy, start the lab  \n"
         "2. **Live** — send a lookup, compare cold and warm, read the packets  \n"
         "3. **Benchmark** — name a run and measure scenarios across networks  \n"
-        "4. **Reset** — clear only what you choose"
+        "4. **Compare** — MTL vs SLH-DSA and the other modes, side by side  \n"
+        "5. **Reset** — clear only what you choose"
     )
     st.sidebar.markdown("---")
     r = readiness(stt)
@@ -801,6 +813,9 @@ def _tile_chip(mode: str, stt: dict, h: driver.LabHandle) -> str:
             return _chip(f"Live · {r['active']}", "ok") if r["active"] else _chip("Ready", "ok")
         n = len(driver.list_runs(h))
         return _chip(f"Ready · {n} saved" if n else "Ready", "ok")
+    if mode == "compare":
+        labs = driver.list_labs()
+        return _chip("Has data", "ok") if labs else _chip("No data yet", "idle")
     return _chip("Maintenance", "idle")
 
 
@@ -823,7 +838,7 @@ def home_page(h: driver.LabHandle, stt: dict) -> None:
     if not r["ready"]:
         st.info("**Start with Setup.** Live and Benchmark need the lab built, signed and running.")
 
-    order = [("setup", "live"), ("benchmark", "reset")]
+    order = [("setup", "live"), ("benchmark", "compare"), ("reset",)]
     for pair in order:
         cols = st.columns(2)
         for col, mode in zip(cols, pair):
@@ -841,6 +856,8 @@ def home_page(h: driver.LabHandle, stt: dict) -> None:
                     emphasise = not r["ready"]
                 elif mode in ("live", "benchmark"):
                     emphasise = r["ready"]
+                elif mode == "compare":
+                    emphasise = bool(driver.list_labs())
                 else:
                     emphasise = False
                 st.button(
@@ -1534,6 +1551,208 @@ def benchmark_page(h: driver.LabHandle, stt: dict) -> None:
     _activity_expander(h)
 
 
+# ─────────────────────────── COMPARE ───────────────────────────
+
+def _cmp_summary(tag: str | None, folder: str | None) -> pd.DataFrame | None:
+    if not tag or not folder:
+        return None
+    f = ECO_DIR / "results" / tag / folder / "summary.csv"
+    if not f.is_file():
+        return None
+    try:
+        return pd.read_csv(f)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def sidebar_compare(h: driver.LabHandle, stt: dict) -> None:
+    _sidebar_brand("compare")
+    st.sidebar.markdown("### Compare")
+    _hint("Signing numbers come from the lab's last Prepare; bytes and cache from a saved benchmark run.")
+
+    labs = [x["tag"] for x in driver.list_labs()]
+    default_lab = h.tag if h.tag in labs else (labs[0] if labs else h.tag)
+    tag = sb(st.sidebar.selectbox, "cmp_lab", default_lab, "Lab", options=labs or [h.tag],
+             help="Any lab folder that has signing data or saved runs.")
+
+    runs = [r for r in driver.list_runs(h, tag) if (r["path"] / "summary.csv").is_file()]
+    by = {r["folder"]: r for r in runs}
+    folder = sb(st.sidebar.selectbox, "cmp_run", next(iter(by), None), "Benchmark run", options=list(by),
+                format_func=lambda f: by[f]["title"], help="Bytes, truncation, cache and latency come from this run.")
+    summary = _cmp_summary(tag, folder)
+
+    if summary is not None and not summary.empty:
+        profiles = [str(p) for p in summary["profile"].dropna().unique()] if "profile" in summary else []
+        sb(st.sidebar.selectbox, "cmp_profile", profiles[0] if profiles else None, "Network", options=profiles)
+        udps = [int(u) for u in summary["udp_limit"].dropna().unique()] if "udp_limit" in summary else []
+        sb(st.sidebar.selectbox, "cmp_udp", udps[0] if udps else None, "UDP size limit", options=udps)
+
+    sign = compare.signing_by_scenario(driver.manifest_rows(h, tag))
+    names = list(sign.scenario) + (list(summary["scenario"].unique()) if summary is not None else [])
+    scenarios = compare.order_scenarios(names)
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Compare**")
+    cand = sb(st.sidebar.selectbox, "cmp_cand", "mtl" if "mtl" in scenarios else (scenarios[-1] if scenarios else None),
+              "Candidate", options=scenarios)
+    others = [s for s in scenarios if s != cand]
+    sb(st.sidebar.selectbox, "cmp_base", "slh-dsa" if "slh-dsa" in others else (others[0] if others else None),
+       "against baseline", options=others)
+    st.sidebar.markdown("---")
+    if st.sidebar.button("Refresh", width="stretch", key="sb_refresh_cmp"):
+        st.rerun()
+
+
+def _plot_cfg(fig, height: int = 360):
+    fig.update_layout(height=height, margin=dict(l=10, r=10, t=50, b=10), legend_title_text="")
+    return fig
+
+
+def compare_page(h: driver.LabHandle, stt: dict) -> None:
+    _page_header("compare", h, stt)
+    tag, folder = cfg("cmp_lab"), cfg("cmp_run")
+    base, cand = cfg("cmp_base"), cfg("cmp_cand")
+
+    sign = compare.signing_by_scenario(driver.manifest_rows(h, tag))
+    summary = _cmp_summary(tag, folder)
+    bench = compare.bench_by_scenario(summary, cfg("cmp_profile"), cfg("cmp_udp")) if summary is not None \
+        else compare.bench_by_scenario(pd.DataFrame())
+    df = compare.merge(sign, bench)
+
+    if df.empty:
+        st.info("Nothing to compare yet. Run **Prepare** in Setup for signing numbers and a **benchmark** for "
+                "bytes and cache.")
+        a, b, _ = st.columns([1, 1, 2])
+        a.button("Go to Setup", on_click=_go, args=("setup",), key="cmp_to_setup", width="stretch")
+        b.button("Go to Benchmark", on_click=_go, args=("benchmark",), key="cmp_to_bench", width="stretch")
+        return
+
+    run_title = next((r["title"] for r in driver.list_runs(h, tag) if r["folder"] == folder), None)
+    src_sign = f"last Prepare of **{tag}**" if not sign.empty else "no signing data for this lab"
+    src_bench = f"run **{run_title}** ({cfg('cmp_profile')}, UDP {cfg('cmp_udp')})" if not bench.empty \
+        else "no benchmark run with results for this lab"
+    st.caption(f"Signing and verification: {src_sign} · Bytes, truncation, cache: {src_bench}")
+
+    if not (base and cand):
+        st.warning("Pick a candidate and a baseline in the sidebar.")
+        return
+
+    st.markdown(f"#### {cand} vs {base}")
+    cards = compare.headline(df, base, cand)
+    cols = st.columns(len(cards))
+    for col, c in zip(cols, cards):
+        col.metric(c["label"], c["value"], c["delta"], delta_color="off", delta_arrow="off", help=c["help"])
+    missing = [c["label"] for c in cards if c["value"] == "—"]
+    if missing:
+        st.caption("No data for: " + ", ".join(missing) + ". "
+                   "Signing and verification need Prepare for both scenarios; the rest need both in the benchmark run.")
+
+    glance, signing, wire, cache, allnums = st.tabs(
+        ["At a glance", "Signing & size", "Bytes on the wire", "Cache & latency", "All numbers"])
+
+    scen_order = list(df.scenario)
+    colors = compare.COLORS
+
+    with glance:
+        metrics = [("Signing time", "sign_s"), ("Verification", "verify_s"), ("Signed size", "signed_bytes"),
+                   ("Bytes on the wire", "upstream_bytes"), ("RRset cache", "cache_rrset")]
+        rel_rows = []
+        for _, r in df.iterrows():
+            for label, col in metrics:
+                b = df.loc[df.scenario == base, col]
+                b = float(b.iloc[0]) if len(b) and pd.notna(b.iloc[0]) else None
+                v = r.get(col)
+                if b and b > 0 and pd.notna(v) and v > 0:
+                    rel_rows.append({"Metric": label, "Scenario": r.scenario, "% of baseline": 100 * v / b})
+        if rel_rows:
+            fig = px.bar(pd.DataFrame(rel_rows), x="Metric", y="% of baseline", color="Scenario", barmode="group",
+                         log_y=True, color_discrete_map=colors, category_orders={"Scenario": scen_order},
+                         title=f"Everything relative to {base} (= 100%, log scale; lower is better)")
+            fig.add_hline(y=100, line_dash="dot", annotation_text=base)
+            st.plotly_chart(_plot_cfg(fig, 420), width="stretch")
+        st.caption(
+            "SLH-DSA signs every RRset with a post-quantum signature. MTL appends RRsets to a Merkle tree and "
+            "signs the tree's ladder once, so signing is cheaper and signatures on the wire are much shorter."
+        )
+
+    with signing:
+        sg = df.dropna(subset=["sign_s"]) if "sign_s" in df else df
+        if sg.empty:
+            st.info("No signing data: run Prepare in Setup.")
+        else:
+            c1, c2 = st.columns(2)
+            long = sg.melt(id_vars="scenario", value_vars=["sign_s", "verify_s"], var_name="what", value_name="seconds")
+            long["what"] = long["what"].map({"sign_s": "Sign zones", "verify_s": "Verify zones"})
+            f1 = px.bar(long, x="scenario", y="seconds", color="what", barmode="group", log_y=True,
+                        category_orders={"scenario": scen_order}, title="Signing and verification time (s, log)")
+            c1.plotly_chart(_plot_cfg(f1), width="stretch")
+            sz = sg.assign(MB=sg.signed_bytes / 1024 ** 2)
+            f2 = px.bar(sz, x="scenario", y="MB", color="scenario", color_discrete_map=colors,
+                        category_orders={"scenario": scen_order}, title="Signed zone size (MB)", text_auto=".2f")
+            f2.update_layout(showlegend=False)
+            c2.plotly_chart(_plot_cfg(f2), width="stretch")
+            f3 = px.bar(sg, x="scenario", y="sign_ms_per_rrsig", color="scenario", color_discrete_map=colors,
+                        category_orders={"scenario": scen_order}, log_y=True,
+                        title="Sign time per RRSIG (ms, log)", text_auto=".3g")
+            f3.update_layout(showlegend=False)
+            st.plotly_chart(_plot_cfg(f3, 320), width="stretch")
+            st.caption("Verification here is `ldns-verify-zone` over every signed zone (an offline check). "
+                       "How long a resolver takes to validate is part of the cold-pass latency under Cache & latency.")
+
+    with wire:
+        bw = df.dropna(subset=["upstream_bytes"]) if "upstream_bytes" in df else df
+        if bw.empty:
+            st.info("No benchmark data: run a benchmark in the Benchmark tile.")
+        else:
+            c1, c2 = st.columns(2)
+            hops = bw.melt(id_vars="scenario", value_vars=["root_bytes", "tld_bytes", "sld_bytes"],
+                           var_name="hop", value_name="bytes")
+            hops["hop"] = hops["hop"].map({"root_bytes": "Root", "tld_bytes": "TLD", "sld_bytes": "Leaf"})
+            hops["KB"] = hops["bytes"] / 1024
+            f1 = px.bar(hops, x="scenario", y="KB", color="hop", barmode="stack",
+                        category_orders={"scenario": scen_order},
+                        title="Resolver ↔ authoritative bytes by tier, cold pass (KB)")
+            c1.plotly_chart(_plot_cfg(f1), width="stretch")
+            tr = bw.melt(id_vars="scenario", value_vars=["truncated", "tcp_conns", "upstream_queries"],
+                         var_name="what", value_name="count")
+            tr["what"] = tr["what"].map({"truncated": "Truncated responses", "tcp_conns": "TCP connections",
+                                         "upstream_queries": "Upstream queries"})
+            f2 = px.bar(tr, x="scenario", y="count", color="what", barmode="group",
+                        category_orders={"scenario": scen_order}, title="Truncation, TCP fallback and queries")
+            c2.plotly_chart(_plot_cfg(f2), width="stretch")
+            cb = bw["client_bytes"].dropna()
+            if not cb.empty:
+                same = "the same in every scenario" if cb.nunique() == 1 else "shown in the table"
+                st.caption(f"Client ↔ resolver traffic is {same} (about {compare.fmt_bytes(cb.median())}). "
+                           "Warm passes are answered from cache and send no upstream traffic.")
+
+    with cache:
+        cc = df.dropna(subset=["cache_rrset"]) if "cache_rrset" in df else df
+        if cc.empty:
+            st.info("No benchmark data: run a benchmark in the Benchmark tile.")
+        else:
+            c1, c2 = st.columns(2)
+            mem = cc.melt(id_vars="scenario", value_vars=["cache_rrset", "cache_message"],
+                          var_name="cache", value_name="bytes")
+            mem["cache"] = mem["cache"].map({"cache_rrset": "RRset cache", "cache_message": "Message cache"})
+            mem["MB"] = mem["bytes"] / 1024 ** 2
+            f1 = px.bar(mem, x="scenario", y="MB", color="cache", barmode="group",
+                        category_orders={"scenario": scen_order}, title="Resolver cache memory after the cold pass (MB)")
+            c1.plotly_chart(_plot_cfg(f1), width="stretch")
+            lat = cc.melt(id_vars="scenario", value_vars=["cold_ms", "warm_ms"], var_name="pass", value_name="ms")
+            lat["pass"] = lat["pass"].map({"cold_ms": "Cold (empty cache)", "warm_ms": "Warm (cached)"})
+            f2 = px.bar(lat, x="scenario", y="ms", color="pass", barmode="group",
+                        category_orders={"scenario": scen_order}, title="Median lookup time (ms)")
+            c2.plotly_chart(_plot_cfg(f2), width="stretch")
+            st.caption("Cold is the first pass after flushing the resolver; warm repeats the same lookups from cache. "
+                       "Cache memory is Unbound's RRset and message cache after the cold pass.")
+
+    with allnums:
+        t = compare.table(df)
+        st.dataframe(t, width="stretch", hide_index=True)
+        st.download_button("Download comparison (CSV)", data=df.to_csv(index=False), key="cmp_dl",
+                           file_name=f"comparison-{tag}.csv", mime="text/csv")
+
+
 # ─────────────────────────── RESET ───────────────────────────
 
 def _fmt_size(n: int) -> str:
@@ -1716,10 +1935,11 @@ def activity_tab(h: driver.LabHandle) -> None:
 
 SIDEBARS = {
     "home": sidebar_home, "setup": sidebar_setup, "live": sidebar_live,
-    "benchmark": sidebar_benchmark, "reset": sidebar_reset,
+    "benchmark": sidebar_benchmark, "compare": sidebar_compare, "reset": sidebar_reset,
 }
 PAGES = {
-    "setup": setup_page, "live": live_page, "benchmark": benchmark_page, "reset": reset_page,
+    "setup": setup_page, "live": live_page, "benchmark": benchmark_page, "compare": compare_page,
+    "reset": reset_page,
 }
 
 

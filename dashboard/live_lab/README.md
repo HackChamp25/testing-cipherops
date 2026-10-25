@@ -11,16 +11,19 @@ Needs Docker. Use **Small** zone size for a first visit.
 
 ## Home
 
-The app opens on a hub of four independent tiles. **Setup** comes first and only needs doing once; the others work on their own after that.
+The app opens on a hub of five independent tiles. **Setup** comes first and only needs doing once; the others work on their own after that.
 
 | Tile | What it is for | Sidebar | Results view |
 |------|----------------|---------|--------------|
 | **Setup** | Zone size, scenarios, images, sign zones, start / stop the lab | Settings and steps 1–3 | Signing summary and timings |
 | **Live** | Switch scenario, send a lookup, cold vs warm | Active scenario, capture name | Queries, packet decode, sequence diagram |
 | **Benchmark** | Multi-trial runs across scenarios and networks | Run name, scenarios, queries, trials, networks | Named runs, summary table, charts, CSV |
+| **Compare** | All scenarios side by side, headline ratios for MTL vs SLH-DSA | Lab, saved run, network, candidate and baseline | Signing, verification, signed size, bytes per tier, truncation, cache memory, latency, CSV |
 | **Reset** | Clear only the scopes you pick | Notes on what is kept | What the last reset removed |
 
 On Home the sidebar shows the entry instructions and lab readiness. Inside a tile it shows that tile's settings.
+
+Compare reads what the lab already wrote: signing time, zone verification (`ldns-verify-zone`) and signed size from the last Prepare, and bytes per tier, truncation, cache memory and latency from the saved benchmark run you pick (cold pass).
 
 ## Numbers you can change
 
