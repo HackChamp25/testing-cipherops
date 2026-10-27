@@ -34,7 +34,7 @@ switch ($Command) {
         docker compose -f "$Eco/docker/build.yml" --env-file "$Eco/stacks/$Stack.env" build
     }
     "prepare" {
-        docker run --rm --network none -v "${Eco}:/eco" -v "${Repo}/src:/work/src:ro" "cipherops-eco-tools:$Stack" `
+        docker run --rm --network none -v "${Eco}:/eco:z" -v "${Repo}/src:/work/src:ro,z" "cipherops-eco-tools:$Stack" `
             "python3 -m ecolab prepare $Config $($Args2 -join ' ')"
     }
     "up" { Need-Compose; docker compose -f $Compose up -d }

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -89,13 +90,24 @@ def environment(lab: Lab) -> dict:
             "images": images}
 
 
-def run(lab: Lab, scenarios: list[str], udp_limits: list[int], profiles: list[str], trials: int, log=print) -> Path:
-    run_id = time.strftime("%Y%m%d-%H%M%S")
+def clean_label(label: str | None) -> str:
+    """User-supplied run name reduced to a path-safe token (letters, digits, '-' and '_')."""
+    out = "".join(c if (c.isalnum() and c.isascii()) or c in "-_" else "-" for c in (label or "").strip())
+    return "-".join(p for p in out.split("-") if p)[:40].strip("_")
+
+
+def run(lab: Lab, scenarios: list[str], udp_limits: list[int], profiles: list[str], trials: int, log=print,
+        run_label: str = "", stamp: str = "") -> Path:
+    label = clean_label(run_label)
+    # The dashboard passes its own clock so folder names match the user's time, not the container's.
+    stamp = stamp if re.fullmatch(r"\d{8}-\d{6}", stamp or "") else time.strftime("%Y%m%d-%H%M%S")
+    run_id = f"{stamp}_{label}" if label else stamp
     rdir = ECO / "results" / lab.tag / run_id
     (rdir / "pcap").mkdir(parents=True)
     items = workload(lab)
     pd.DataFrame(items).to_csv(rdir / "workload.csv", index=False)
-    meta = {"lab": lab.cfg, "scenarios": scenarios, "udp_limits": udp_limits, "profiles": profiles,
+    meta = {"run_id": run_id, "run_label": label, "started": stamp,
+            "lab": lab.cfg, "scenarios": scenarios, "udp_limits": udp_limits, "profiles": profiles,
             "trials": trials, "environment": environment(lab),
             "manifests": {s: load_manifest(lab, s) for s in scenarios}}
     (rdir / "run.json").write_text(json.dumps(meta, indent=2, default=str))

@@ -57,7 +57,161 @@ ZONE_SIZE_PRESETS: dict[str, dict] = {
         "sld_servers": 2,
         "n_queries_default": 1000,
     },
+    # Numbers come from the sidebar; see custom_shape(). Defaults mirror Medium.
+    "custom": {
+        "label": "Custom…",
+        "name": "eco-ui-custom",
+        "tlds": ["test"],
+        "sld_count": 4,
+        "sld_sizes": [25, 50],
+        "sld_servers": 1,
+        "n_queries_default": 200,
+    },
 }
+
+CUSTOM_SIZE = "custom"
+DEFAULT_SEED = 20261005
+
+# The lab's address plan (ecolab.config) gives TLD servers 10.53.0.11-19 and leaf servers 10.53.0.21-29.
+MAX_TLDS = 9
+MAX_SLD_SERVERS = 9
+_TLD_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,14}$")
+
+# Rough sign-time model, calibrated on the Medium lab (≈520 RRSIGs across root, TLD and leaf zones).
+# Only meant to warn about long Prepares, not to predict them.
+RRSIG_PER_NAME = 3.2
+RRSIG_PER_ZONE = 5
+SIGN_SECONDS_PER_RRSIG = {
+    "rsa": 0.004, "ecdsa": 0.0005, "ed25519": 0.0005, "slh-dsa": 0.23, "mtl": 0.006, "mixed-mtl": 0.006,
+}
+PREPARE_OVERHEAD_S = 1.5          # key generation and checks per zone and scenario
+
+# Defaults for the numbers the Benchmark tile can change (match configs/lab.yaml).
+WORKLOAD_DEFAULTS = {"nx_fraction": 0.10, "zone_zipf_s": 1.0, "name_zipf_s": 1.1, "timeout_s": 5.0}
+PROFILE_DEFAULTS: dict[str, dict[str, float]] = {
+    "lan": {"client_ms": 0, "root_ms": 0, "tld_ms": 0, "sld_ms": 0, "loss_pct": 0},
+    "wan": {"client_ms": 2, "root_ms": 20, "tld_ms": 35, "sld_ms": 50, "loss_pct": 0},
+    "lossy": {"client_ms": 2, "root_ms": 20, "tld_ms": 35, "sld_ms": 50, "loss_pct": 1},
+}
+
+
+def _int_list(text: str) -> list[int]:
+    out = []
+    for tok in re.split(r"[,\s;]+", (text or "").strip()):
+        if tok:
+            out.append(int(tok))
+    return out
+
+
+def custom_shape(*, tlds: str, sld_count: int, sizes: str, servers: int,
+                 seed: int = DEFAULT_SEED) -> tuple[dict | None, list[str], list[str]]:
+    """Validate the Custom zone numbers.
+
+    Returns (shape, errors, warnings). ``shape`` is None when there are errors. Its ``name`` embeds a
+    short hash of the numbers, so signed zones and results of different shapes never share a folder.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    tld_list: list[str] = []
+    for tok in re.split(r"[,\s;]+", (tlds or "").strip().lower()):
+        if tok:
+            tld_list.append(tok.strip("."))
+    if not tld_list:
+        errors.append("Enter at least one TLD.")
+    bad = [t for t in tld_list if not _TLD_RE.match(t)]
+    if bad:
+        errors.append(f"TLD names use letters, digits and '-' (max 15 chars): {', '.join(bad)}.")
+    if len(set(tld_list)) != len(tld_list):
+        errors.append("TLD names must be unique.")
+    if len(tld_list) > MAX_TLDS:
+        errors.append(f"At most {MAX_TLDS} TLDs (the lab's address plan).")
+
+    try:
+        size_list = _int_list(sizes)
+    except ValueError:
+        size_list = []
+        errors.append("Names per leaf zone must be whole numbers, e.g. 25, 100, 250.")
+    else:
+        if not size_list:
+            errors.append("Enter at least one size for names per leaf zone.")
+        elif min(size_list) < 1 or max(size_list) > 20000:
+            errors.append("Names per leaf zone must be between 1 and 20000.")
+        elif len(size_list) > 64:
+            errors.append("At most 64 size entries.")
+
+    sld_count = int(sld_count)
+    servers = int(servers)
+    if not 1 <= sld_count <= 200:
+        errors.append("Leaf zones must be between 1 and 200.")
+    if not 1 <= servers <= MAX_SLD_SERVERS:
+        errors.append(f"Leaf servers must be between 1 and {MAX_SLD_SERVERS}.")
+    elif 1 <= sld_count <= 200 and servers > sld_count:
+        errors.append("More leaf servers than leaf zones: some servers would host nothing.")
+
+    if errors:
+        return None, errors, warnings
+
+    shape = {
+        "label": "Custom…",
+        "tlds": tld_list,
+        "sld_count": sld_count,
+        "sld_sizes": size_list,
+        "sld_servers": servers,
+        "seed": int(seed),
+        "custom": True,
+    }
+    import hashlib
+    digest = hashlib.sha1(json.dumps(
+        [tld_list, sld_count, size_list, servers, int(seed)]).encode()).hexdigest()[:8]
+    shape["name"] = f"eco-ui-custom-{digest}"
+    names = _total_names(shape)
+    shape["n_queries_default"] = max(40, min(2000, names * 2))
+    if names > 2000:
+        warnings.append(f"{names:,} names in total: signing with SLH-DSA will take a long time.")
+    if len(tld_list) + servers + 3 > 12:
+        warnings.append("Many containers will start; check Docker has enough memory.")
+    return shape, errors, warnings
+
+
+def _total_names(shape: dict) -> int:
+    sizes = shape["sld_sizes"]
+    return sum(int(sizes[i % len(sizes)]) for i in range(int(shape["sld_count"])))
+
+
+def shape_for(zone_size: str, custom: dict | None = None) -> tuple[dict | None, list[str], list[str]]:
+    """The zone shape for a preset key, or the validated Custom numbers."""
+    if zone_size == CUSTOM_SIZE:
+        return custom_shape(**(custom or {"tlds": "test", "sld_count": 4, "sizes": "25, 50", "servers": 1}))
+    if zone_size not in ZONE_SIZE_PRESETS:
+        raise ValueError(f"unknown zone size {zone_size!r}")
+    return ZONE_SIZE_PRESETS[zone_size], [], []
+
+
+def shape_stats(shape: dict, scenarios: list[str], jobs: int = 2) -> dict:
+    """Plain numbers describing a zone shape, plus a rough Prepare-time estimate."""
+    zones = 1 + len(shape["tlds"]) + int(shape["sld_count"])
+    names = _total_names(shape)
+    rrsigs = RRSIG_PER_NAME * names + RRSIG_PER_ZONE * zones
+    cpu = sum(SIGN_SECONDS_PER_RRSIG.get(s, 0.01) for s in scenarios) * rrsigs
+    wall = cpu / max(1, int(jobs)) + PREPARE_OVERHEAD_S * zones * max(1, len(scenarios)) / max(1, int(jobs))
+    return {
+        "zones": zones,
+        "names": names,
+        # root + TLD servers + leaf servers, plus the resolver and the client
+        "containers": 1 + len(shape["tlds"]) + int(shape["sld_servers"]) + 2,
+        "est_rrsigs": int(rrsigs),
+        "est_prepare_s": wall,
+    }
+
+
+def format_duration(seconds: float) -> str:
+    s = int(round(seconds))
+    if s < 90:
+        return f"~{max(s, 1)} s"
+    if s < 5400:
+        return f"~{round(s / 60)} min"
+    return f"~{s / 3600:.1f} h"
 
 # ldns-keygen algorithm names (signer already supports RSASHA256 + -b 2048).
 # Classical trio matches main Cipherops: rsa-2048, ecdsa-p256, ed25519.
@@ -123,7 +277,12 @@ class LabHandle:
 
     @property
     def capture_dir(self) -> Path:
-        d = ECO / "results" / self.tag / "live-dashboard"
+        # Pure path: reading it must not create folders, or every zone shape typed into the
+        # Custom fields would leave an empty results folder behind. Writers call ensure_capture_dir().
+        return ECO / "results" / self.tag / "live-dashboard"
+
+    def ensure_capture_dir(self) -> Path:
+        d = self.capture_dir
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -278,14 +437,30 @@ def write_ui_config(
     trials: int = 1,
     network_run: list[str] | None = None,
     udp_limits: list[int] | None = None,
-    seed: int = 20261005,
+    seed: int = DEFAULT_SEED,
+    custom: dict | None = None,
+    workload: dict | None = None,
+    profiles: dict | None = None,
+    shape: dict | None = None,
+    out_config: str = DASHBOARD_CONFIG,
 ) -> str:
-    """Write ``configs/_dashboard.yaml`` from UI options; return relative config path."""
+    """Write a lab config (``configs/_dashboard.yaml`` by default) from UI options; return its relative path.
+
+    ``custom`` holds the Custom zone numbers (used when ``zone_size == "custom"``); ``workload`` and
+    ``profiles`` override WORKLOAD_DEFAULTS / PROFILE_DEFAULTS. A ready-made ``shape`` (the benchmark's
+    own dataset sizes) replaces the zone-size choice.
+    """
     import yaml
 
-    if zone_size not in ZONE_SIZE_PRESETS:
-        raise ValueError(f"unknown zone size {zone_size!r}")
-    preset = ZONE_SIZE_PRESETS[zone_size]
+    if shape is not None:
+        preset, errors, _warnings = shape, [], []
+    else:
+        preset, errors, _warnings = shape_for(zone_size, custom)
+    if errors or preset is None:
+        raise ValueError("; ".join(errors) or "invalid zone shape")
+    seed = int(preset.get("seed", seed))
+    wl = {**WORKLOAD_DEFAULTS, **(workload or {})}
+    prof = {k: {**v, **((profiles or {}).get(k) or {})} for k, v in PROFILE_DEFAULTS.items()}
     chosen = scenarios or ["ecdsa", "slh-dsa", "mtl"]
     bad = [s for s in chosen if s not in SCENARIO_ALGS]
     if bad:
@@ -317,27 +492,23 @@ def write_ui_config(
         },
         "workload": {
             "n_queries": int(n_queries if n_queries is not None else preset["n_queries_default"]),
-            "nx_fraction": 0.10,
-            "zone_zipf_s": 1.0,
-            "name_zipf_s": 1.1,
+            "nx_fraction": float(wl["nx_fraction"]),
+            "zone_zipf_s": float(wl["zone_zipf_s"]),
+            "name_zipf_s": float(wl["name_zipf_s"]),
             "stub_dnssec_ok": False,
-            "timeout_s": 5.0,
+            "timeout_s": float(wl["timeout_s"]),
         },
         "network": {
             "run": list(profiles_run),
-            "profiles": {
-                "lan": {"client_ms": 0, "root_ms": 0, "tld_ms": 0, "sld_ms": 0, "loss_pct": 0},
-                "wan": {"client_ms": 2, "root_ms": 20, "tld_ms": 35, "sld_ms": 50, "loss_pct": 0},
-                "lossy": {"client_ms": 2, "root_ms": 20, "tld_ms": 35, "sld_ms": 50, "loss_pct": 1},
-            },
+            "profiles": prof,
         },
         "trials": int(trials),
         "cpusets": {"client": "3", "unbound": "2", "nsd": "4-5"},
     }
-    path = ECO / DASHBOARD_CONFIG
+    path = ECO / out_config
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
-    return DASHBOARD_CONFIG
+    return out_config
 
 
 def prepare(h: LabHandle, jobs: int = 2, scenarios: list[str] | None = None) -> str:
@@ -345,10 +516,24 @@ def prepare(h: LabHandle, jobs: int = 2, scenarios: list[str] | None = None) -> 
     extra = f" --scenarios {','.join(scenarios)}" if scenarios else ""
     cp = _run([
         "docker", "run", "--rm", "--network", "none",
-        "-v", f"{ECO}:/eco",
-        "-v", f"{REPO / 'src'}:/work/src:ro",
+        "-v", f"{ECO}:/eco:z",
+        "-v", f"{REPO / 'src'}:/work/src:ro,z",
         img,
         f"python3 -m ecolab prepare {h.config} --jobs {jobs}{extra}",
+    ], timeout=None)
+    return cp.stdout + cp.stderr
+
+
+def sign_trials(h: LabHandle, scenarios: list[str], trials: int, names: list[int], out_container_path: str) -> str:
+    """Repeat sign + verify of sample leaf zones in the tools image; CSV goes to ``out_container_path``."""
+    img = f"cipherops-eco-tools:{h.stack}"
+    cp = _run([
+        "docker", "run", "--rm", "--network", "none",
+        "-v", f"{ECO}:/eco:z",
+        "-v", f"{REPO / 'src'}:/work/src:ro,z",
+        img,
+        f"python3 -m ecolab signtrials {h.config} --scenarios {','.join(scenarios)} "
+        f"--trials {int(trials)} --names {','.join(str(int(n)) for n in names)} --out {out_container_path}",
     ], timeout=None)
     return cp.stdout + cp.stderr
 
@@ -360,9 +545,13 @@ def run_benchmark(
     profiles: list[str] | None = None,
     trials: int | None = None,
     udp: int | None = None,
+    run_label: str = "",
 ) -> str:
     """Full ecolab run inside the client (lab must be up). Can take a long time."""
-    flags = []
+    flags = [f"--stamp {time.strftime('%Y%m%d-%H%M%S')}"]
+    label = sanitize_label(run_label)
+    if label:
+        flags.append(f"--run-label {label}")
     if scenarios:
         flags.append(f"--scenarios {','.join(scenarios)}")
     if profiles:
@@ -375,17 +564,86 @@ def run_benchmark(
     return client_exec(h, cmd, timeout=None)
 
 
-def list_run_dirs(h: LabHandle) -> list[Path]:
-    root = ECO / "results" / h.tag
+def sanitize_label(label: str | None) -> str:
+    """Reduce a user-typed run name to a path-safe token (letters, digits, '-', '_'), max 40 chars."""
+    raw = "".join(c if (c.isascii() and c.isalnum()) or c in "-_" else "-" for c in (label or "").strip())
+    return "-".join(p for p in raw.split("-") if p)[:40].strip("_")
+
+
+def list_labs() -> list[dict]:
+    """Every lab folder that has signing data and/or saved benchmark runs, newest activity first."""
+    tags: dict[str, float] = {}
+    for p in (ECO / "work").glob("*/zones/*/manifest.json"):
+        t = p.parents[2].name
+        tags[t] = max(tags.get(t, 0.0), p.stat().st_mtime)
+    for p in (ECO / "results").glob("*/*/summary.csv"):
+        t = p.parents[1].name
+        tags[t] = max(tags.get(t, 0.0), p.stat().st_mtime)
+    return [{"tag": t, "mtime": m} for t, m in sorted(tags.items(), key=lambda kv: kv[1], reverse=True)]
+
+
+def list_run_dirs(h: LabHandle, tag: str | None = None) -> list[Path]:
+    root = ECO / "results" / (tag or h.tag)
     if not root.is_dir():
         return []
     dirs = [p for p in root.iterdir() if p.is_dir() and p.name != "live-dashboard"]
     return sorted(dirs, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
+def list_runs(h: LabHandle, tag: str | None = None) -> list[dict]:
+    """Saved benchmark runs, newest first, with a friendly name, timestamp and what was measured."""
+    out: list[dict] = []
+    for p in list_run_dirs(h, tag):
+        meta: dict = {}
+        mj = p.joinpath("run.json")
+        if mj.is_file():
+            try:
+                meta = json.loads(mj.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                meta = {}
+        stamp, _, tail = p.name.partition("_")
+        label = meta.get("run_label") or tail
+        try:
+            when = datetime.strptime(stamp, "%Y%m%d-%H%M%S").strftime("%d %b %Y, %H:%M:%S")
+        except ValueError:
+            when = datetime.fromtimestamp(p.stat().st_mtime).strftime("%d %b %Y, %H:%M:%S")
+        out.append({
+            "path": p,
+            "folder": p.name,
+            "label": label,
+            "title": f"{label} - {when}" if label else when,
+            "when": when,
+            "scenarios": meta.get("scenarios") or [],
+            "profiles": meta.get("profiles") or [],
+            "trials": meta.get("trials"),
+            "cfg": meta.get("lab") or {},
+            "has_results": any(p.glob("*.csv")),
+        })
+    return out
+
+
+def stop_other_labs(h: LabHandle) -> list[str]:
+    """Bring down any other prepared lab. Container names and the 10.53.0.0/24 subnet are fixed,
+    so only one lab can run at a time; a different zone shape is a different lab."""
+    stopped: list[str] = []
+    work_root = ECO / "work"
+    if not work_root.is_dir():
+        return stopped
+    for compose in work_root.glob("*/compose.yml"):
+        if compose.resolve() == h.compose.resolve():
+            continue
+        cp = _run(["docker", "compose", "-f", str(compose), "ps", "-q"], check=False, timeout=30)
+        if cp.stdout.strip():
+            _run(["docker", "compose", "-f", str(compose), "down"], check=False, timeout=120)
+            stopped.append(compose.parent.name)
+    return stopped
+
+
 def up(h: LabHandle) -> str:
+    stopped = stop_other_labs(h)
     cp = _run(compose_cmd(h, "up", "-d"), timeout=180)
-    return cp.stdout + cp.stderr
+    note = f"Stopped other lab(s) first: {', '.join(stopped)}\n" if stopped else ""
+    return note + cp.stdout + cp.stderr
 
 
 def down(h: LabHandle) -> str:
@@ -435,9 +693,12 @@ def capture_target(server: str) -> tuple[str, str]:
     return "client", "/eco/results"
 
 
-def start_capture(h: LabHandle, name: str | None = None, *, server: str = "10.53.0.53") -> Path:
-    name = name or time.strftime("live-%Y%m%d-%H%M%S.pcap")
-    path = h.capture_dir / name
+def start_capture(h: LabHandle, name: str | None = None, *, server: str = "10.53.0.53",
+                  label: str = "") -> Path:
+    if not name:
+        tag = sanitize_label(label)
+        name = time.strftime(f"live-{tag}-%Y%m%d-%H%M%S.pcap" if tag else "live-%Y%m%d-%H%M%S.pcap")
+    path = h.ensure_capture_dir() / name
     host, results_root = capture_target(server)
     dest = f"{results_root}/{h.tag}/live-dashboard/{name}"
     client_exec(
@@ -446,7 +707,7 @@ def start_capture(h: LabHandle, name: str | None = None, *, server: str = "10.53
         f"control.start_capture({dest!r}, host={host!r}); print('capturing on', {host!r})\"",
         timeout=30,
     )
-    (h.capture_dir / ".current").write_text(
+    (h.ensure_capture_dir() / ".current").write_text(
         json.dumps({"path": str(path), "host": host}), encoding="utf-8",
     )
     return path
@@ -518,8 +779,8 @@ def load_manifest(h: LabHandle, scenario: str) -> dict | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def list_manifests(h: LabHandle) -> dict[str, dict]:
-    zones = h.work / "zones"
+def list_manifests(h: LabHandle, tag: str | None = None) -> dict[str, dict]:
+    zones = (ECO / "work" / tag if tag else h.work) / "zones"
     if not zones.is_dir():
         return {}
     out: dict[str, dict] = {}
@@ -530,10 +791,10 @@ def list_manifests(h: LabHandle) -> dict[str, dict]:
     return out
 
 
-def manifest_rows(h: LabHandle) -> list[dict]:
+def manifest_rows(h: LabHandle, tag: str | None = None) -> list[dict]:
     """Flat rows for Metrics tables: one per zone per scenario."""
     rows = []
-    for scenario, man in list_manifests(h).items():
+    for scenario, man in list_manifests(h, tag).items():
         for z in man.get("zones") or []:
             rows.append({
                 "scenario": scenario,
@@ -606,6 +867,7 @@ def load_session(h: LabHandle) -> dict:
 
 
 def save_session(h: LabHandle, session: dict) -> Path:
+    h.ensure_capture_dir()
     p = session_path(h)
     p.write_text(json.dumps(session, indent=2, default=str), encoding="utf-8")
     return p
@@ -618,7 +880,7 @@ def append_session_query(h: LabHandle, row: dict) -> None:
 
 
 def append_activity_file(h: LabHandle, line: str) -> None:
-    path = h.capture_dir / "activity.log"
+    path = h.ensure_capture_dir() / "activity.log"
     with path.open("a", encoding="utf-8") as f:
         f.write(line.rstrip() + "\n")
 
@@ -651,15 +913,26 @@ def clear_demo_data(
     pcaps: bool = True,
     hide_prepare_metrics: bool = True,
     work: bool = False,
+    benchmarks: bool = False,
+    suites: bool = False,
 ) -> dict[str, int]:
-    """Wipe live-dashboard artifacts; optionally wipe signed work/ too.
+    """Wipe live-dashboard artifacts; optionally wipe signed work/ and saved benchmark runs.
 
     When ``work`` is True, removes ``ecosystem/work/<tag>/`` so Prepare must run again.
+    When ``benchmarks`` is True, removes every saved run folder under ``results/<tag>/``
+    (the live-dashboard folder is handled by the other scopes).
     Does not remove Docker images.
     """
     d = h.capture_dir
     d.mkdir(parents=True, exist_ok=True)
-    removed = {"session": 0, "activity": 0, "pcaps": 0, "work": 0}
+    removed = {"session": 0, "activity": 0, "pcaps": 0, "work": 0, "benchmarks": 0, "suites": 0}
+    if suites:
+        removed["suites"] = clear_suites()
+    if benchmarks:
+        import shutil
+        for run_dir in list_run_dirs(h):
+            shutil.rmtree(run_dir, ignore_errors=True)
+            removed["benchmarks"] += 1
     if session:
         p = session_path(h)
         if p.is_file():
@@ -695,6 +968,70 @@ def clear_demo_data(
             shutil.rmtree(tag_dir, ignore_errors=True)
             removed["work"] = 1
     return removed
+
+
+def _suite_dirs() -> list[Path]:
+    """Everything the Benchmark tile creates: suite records, per-size run folders, per-size signed zones."""
+    out: list[Path] = []
+    suites = ECO / "results" / "suites"
+    if suites.is_dir():
+        out += [p for p in suites.iterdir() if p.is_dir()]
+    out += [p for p in (ECO / "results").glob("eco-bench-*") if p.is_dir()]
+    out += [p for p in (ECO / "work").glob("eco-bench-*") if p.is_dir()]
+    return out
+
+
+def suite_footprint() -> dict:
+    dirs = _suite_dirs()
+    return {"suites": len([p for p in dirs if p.parent.name == "suites"]),
+            "bytes": sum(_dir_size(p) for p in dirs)}
+
+
+def clear_suites() -> int:
+    """Delete benchmark suites, their per-size runs and signed zones; returns the number of suites removed."""
+    import shutil
+    for compose in (ECO / "work").glob("eco-bench-*/compose.yml"):
+        _run(["docker", "compose", "-f", str(compose), "down"], check=False, timeout=120)
+    n = suite_footprint()["suites"]
+    for p in _suite_dirs():
+        shutil.rmtree(p, ignore_errors=True)
+    for cfgf in (ECO / "configs").glob("_bench-*.yaml"):
+        cfgf.unlink(missing_ok=True)
+    return n
+
+
+def _dir_size(path: Path) -> int:
+    total = 0
+    for p in path.rglob("*"):
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def reset_preview(h: LabHandle) -> dict:
+    """What each Reset scope would remove right now (counts and bytes), without touching anything."""
+    d = h.capture_dir
+    pcaps = list(d.glob("*.pcap"))
+    session = session_path(h)
+    session_queries_n = len(load_session(h).get("queries") or []) if session.is_file() else 0
+    activity_log = d / "activity.log"
+    runs = list_run_dirs(h)
+    sf = suite_footprint()
+    return {
+        "suites": sf["suites"],
+        "suite_bytes": sf["bytes"],
+        "session_queries": session_queries_n,
+        "activity_bytes": activity_log.stat().st_size if activity_log.is_file() else 0,
+        "pcaps": len(pcaps),
+        "pcap_bytes": sum(p.stat().st_size for p in pcaps if p.is_file()),
+        "runs": len(runs),
+        "run_bytes": sum(_dir_size(r) for r in runs),
+        "work_exists": h.work.is_dir(),
+        "work_bytes": _dir_size(h.work) if h.work.is_dir() else 0,
+    }
 
 
 def set_show_prepare_metrics(h: LabHandle, visible: bool) -> None:

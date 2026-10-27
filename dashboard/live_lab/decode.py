@@ -306,14 +306,37 @@ def _seq_label(row) -> str:
     label = f"{qtype} {disp}".strip() if (qtype or disp) else (phase or "msg")
     if bool(row.get("is_resp")):
         note = "OK"
-        if row.get("ad"):
+        if "FULL" in str(row.get("rrsigs") or "") or row.get("mtl_full"):
+            note = "MTL-FULL"
+        elif row.get("ad"):
             note = "AD"
         elif phase.startswith("referral"):
             note = "referral"
-        elif "FULL" in str(row.get("rrsigs") or "") or row.get("mtl_full"):
-            note = "MTL-FULL"
         label = f"{label} [{note}]".strip()
     return " ".join(str(label).replace("\n", " ").split())[:56] or "msg"
+
+
+def format_bytes(n) -> str:
+    """Humanize byte counts for arrow chips (B under 1 KB)."""
+    try:
+        v = int(n)
+    except (TypeError, ValueError):
+        return "?"
+    if v < 1024:
+        return f"{v} B"
+    if v < 1024 * 1024:
+        return f"{v / 1024:.1f} KB"
+    return f"{v / (1024 * 1024):.2f} MB"
+
+
+def _row_num(row, key: str, default: float = 0.0) -> float:
+    try:
+        v = row.get(key)
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return default
+        return float(v)
+    except (TypeError, ValueError):
+        return default
 
 
 def build_sequence_steps(df: pd.DataFrame) -> list[dict]:
@@ -326,10 +349,10 @@ def build_sequence_steps(df: pd.DataFrame) -> list[dict]:
 
     steps: list[dict] = []
     seen: set[tuple] = set()
+    prev_ms: float | None = None
     for _, r in interesting.iterrows():
         parts = _split_hop(str(r.get("hop") or ""))
         if not parts:
-            # Prefer explicit IPs when present (added by decode_pcap).
             src = _actor_from_endpoint(str(r.get("src_ip") or ""))
             dst = _actor_from_endpoint(str(r.get("dst_ip") or ""))
         else:
@@ -343,10 +366,226 @@ def build_sequence_steps(df: pd.DataFrame) -> list[dict]:
         if key in seen:
             continue
         seen.add(key)
-        steps.append({"src": src, "dst": dst, "label": label, "response": is_resp})
+        ms = _row_num(r, "ms", 0.0)
+        delta = None if prev_ms is None else round(ms - prev_ms, 2)
+        prev_ms = ms
+        phase = str(r.get("phase") or "")
+        mtl_full = bool(r.get("mtl_full")) or ("FULL" in str(r.get("rrsigs") or ""))
+        try:
+            packet_no = int(_row_num(r, "#", len(steps) + 1))
+        except (TypeError, ValueError):
+            packet_no = len(steps) + 1
+        steps.append({
+            "src": src,
+            "dst": dst,
+            "label": label,
+            "response": is_resp,
+            "bytes": int(_row_num(r, "bytes", 0)),
+            "ms": round(ms, 2),
+            "delta_ms": delta,
+            "packet_no": packet_no,
+            "phase": phase,
+            "phase_label": str(r.get("phase_label") or PHASE_LABELS.get(phase, phase) or ""),
+            "proto": str(r.get("proto") or ""),
+            "mtl_full": mtl_full,
+            "ad": bool(r.get("ad")),
+        })
         if len(steps) >= 24:
             break
     return steps
+
+
+def sequence_summary(steps: list[dict]) -> dict:
+    """Compact metrics for the sequence chrome strip."""
+    if not steps:
+        return {
+            "messages": 0,
+            "client_bytes": 0,
+            "max_bytes": 0,
+            "span_ms": 0.0,
+            "mtl_full": 0,
+        }
+    client_bytes = 0
+    for s in steps:
+        pair = {s["src"], s["dst"]}
+        if "Client" in pair:
+            client_bytes += int(s.get("bytes") or 0)
+    sizes = [int(s.get("bytes") or 0) for s in steps]
+    times = [float(s.get("ms") or 0) for s in steps]
+    return {
+        "messages": len(steps),
+        "client_bytes": client_bytes,
+        "max_bytes": max(sizes) if sizes else 0,
+        "span_ms": round(max(times) - min(times), 2) if times else 0.0,
+        "mtl_full": sum(1 for s in steps if s.get("mtl_full")),
+    }
+
+
+def _arrow_display_label(step: dict) -> str:
+    size = format_bytes(step.get("bytes"))
+    base = str(step.get("label") or "msg")
+    return f"{base} · {size}"
+
+
+def _hover_text(step: dict) -> str:
+    delta = step.get("delta_ms")
+    delta_s = "—" if delta is None else f"{delta} ms"
+    flags = []
+    if step.get("ad"):
+        flags.append("AD")
+    if step.get("mtl_full"):
+        flags.append("MTL-FULL")
+    if str(step.get("phase") or "").startswith("referral"):
+        flags.append("referral")
+    flag_s = ", ".join(flags) if flags else "—"
+    kind = "response" if step.get("response") else "query"
+    return (
+        f"<b>{step['src']} → {step['dst']}</b><br>"
+        f"{step.get('label') or 'msg'}<br>"
+        f"Bytes: <b>{int(step.get('bytes') or 0):,}</b> ({format_bytes(step.get('bytes'))})<br>"
+        f"t = {step.get('ms', 0)} ms · Δ = {delta_s}<br>"
+        f"Packet #{step.get('packet_no', '?')} · {step.get('proto') or '?'} · {kind}<br>"
+        f"Phase: {step.get('phase_label') or step.get('phase') or '—'}<br>"
+        f"Flags: {flag_s}"
+    )
+
+
+def sequence_plotly_figure(steps: list[dict]):
+    """Interactive sequence diagram with size on arrows and rich hover."""
+    import plotly.graph_objects as go
+
+    if not steps:
+        raise ValueError("no sequence steps to draw")
+
+    actors = list(_SEQ_ACTORS)
+    xpos = {a: i for i, a in enumerate(actors)}
+    n = len(steps)
+    fig = go.Figure()
+
+    # Lifelines
+    y_top, y_bot = -0.35, n - 0.15
+    for a in actors:
+        x = xpos[a]
+        fig.add_shape(
+            type="line", x0=x, x1=x, y0=y_top, y1=y_bot,
+            line=dict(color="#888888", width=1.5),
+        )
+        for y in (y_top - 0.15, y_bot + 0.25):
+            fig.add_annotation(
+                x=x, y=y, text=f"<b>{a}</b>", showarrow=False,
+                bgcolor="#eef3ff", bordercolor="#111111", borderwidth=1,
+                font=dict(size=12, color="#111111"),
+            )
+
+    max_b = max((int(s.get("bytes") or 0) for s in steps), default=1) or 1
+
+    for i, step in enumerate(steps):
+        src, dst = step["src"], step["dst"]
+        if src not in xpos or dst not in xpos:
+            continue
+        x0, x1 = xpos[src], xpos[dst]
+        y = float(i)
+        nbytes = int(step.get("bytes") or 0)
+        # Stroke width scales mildly with payload (1.5 … 4.5)
+        width = 1.5 + 3.0 * min(nbytes / max_b, 1.0)
+        if step.get("mtl_full"):
+            color = "#C4782A"
+        elif step.get("response"):
+            color = "#1F4E79"
+        else:
+            color = "#111111"
+        dash = "dash" if step.get("response") else "solid"
+        direction = 1.0 if x1 > x0 else -1.0
+
+        # Shaft runs exactly lifeline-to-lifeline so both ends touch the actor spines.
+        fig.add_trace(go.Scatter(
+            x=[x0, x1], y=[y, y],
+            mode="lines",
+            line=dict(color=color, width=width, dash=dash),
+            hoverinfo="skip",
+            showlegend=False,
+        ))
+        # Arrowhead only: a very short solid stub whose tip sits on the destination lifeline.
+        fig.add_annotation(
+            x=x1, y=y, ax=x1 - direction * 0.07, ay=y,
+            xref="x", yref="y", axref="x", ayref="y",
+            showarrow=True,
+            arrowhead=2, arrowsize=1.4, arrowwidth=min(width, 2.5),
+            arrowcolor=color,
+            standoff=0, startstandoff=0,
+        )
+        fig.add_trace(go.Scatter(
+            x=[(x0 + x1) / 2], y=[y],
+            mode="markers+text",
+            marker=dict(size=18, color="rgba(255,255,255,0.01)"),
+            text=[_arrow_display_label(step)],
+            textposition="top center",
+            textfont=dict(size=11, color="#111111"),
+            hovertext=[_hover_text(step)],
+            hoverinfo="text",
+            showlegend=False,
+        ))
+
+    # Legend proxies
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None], mode="lines",
+        line=dict(color="#111111", width=2, dash="solid"),
+        name="Query",
+    ))
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None], mode="lines",
+        line=dict(color="#1F4E79", width=2, dash="dash"),
+        name="Response",
+    ))
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None], mode="lines",
+        line=dict(color="#C4782A", width=3, dash="solid"),
+        name="MTL-FULL",
+    ))
+
+    # Force light-theme ink: Streamlit dark theme otherwise paints legend/hover white-on-white.
+    fig.update_layout(
+        template="plotly_white",
+        height=max(460, 140 + 52 * n),
+        margin=dict(l=40, r=40, t=72, b=48),
+        plot_bgcolor="#ffffff",
+        paper_bgcolor="#ffffff",
+        font=dict(color="#111111", size=12),
+        xaxis=dict(
+            range=[-0.5, len(actors) - 0.5],
+            tickvals=list(range(len(actors))),
+            ticktext=actors,
+            showgrid=False, zeroline=False, visible=False,
+        ),
+        yaxis=dict(
+            range=[n - 0.25, -1.05],
+            showgrid=False, zeroline=False, visible=False,
+            autorange=False,
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.08,
+            x=0,
+            font=dict(color="#111111", size=13),
+            bgcolor="#ffffff",
+            bordercolor="#bbbbbb",
+            borderwidth=1,
+            itemsizing="constant",
+        ),
+        hoverlabel=dict(
+            bgcolor="#ffffff",
+            bordercolor="#222222",
+            font=dict(size=13, color="#111111", family="Segoe UI, Arial, sans-serif"),
+            align="left",
+        ),
+        hovermode="closest",
+    )
+    # Pin legend/hover colors even if a parent theme tries to restyle traces
+    fig.update_traces(selector=dict(name="Query"), line=dict(color="#111111"))
+    fig.update_traces(selector=dict(name="Response"), line=dict(color="#1F4E79"))
+    fig.update_traces(selector=dict(name="MTL-FULL"), line=dict(color="#C4782A"))
+    return fig
 
 
 def sequence_png_bytes(steps: list[dict]) -> bytes:
@@ -369,7 +608,8 @@ def sequence_png_bytes(steps: list[dict]) -> bytes:
     ax.set_ylim(n + 0.85, -0.55)
     ax.axis("off")
 
-    # Lifelines + participant boxes
+    max_b = max((int(s.get("bytes") or 0) for s in steps), default=1) or 1
+
     for a, x in xpos.items():
         ax.plot([x, x], [-0.15, n + 0.35], color="#444444", lw=1.2, zorder=1)
         for y in (-0.35, n + 0.55):
@@ -390,25 +630,29 @@ def sequence_png_bytes(steps: list[dict]) -> bytes:
     for i, step in enumerate(steps):
         y = i + 0.35
         x0, x1 = xpos[step["src"]], xpos[step["dst"]]
-        style = "arc3,rad=0"
-        color = "#111111"
+        nbytes = int(step.get("bytes") or 0)
+        width = 1.4 + 2.5 * min(nbytes / max_b, 1.0)
+        if step.get("mtl_full"):
+            color = "#C4782A"
+        else:
+            color = "#111111"
         ls = "--" if step.get("response") else "-"
         arrow = FancyArrowPatch(
             (x0, y),
             (x1, y),
             arrowstyle="-|>",
             mutation_scale=12,
-            linewidth=1.4,
+            linewidth=width,
             linestyle=ls,
             color=color,
-            connectionstyle=style,
+            connectionstyle="arc3,rad=0",
             zorder=2,
         )
         ax.add_patch(arrow)
         ax.text(
             (x0 + x1) / 2,
             y - 0.18,
-            step["label"],
+            _arrow_display_label(step),
             ha="center",
             va="bottom",
             fontsize=8.5,

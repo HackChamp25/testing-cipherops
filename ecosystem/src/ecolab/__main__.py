@@ -1,6 +1,7 @@
 """ecolab command line.
 
   prepare CONFIG             sign every scenario (tools image of the stack) and write the compose file
+  signtrials CONFIG          repeat sign + verify of a sample leaf zone (CSV: one row per trial)
   smoke   CONFIG             resolve a few names per scenario through Unbound and require AD (validated)
   run     CONFIG             full trials; results in ecosystem/results/<lab>/<run id>/
   summary RUN_DIR            rebuild summary.csv from passes.csv
@@ -37,6 +38,24 @@ def cmd_prepare(a) -> None:
     path = write_compose(lab, lab.stack)
     write_active(lab, scenarios[0], load_manifest(lab, scenarios[0]), int(lab.cfg["resolver"]["udp_limits"][0]))
     print(f"Compose file: ecosystem/{path.relative_to(path.parents[2]).as_posix()}")
+
+
+def cmd_signtrials(a) -> None:
+    import csv
+
+    from .sign import sign_trials
+
+    lab = load(a.config)
+    rows = []
+    for s in _list(a.scenarios, lab.cfg["scenarios"]):
+        rows += sign_trials(lab, s, a.trials, [int(x) for x in _list(a.names, [100])])
+    out = Path(a.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    print(f"Signing trials: {out}")
 
 
 def cmd_smoke(a) -> int:
@@ -89,7 +108,8 @@ def cmd_run(a) -> None:
                _list(a.scenarios, lab.cfg["scenarios"]),
                [int(x) for x in _list(a.udp, lab.cfg["resolver"]["udp_limits"])],
                _list(a.profiles, lab.cfg["network"]["run"]),
-               int(a.trials or lab.cfg["trials"]))
+               int(a.trials or lab.cfg["trials"]),
+               run_label=a.run_label or "", stamp=a.stamp or "")
     print(f"Results: {rdir}")
 
 
@@ -150,6 +170,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--scenarios")
     p.add_argument("--jobs", type=int, default=4)
     p.set_defaults(fn=cmd_prepare)
+    p = sub.add_parser("signtrials")
+    p.add_argument("config")
+    p.add_argument("--scenarios")
+    p.add_argument("--trials", type=int, default=3)
+    p.add_argument("--names", default="100,25", help="data names in each sample zone, comma separated")
+    p.add_argument("--out", required=True, help="CSV path as seen in the container, e.g. /eco/results/...")
+    p.set_defaults(fn=cmd_signtrials)
     p = sub.add_parser("smoke")
     p.add_argument("config")
     p.add_argument("--scenarios")
@@ -160,6 +187,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--udp")
     p.add_argument("--profiles")
     p.add_argument("--trials", type=int)
+    p.add_argument("--run-label", default="", help="name for this run, appended to the timestamped folder")
+    p.add_argument("--stamp", default="", help="YYYYMMDD-HHMMSS to use in the run folder name (default: now)")
     p.set_defaults(fn=cmd_run)
     p = sub.add_parser("summary")
     p.add_argument("run_dir")

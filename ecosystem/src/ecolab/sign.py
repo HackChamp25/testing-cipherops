@@ -122,3 +122,34 @@ def check_frozen(lab: Lab, scenario: str) -> None:
         f = lab.work / "zones" / scenario / z["signed_file"]
         if _sha256(f) != z["signed_sha256"]:
             raise RuntimeError(f"{f} changed since signing (SHA-256 mismatch)")
+
+
+def sign_trials(lab: Lab, scenario: str, trials: int, names: list[int], log=print) -> list[dict]:
+    """Repeat signing and verification of sample leaf zones; one row per trial and sample size.
+
+    Each sample uses the scenario's leaf-tier algorithm and the same synthetic content generator as the
+    real zones. Two or more sample sizes let the report separate the fixed cost per zone from the cost
+    per RRSIG, and extrapolate to the whole dataset without signing it again for every trial. Nothing
+    here is served: the frozen zones from sign_scenario stay untouched.
+    """
+    tld = next(z for z in lab.zones if z.tier == "tld")
+    first = next(z for z in lab.zones if z.tier == "sld")
+    rows = []
+    base = lab.work / "signtrials" / scenario
+    for t in range(1, int(trials) + 1):
+        for n in names:
+            spec = ZoneSpec(f"sample.{tld.origin}", "sld", first.server, tld.origin, int(n),
+                            int(lab.cfg["seed"]) + 104729)
+            out = base / f"t{t}-n{n}"
+            if out.exists():
+                shutil.rmtree(out)
+            out.mkdir(parents=True)
+            r = sign_zone(lab, scenario, spec, {}, out)
+            rows.append({"scenario": scenario, "trial": t, "names": spec.n_names, "algorithm": r["algorithm"],
+                         "rrsigs": r["rrsig_count"], "sign_s": r["sign_seconds"], "verify_s": r["verify_seconds"],
+                         "signed_bytes": r["signed_bytes"]})
+            log(f"  [{scenario}] trial {t}/{trials}, {n} names: {r['rrsig_count']} RRSIGs, "
+                f"sign {r['sign_seconds']:.2f} s, verify {r['verify_seconds']:.3f} s")
+            shutil.rmtree(out, ignore_errors=True)
+    shutil.rmtree(base, ignore_errors=True)
+    return rows
