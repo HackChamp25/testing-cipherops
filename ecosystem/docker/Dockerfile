@@ -117,7 +117,7 @@ FROM unbound AS tools
 ARG STACK LDNS_COMMIT NSD_COMMIT UNBOUND_COMMIT MTL_COMMIT LIBOQS_TAG
 COPY --from=ldns-build /out/usr/local /usr/local
 COPY --from=nsd-build /out/usr/local/bin/nsd-checkzone /usr/local/bin/nsd-checkzone
-RUN ldconfig && dnf -y install python3-pip && dnf clean all
+RUN ldconfig && dnf -y install python3-pip bind-utils && dnf clean all
 COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
 ENV ECO_STACK=${STACK} ECO_LDNS_COMMIT=${LDNS_COMMIT} ECO_NSD_COMMIT=${NSD_COMMIT} \
