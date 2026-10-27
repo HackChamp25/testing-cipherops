@@ -30,14 +30,14 @@ def compose(lab: Lab, stack: str) -> dict:
     for s in lab.servers.values():
         services[s.name] = {
             "image": f"cipherops-eco-nsd:{stack}", "container_name": container(s.name), "hostname": s.name,
-            "networks": {"dnsnet": {"ipv4_address": s.ip}}, "volumes": ["./:/lab:ro"],
+            "networks": {"dnsnet": {"ipv4_address": s.ip}}, "volumes": ["./:/lab:ro,z"],
             "command": [f"exec nsd -d -c /lab/active/nsd/{s.name}.conf"],
             **({"cpuset": str(cpus["nsd"])} if cpus.get("nsd") else {}),
         }
     services["unbound"] = {
         "image": f"cipherops-eco-unbound:{stack}", "container_name": container("unbound"), "hostname": "unbound",
         "networks": {"dnsnet": {"ipv4_address": UNBOUND_IP}}, "cap_add": ["NET_ADMIN"],
-        "volumes": ["./:/lab:ro", "../../results:/results"],
+        "volumes": ["./:/lab:ro,z", "../../results:/results:z"],
         # Unbound is restarted in place for every cold pass (see control.flush_resolver), so the
         # container, its tc shaping and its network namespace outlive the process.
         "command": ["trap 'kill $$p 2>/dev/null; exit 0' TERM INT; "
@@ -48,7 +48,9 @@ def compose(lab: Lab, stack: str) -> dict:
     services["client"] = {
         "image": f"cipherops-eco-tools:{stack}", "container_name": container("client"), "hostname": "client",
         "networks": {"dnsnet": {"ipv4_address": CLIENT_IP}},
-        "volumes": ["../../:/eco", "../../../src:/work/src:ro", "/var/run/docker.sock:/var/run/docker.sock"],
+        "volumes": ["../../:/eco:z", "../../../src:/work/src:ro,z", "/var/run/docker.sock:/var/run/docker.sock"],
+        # SELinux denies container_t access to docker.sock; the client drives the lab via the Docker API.
+        "security_opt": ["label=disable"],
         "environment": {"ECO_LAB": lab.name, "CIPHEROPS_GIT_SHA": "${CIPHEROPS_GIT_SHA:-unknown}"},
         "command": ["exec sleep infinity"],
         "depends_on": ["unbound"],

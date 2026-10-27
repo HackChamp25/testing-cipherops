@@ -516,8 +516,8 @@ def prepare(h: LabHandle, jobs: int = 2, scenarios: list[str] | None = None) -> 
     extra = f" --scenarios {','.join(scenarios)}" if scenarios else ""
     cp = _run([
         "docker", "run", "--rm", "--network", "none",
-        "-v", f"{ECO}:/eco",
-        "-v", f"{REPO / 'src'}:/work/src:ro",
+        "-v", f"{ECO}:/eco:z",
+        "-v", f"{REPO / 'src'}:/work/src:ro,z",
         img,
         f"python3 -m ecolab prepare {h.config} --jobs {jobs}{extra}",
     ], timeout=None)
@@ -529,8 +529,8 @@ def sign_trials(h: LabHandle, scenarios: list[str], trials: int, names: list[int
     img = f"cipherops-eco-tools:{h.stack}"
     cp = _run([
         "docker", "run", "--rm", "--network", "none",
-        "-v", f"{ECO}:/eco",
-        "-v", f"{REPO / 'src'}:/work/src:ro",
+        "-v", f"{ECO}:/eco:z",
+        "-v", f"{REPO / 'src'}:/work/src:ro,z",
         img,
         f"python3 -m ecolab signtrials {h.config} --scenarios {','.join(scenarios)} "
         f"--trials {int(trials)} --names {','.join(str(int(n)) for n in names)} --out {out_container_path}",
