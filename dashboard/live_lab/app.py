@@ -1630,11 +1630,29 @@ def benchmark_results(h: driver.LabHandle) -> None:
                                     "servfail", "timeouts"] if c in summary.columns]
                 st.dataframe(summary[cols], width="stretch", hide_index=True)
                 _bench_charts(summary)
-    d1, d2 = st.columns(2)
+    report_html = by[pick]["path"] / "report.html"
+    report_md = by[pick]["path"] / "report.md"
+    if not report_html.is_file() or not report_md.is_file():
+        try:
+            from live_lab import suite_report
+            suite_report.write(by[pick]["path"])
+            report_html = by[pick]["path"] / "report.html"
+            report_md = by[pick]["path"] / "report.md"
+        except Exception as e:  # noqa: BLE001
+            st.caption(f"Report not generated yet: {e}")
+    d0, d1, d2 = st.columns(3)
+    if report_html.is_file():
+        d0.download_button("Download report (HTML)", data=report_html.read_bytes(),
+                           file_name=f"{pick}-report.html", mime="text/html", key="bench_dl_report_html")
+    elif report_md.is_file():
+        d0.download_button("Download report (Markdown)", data=report_md.read_text(encoding="utf-8"),
+                           file_name=f"{pick}-report.md", mime="text/markdown", key="bench_dl_report_md")
     d1.download_button("Download signing trials (CSV)", data=sd["trials"].to_csv(index=False),
                        file_name=f"{pick}-signing-trials.csv", mime="text/csv", key="bench_dl_trials")
     d2.download_button("Download full-zone signing (CSV)", data=sd["full"].to_csv(index=False),
                        file_name=f"{pick}-signing-full.csv", mime="text/csv", key="bench_dl_full")
+    if report_html.is_file():
+        st.caption(f"Reproducible report on disk: `{report_html}` (also `report.md` and `figures/`).")
 
 
 def _bench_charts(summary: pd.DataFrame) -> None:

@@ -256,6 +256,12 @@ def run_suite(p: dict) -> None:
                  "sizes_detail": detail,
                  "host": {"platform": platform.platform(), "cpus": os.cpu_count(), "python": platform.python_version()}}
         (r.dir / "suite.json").write_text(json.dumps(suite, indent=2), encoding="utf-8")
+        try:
+            from live_lab import suite_report
+            report = suite_report.write(r.dir)
+            r.log(f"report: {report}")
+        except Exception as e:  # noqa: BLE001 — measurements already saved; report is additive
+            r.log(f"report generation failed: {e}")
         r.st.update(state="done", step="finished", updated=time.time())
         r.write()
         r.log(f"suite finished in {suite['seconds']} s")
