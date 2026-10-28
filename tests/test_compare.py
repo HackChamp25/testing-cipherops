@@ -9,7 +9,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "dashboard"))
 
-from live_lab import compare, suite  # noqa: E402
+from live_lab import compare, suite, suite_report  # noqa: E402
 
 
 def test_bench_shape_keeps_hierarchy_and_sums_to_dataset():
@@ -72,3 +72,20 @@ def test_headline_ratios_from_a_merged_frame():
     assert cards["Signing time"] == "20× faster"
     assert cards["Signed size"] == "10× smaller"
     assert cards["Resolver cache"] == "10× less memory"
+
+
+def test_suite_report_writes_md_html_when_suite_present(tmp_path):
+    """Smoke: regenerate from the finished local suite if it exists; otherwise skip."""
+    suites = ROOT / "ecosystem" / "results" / "suites"
+    if not suites.is_dir():
+        pytest.skip("no suites directory")
+    finished = sorted(
+        (p for p in suites.iterdir() if p.is_dir() and (p / "suite.json").is_file()),
+        key=lambda p: p.stat().st_mtime, reverse=True,
+    )
+    if not finished:
+        pytest.skip("no finished suite on disk")
+    out = suite_report.write(finished[0])
+    assert out.is_file() and "PS-036" in out.read_text(encoding="utf-8")
+    html = out.with_suffix(".html")
+    assert html.is_file() and "Signing" in html.read_text(encoding="utf-8")

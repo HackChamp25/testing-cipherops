@@ -195,7 +195,7 @@ def decode_pcap(path: Path | str) -> pd.DataFrame:
             }
             phase = _phase_for_row(hop, info, "UDP")
             rows.append({
-                **base, "proto": "UDP", "bytes": dns_len,
+                **base, "proto": "UDP", "bytes": dns_len, "dns_bytes": dns_len,
                 "phase": phase, "phase_label": PHASE_LABELS.get(phase, phase), **info,
             })
         elif ip[9] == 6 and len(body) >= 20:
@@ -209,6 +209,10 @@ def decode_pcap(path: Path | str) -> pd.DataFrame:
             info = {"summary": summary, "qname": "", "qtype": "", "rcode": "", "flags": "",
                     "ad": False, "aa": False, "tc": False, "mtl_full": False, "rrsigs": "",
                     "an": 0, "ns": 0, "is_resp": False}
+            # Wire bytes = this TCP segment payload. dns_bytes = reassembled DNS
+            # message length when this segment completed a message (TCP length prefix).
+            dns_bytes = None
+            pending_dns = None
             if data:
                 st["buf"] += data
                 parts = []
@@ -216,14 +220,17 @@ def decode_pcap(path: Path | str) -> pd.DataFrame:
                     ln = struct.unpack(">H", st["buf"][:2])[0]
                     if len(st["buf"]) < 2 + ln:
                         parts.append(f"(segment of {ln} B DNS)")
+                        pending_dns = ln
                         break
                     info = _describe(st["buf"][2:2 + ln])
                     parts.append(f"len={ln} {info['summary']}")
+                    dns_bytes = ln
                     st["buf"] = st["buf"][2 + ln:]
                 info = {**info, "summary": " | ".join(parts) if parts else summary}
             phase = _phase_for_row(hop, info, "TCP")
             rows.append({
                 **base, "proto": "TCP", "bytes": len(data),
+                "dns_bytes": dns_bytes if dns_bytes is not None else pending_dns,
                 "phase": phase, "phase_label": PHASE_LABELS.get(phase, phase), **info,
             })
     return pd.DataFrame(rows)
@@ -305,15 +312,26 @@ def _seq_label(row) -> str:
     disp = qname.rstrip(".") if qname and qname != "." else ("root" if qname == "." else "")
     label = f"{qtype} {disp}".strip() if (qtype or disp) else (phase or "msg")
     if bool(row.get("is_resp")):
-        note = "OK"
-        if "FULL" in str(row.get("rrsigs") or "") or row.get("mtl_full"):
+        rcode = str(row.get("rcode") or "").strip()
+        if rcode.lower() in {"nan", "none"}:
+            rcode = ""
+        full = ("FULL" in str(row.get("rrsigs") or "")) or bool(row.get("mtl_full"))
+        # Real rcode beats the hop phase. Root NXDOMAIN was tagged [referral]
+        # and, sitting next to a later SLD query, looked like Root answered the SLD.
+        if rcode and rcode not in {"NOERROR"}:
+            note = f"{rcode} MTL-FULL" if full else rcode
+        elif full:
             note = "MTL-FULL"
         elif row.get("ad"):
             note = "AD"
+        elif row.get("tc"):
+            note = "TC referral" if phase.startswith("referral") else "TC"
         elif phase.startswith("referral"):
             note = "referral"
+        else:
+            note = "OK"
         label = f"{label} [{note}]".strip()
-    return " ".join(str(label).replace("\n", " ").split())[:56] or "msg"
+    return " ".join(str(label).replace("\n", " ").split())[:72] or "msg"
 
 
 def format_bytes(n) -> str:
@@ -375,12 +393,18 @@ def build_sequence_steps(df: pd.DataFrame) -> list[dict]:
             packet_no = int(_row_num(r, "#", len(steps) + 1))
         except (TypeError, ValueError):
             packet_no = len(steps) + 1
+        # Prefer reassembled DNS length over TCP segment size so Max answer
+        # matches Queries tcp_response_bytes / summary len=… (not one segment).
+        dns_b = _row_num(r, "dns_bytes", 0.0)
+        wire_b = _row_num(r, "bytes", 0.0)
+        show_b = int(dns_b if dns_b > 0 else wire_b)
         steps.append({
             "src": src,
             "dst": dst,
             "label": label,
             "response": is_resp,
-            "bytes": int(_row_num(r, "bytes", 0)),
+            "bytes": show_b,
+            "wire_bytes": int(wire_b),
             "ms": round(ms, 2),
             "delta_ms": delta,
             "packet_no": packet_no,
@@ -389,9 +413,8 @@ def build_sequence_steps(df: pd.DataFrame) -> list[dict]:
             "proto": str(r.get("proto") or ""),
             "mtl_full": mtl_full,
             "ad": bool(r.get("ad")),
+            "rcode": str(r.get("rcode") or ""),
         })
-        if len(steps) >= 24:
-            break
     return steps
 
 
@@ -514,17 +537,31 @@ def sequence_plotly_figure(steps: list[dict]):
             arrowcolor=color,
             standoff=0, startstandoff=0,
         )
+        # Hover target stays on the shaft; the readable label is anchored at the
+        # SENDER. A centered label on Unbound→SLD was landing on Root/TLD and
+        # looked like the wrong server had answered.
         fig.add_trace(go.Scatter(
             x=[(x0 + x1) / 2], y=[y],
-            mode="markers+text",
-            marker=dict(size=18, color="rgba(255,255,255,0.01)"),
-            text=[_arrow_display_label(step)],
-            textposition="top center",
-            textfont=dict(size=11, color="#111111"),
+            mode="markers",
+            marker=dict(size=14, color="rgba(255,255,255,0.01)"),
             hovertext=[_hover_text(step)],
             hoverinfo="text",
             showlegend=False,
         ))
+        span = x1 - x0
+        if span >= 0:
+            lx = x0 + min(0.12, abs(span) * 0.08)
+            xanchor = "left"
+        else:
+            lx = x0 - min(0.12, abs(span) * 0.08)
+            xanchor = "right"
+        fig.add_annotation(
+            x=lx, y=y, text=_arrow_display_label(step),
+            showarrow=False, xanchor=xanchor, yanchor="bottom",
+            yshift=1,
+            font=dict(size=10, color="#111111"),
+            bgcolor="rgba(255,255,255,0.92)",
+        )
 
     # Legend proxies
     fig.add_trace(go.Scatter(
@@ -546,7 +583,7 @@ def sequence_plotly_figure(steps: list[dict]):
     # Force light-theme ink: Streamlit dark theme otherwise paints legend/hover white-on-white.
     fig.update_layout(
         template="plotly_white",
-        height=max(460, 140 + 52 * n),
+        height=max(520, 160 + 58 * n),
         margin=dict(l=40, r=40, t=72, b=48),
         plot_bgcolor="#ffffff",
         paper_bgcolor="#ffffff",
@@ -649,16 +686,23 @@ def sequence_png_bytes(steps: list[dict]) -> bytes:
             zorder=2,
         )
         ax.add_patch(arrow)
+        span = x1 - x0
+        if span >= 0:
+            tx = x0 + min(0.15, abs(span) * 0.12)
+            ha = "left"
+        else:
+            tx = x0 - min(0.15, abs(span) * 0.12)
+            ha = "right"
         ax.text(
-            (x0 + x1) / 2,
-            y - 0.18,
+            tx,
+            y - 0.02,
             _arrow_display_label(step),
-            ha="center",
+            ha=ha,
             va="bottom",
-            fontsize=8.5,
+            fontsize=7.5,
             color="#111111",
-            bbox=dict(boxstyle="round,pad=0.15", facecolor="#ffffff", edgecolor="#cccccc", linewidth=0.6),
             zorder=5,
+            bbox=dict(boxstyle="round,pad=0.15", facecolor="#ffffff", edgecolor="#cccccc", linewidth=0.4),
         )
 
     buf = io.BytesIO()
@@ -736,15 +780,19 @@ def build_story(df: pd.DataFrame) -> list[str]:
                 f"(ladder too large for UDP → TCP)."
             )
         elif phase == "mtl_ladder_tcp" and is_resp:
-            steps.append(
-                f"Full MTL ladder received for `{qname}` "
-                f"(~{int(r.get('bytes') or 0):,} B on this segment)."
-            )
+            dns_b = int(r.get("dns_bytes") or 0)
+            seg_b = int(r.get("bytes") or 0)
+            if dns_b > 0 and dns_b != seg_b:
+                size_note = f"DNS message {dns_b:,} B (this TCP segment {seg_b:,} B)"
+            else:
+                size_note = f"~{dns_b or seg_b:,} B"
+            steps.append(f"Full MTL ladder received for `{qname}` ({size_note}).")
         elif phase == "client_answer":
             ad = "AD=1 (validated)" if r.get("ad") else "AD=0"
+            dns_b = int(r.get("dns_bytes") or r.get("bytes") or 0)
             steps.append(
                 f"Unbound returns `{qname} {qtype}` to the client — {ad}, "
-                f"{int(r.get('bytes') or 0)} B on the wire to the stub."
+                f"{dns_b:,} B DNS message to the stub."
             )
         else:
             if qname:

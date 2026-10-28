@@ -15,7 +15,7 @@ The app opens on a hub of five tiles. **Setup** builds the images (and, for Live
 
 | Tile | What it is for | Sidebar | Results view |
 |------|----------------|---------|--------------|
-| **Setup** | Zone size, scenarios, images, sign zones, start / stop the lab (for Live) | Settings and steps 1-3 | Signing summary and timings |
+| **Setup** | Zone size, scenarios, images, sign zones, start / stop the lab (for Live) | Settings and steps 1–3; **Image version** `draft06` or `latest` | Signing summary and timings |
 | **Live** | Switch scenario, send a lookup, cold vs warm | Active scenario, capture name | Queries, packet decode, sequence diagram |
 | **Benchmark** | The PS-036 benchmark: several dataset sizes, repeated trials | Name, dataset sizes, scenarios, trials, queries, networks, workload | Per-size tables, CSVs, and a reproducible `report.html` like the main Cipherops report |
 | **Compare** | MTL vs SLH-DSA and the other modes, side by side | Benchmark, dataset size, network, candidate and baseline | Cards, scaling across sizes, signing, bytes per tier, cache, latency, CSV |
