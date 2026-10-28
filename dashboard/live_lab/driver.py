@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import time
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ STACK_BLURBS = {
     "latest": "Always-full MTL RRSIGs; same MTL commit as main Cipherops (liboqs 0.16)",
 }
 MTL_FULL = 65050
+UNBOUND_IP = "10.53.0.53"
 DASHBOARD_CONFIG = "configs/_dashboard.yaml"
 
 
@@ -757,6 +759,46 @@ def probe(h: LabHandle, qname: str, qtype: str = "A", *, server: str = "10.53.0.
         if line.startswith("{"):
             return json.loads(line)
     raise RuntimeError(f"no JSON from probe:\n{out[-2000:]}")
+
+
+def dig_argv(line: str) -> list[str]:
+    """Parse a user-typed dig command into dig's arguments; defaults the server to Unbound."""
+    parts = shlex.split(line)
+    if parts and parts[0] == "dig":
+        parts = parts[1:]
+    if not parts:
+        raise ValueError("Enter a dig command, e.g. dig host000000.zone00.test A +dnssec")
+    # -f / -k make dig read files from the client container.
+    if any(p.startswith(("-f", "-k")) for p in parts):
+        raise ValueError("dig -f and -k are not allowed here")
+    if not any(p.startswith("@") for p in parts):
+        parts.insert(0, f"@{UNBOUND_IP}")
+    return parts
+
+
+def dig(h: LabHandle, line: str, timeout: int = 30) -> dict:
+    """Run dig inside the client container (no shell); returns the command, exit code and output."""
+    argv = dig_argv(line)
+    cp = _run(compose_cmd(h, "exec", "-T", "client", "dig", *argv), timeout=timeout, check=False)
+    out = (cp.stdout + cp.stderr).rstrip()
+    if cp.returncode in (126, 127) and "executable file not found" in out:
+        out = ("dig is not installed in the client image. Rebuild the tools image "
+               "(bind-utils is in ecosystem/docker/Dockerfile) and recreate the client.")
+    server = next(p[1:] for p in argv if p.startswith("@"))
+    return {"command": "dig " + shlex.join(argv), "server": server, "exit": cp.returncode, "output": out}
+
+
+def dig_presets(h: LabHandle) -> list[str]:
+    tld = ((h.cfg().get("hierarchy") or {}).get("tlds") or ["test"])[0]
+    name = f"host000000.zone00.{tld}"
+    return [
+        f"dig {name} A +dnssec",
+        f"dig {name} A +dnssec +ednsopt=65050",
+        f"dig {tld} DNSKEY +dnssec",
+        "dig . DNSKEY +dnssec",
+        f"dig @{sld_server_ip(h)} {name} A +dnssec +norec",
+        f"dig nx4e50797e7b57.zone00.{tld} A +dnssec",
+    ]
 
 
 def capture_target(server: str) -> tuple[str, str]:

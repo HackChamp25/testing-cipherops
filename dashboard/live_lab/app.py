@@ -1277,6 +1277,62 @@ def query_panel(h: driver.LabHandle, stt: dict) -> None:
         st.caption("Full history, packet decode and sequence diagram are in the Results tab.")
 
 
+def dig_panel(h: driver.LabHandle, stt: dict) -> None:
+    st.caption("Run dig from the client container. Without an @server it asks Unbound (10.53.0.53).")
+    if not _gate(stt, "dig"):
+        return
+
+    presets = driver.dig_presets(h)
+    if "dig_cmd" not in st.session_state:
+        st.session_state.dig_cmd = presets[0]
+    st.selectbox(
+        "Examples", presets, key="dig_preset",
+        on_change=lambda: st.session_state.update(dig_cmd=st.session_state.dig_preset),
+    )
+    with st.form("dig_form", border=False):
+        line = st.text_input("$", key="dig_cmd")
+        c1, c2 = st.columns([1, 3])
+        capture = c2.checkbox("Capture packets (shows up in Results)", value=True, key="dig_capture")
+        run = c1.form_submit_button("Run dig", type="primary")
+
+    if run:
+        pcap_path = None
+        try:
+            argv = driver.dig_argv(line)
+        except ValueError as e:
+            st.error(str(e))
+        else:
+            activity("step", f"dig {line}", phase="probe", source="dig", h=h)
+            try:
+                if capture:
+                    server = next(p[1:] for p in argv if p.startswith("@"))
+                    pcap_path = driver.start_capture(h, server=server, label=cfg("capture_label", ""))
+                res = driver.dig(h, line)
+                if capture:
+                    pcap_path, _ = driver.stop_capture(h)
+                    st.session_state.last_pcap = str(pcap_path) if pcap_path else None
+                st.session_state.setdefault("dig_log", []).insert(0, res)
+                activity("ok" if res["exit"] == 0 else "err", res["command"],
+                         res["output"][:2000], phase="probe", source="dig", h=h)
+            except Exception as e:  # noqa: BLE001
+                st.error(str(e)[:800])
+                activity("err", "dig failed", str(e)[:2000], phase="probe", source="dig", h=h)
+                if capture:
+                    try:
+                        driver.stop_capture(h)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+    log = st.session_state.get("dig_log", [])
+    if log:
+        st.code("\n\n".join(f"$ {r['command']}\n{r['output']}" for r in log[:10]), language="text")
+        if st.button("Clear terminal"):
+            st.session_state.dig_log = []
+            st.rerun()
+    else:
+        st.caption("No output yet.")
+
+
 def cache_panel(h: driver.LabHandle, stt: dict) -> None:
     st.caption("Compare a first lookup (cold cache) with repeats (warm cache).")
     if not _gate(stt, "Cold vs warm"):
@@ -1525,9 +1581,11 @@ def live_results(h: driver.LabHandle) -> None:
 
 def live_page(h: driver.LabHandle, stt: dict) -> None:
     _page_header("live", h, stt)
-    query, cache, results = st.tabs(["Query", "Cold vs warm", "Results"])
+    query, dig_tab, cache, results = st.tabs(["Query", "dig terminal", "Cold vs warm", "Results"])
     with query:
         query_panel(h, stt)
+    with dig_tab:
+        dig_panel(h, stt)
     with cache:
         cache_panel(h, stt)
     with results:
