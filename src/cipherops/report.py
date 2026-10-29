@@ -303,7 +303,8 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
     add("# Benchmarking MTL Mode for Post-Quantum DNSSEC Signatures")
     add("### PS-036 · PQC DNSSEC MTL Benchmark Using a Reference Implementation · IETF 126 Hackathon\n")
     add(f"Run `{run.root.name}` · go/no-go gate: **{run.preflight.get('verdict', 'missing')}** · "
-        f"{cfg['trials']} trials · seed {cfg['seed']} · git `{env.get('git_sha', 'unknown')}`\n")
+        f"{cfg['trials']} trials · seed {cfg['seed']} · stack `{env.get('stack', 'unknown')}` · "
+        f"git `{env.get('git_sha', 'unknown')}`\n")
 
     add("## Abstract\n")
     add("Post-quantum signatures such as SLH-DSA-SHA2-128s are 7,856 bytes long. A DNSSEC response that carries "
@@ -350,6 +351,8 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
         ("CPU", hw.get("cpu_model")), ("CPU affinity (cpuset)", str(hw.get("cpu_affinity"))),
         ("Memory", hw.get("mem_total")), ("Kernel", sw.get("kernel")),
         ("OS", "; ".join(sw.get("os_release", []))[:120]), ("Compiler", sw.get("gcc")),
+        ("Stack profile", env.get("stack")),
+        ("SLH-DSA call (liboqs name)", MODES["slh-dsa"].harness_algo),
         ("OpenSSL", sw.get("openssl")), ("liboqs", sw.get("liboqs_tag")),
         ("MTL reference commit", sw.get("mtl_reference_commit")),
         ("MTL compile flags", sw.get("mtl_reference_cflags")), ("Python", sw.get("python")),
@@ -558,8 +561,7 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
         "with the commands below.\n")
     add("## 9. Reproducing this report\n")
     add("```bash\n"
-        "docker compose -f docker/compose.yml build              # pinned image\n"
-        "scripts/run_benchmark.sh preflight                     # go/no-go gate\n"
+        "scripts/run_benchmark.sh preflight                     # build the image from the stack profile, go/no-go gate\n"
         "scripts/run_benchmark.sh configs/scenarios.yaml        # full run -> results/runs/<id>/\n"
         f"python -m cipherops.runner report --run results/runs/{run.root.name}\n"
         "```\n")

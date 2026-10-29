@@ -166,7 +166,7 @@ Cipherops/
 │   ├── scenarios.yaml      full PS-036 run (50 / 500 / 5000 names, 5 trials)
 │   └── quick.yaml          fast demo run (20 / 60 / 200 names, 3 trials)
 ├── docker/
-│   ├── Dockerfile          pinned build: OpenSSL 3.6.0, liboqs 0.16.0, MTL @7cef019
+│   ├── Dockerfile          pinned build; OpenSSL, liboqs and MTL come from the stack profile
 │   └── compose.yml         one CPU core, 4 GB RAM, no network, mounts results/
 ├── harness/
 │   ├── mtlbench.c          the C benchmark program (crypto layer)
@@ -218,7 +218,8 @@ bash scripts/run_benchmark.sh configs/quick.yaml        # Windows: .\scripts\run
 
 ### Step 1. `scripts/run_benchmark.sh` (Windows: `run_benchmark.ps1`)
 
-1. `docker compose -f docker/compose.yml build` builds the pinned image
+1. `docker compose --env-file ecosystem/stacks/<stack>.env -f docker/compose.yml build` builds the pinned image
+   for the stack profile (default `latest`; set `CIPHEROPS_STACK`)
    (only slow the first time; later builds use the cache).
 2. Records the git commit (`CIPHEROPS_GIT_SHA`), the image ID
    (`CIPHEROPS_HOST_IMAGE_ID`) and the CPU core (`CIPHEROPS_CPUSET`) so they
@@ -651,15 +652,16 @@ helpers (`NSD`, `_udp`, `_tcp`, `signed_zone_text`, `load_run_zone`) that
 | `test_lab_guard.py` | Demo safety: lab operations are refused while a benchmark runs, a launching suite counts as active, `dig` accepts only allow-listed options, Prepare starts when `work/` is root-owned, root-owned folders are removed, the image build is a one-at-a-time background job. |
 | `test_compare.py`, `test_live.py`, `test_prepare_job.py`, `test_prepare_story.py` | Dashboard helpers, packet decoding, the signing job and its replay (no Docker). |
 
-```powershell
-$env:PYTHONPATH="src"; python -m pytest -q                         # host: quick tests
-docker compose -f docker/compose.yml run --rm bench "python3 -m pytest -q tests"   # everything
+```bash
+PYTHONPATH=src python3 -m pytest -q -m "not harness"                      # host: tests that need no Docker
+docker run --rm --network none cipherops-bench:latest \
+  "python3 -m pytest tests/test_harness.py tests/test_crosscheck.py -q"   # harness gates, inside the image
 ```
 
 ### 6.17 Docker files
 
-- `docker/Dockerfile`: stage 1 builds OpenSSL 3.6.0, liboqs 0.16.0 and
-  Verisign MTL at commit `7cef019` from source (MTL compiled with `-O2`
+- `docker/Dockerfile`: stage 1 builds OpenSSL, liboqs and Verisign MTL, at
+  the versions in the stack profile (`ecosystem/stacks/<profile>.env`), from source (MTL compiled with `-O2`
   because upstream forces `-O0`; source unmodified). Stage 2 is the runtime:
   libraries, NSD, tcpdump, pinned Python packages, builds `mtlbench`, installs
   the package.
@@ -753,7 +755,7 @@ accepts the lab algorithm numbers.
 ## 8. NSD cross-check flow
 
 ```powershell
-docker compose -f docker/compose.yml run --rm bench "python3 -m cipherops.runner crosscheck --run results/runs/<run>"
+docker compose --env-file ecosystem/stacks/latest.env -f docker/compose.yml run --rm bench "python3 -m cipherops.runner crosscheck --run results/runs/<run>"
 ```
 
 `crosscheck.run()` serves the signed zone with NSD and, for a sample of

@@ -46,7 +46,7 @@ There are two measurement paths that answer different questions:
 | MTL implementation | **Verisign MTL reference library** ([verisign/MTL](https://github.com/verisign/MTL)), unmodified, pinned by commit | It is the reference implementation of [draft-harvey-cfrg-mtl-mode](https://datatracker.ietf.org/doc/draft-harvey-cfrg-mtl-mode/), published by the draft's authors' organisation, and it was selected with the mentor's approval. It ships its own unit tests and vectors, which the go/no-go gate runs. Verisign also publishes MTL-enabled ldns, NSD and Unbound, which makes a complete signer, authoritative server and validating resolver available for the live lab. |
 | Comparison set | `slh-dsa` (same algorithm, no MTL), plus `ed25519`, `ecdsa-p256`, `rsa-2048` | The with/without-MTL pair isolates what MTL changes. The classical modes put the sizes and times in context (64-byte Ed25519 and ECDSA signatures, 256-byte RSA-2048). |
 | Dataset sizes | **50, 500 and 5,000 names** (105, 1,005 and 10,005 RRsets) | One decade apart, from a small zone to a large one, so scaling is visible. The quick run uses 20, 60 and 200 names; the live benchmark adds a 20-name smoke size. |
-| Environment | one pinned Docker image, one dedicated core, no network (offline); pinned image stacks (live lab) | Repeatable timings, and every version and setting is recorded in each run. |
+| Environment | one stack profile builds both the offline image and the lab; offline: one dedicated core, no network | Repeatable timings, no version drift between the paths, and every version and setting recorded in each run. |
 
 Records of what was used are written by every run: `config.yaml` and `environment.json` offline, `suite.json` for the
 live benchmark.
@@ -57,9 +57,9 @@ live benchmark.
   round trips, negative cases, and agreement between independent implementations (liboqs and OpenSSL, plus Verisign's
   `mtlverify`). That is an interoperability check, not a NIST known-answer test. See
   [methodology §3](docs/methodology.md#3-gono-go-gate).
-- **Two pinned stacks** (table below). Offline and live-lab numbers are not interchangeable.
-- **`latest` stack:** its Unbound answers SERVFAIL for plain SLH-DSA although the signed zone is valid and `draft06`
-  validates it. The live MTL-versus-non-MTL comparison is valid on `draft06` only.
+- **Profiles are not interchangeable.** Offline results are FIPS 205 SLH-DSA; live-lab results on `draft06` are for the pre-standard SPHINCS+ form (same sizes). Each run records its profile.
+- **`latest` stack:** its Unbound answers SERVFAIL for plain SLH-DSA although `ldns-verify-zone` accepts the same
+  signed zone. The live MTL-versus-non-MTL comparison therefore runs on `draft06` (see the table above).
 - **Live-lab timings are indicative.** Containers are not pinned to cores, and the host CPU governor is recorded, not
   changed. Byte counts and relative comparisons are more reliable than absolute milliseconds.
 - **Few trials give wide intervals.** With 5 trials the interval of the median covers 94%, not 95%
@@ -67,17 +67,22 @@ live benchmark.
 - Code points (DNSSEC algorithm numbers, the `mtl-mode-full` EDNS option) are lab placeholders, not IANA assignments.
   Nothing here is for the Internet, and no security claim is made.
 
-### Pinned software
+### Pinned software: one source, a deliberate default per path
 
-| Path | Base | OpenSSL | liboqs | Verisign MTL | Behaviour |
-| --- | --- | --- | --- | --- | --- |
-| Offline harness (`docker/`) | Fedora 42 | 3.6.0 | 0.16.0 | `7cef019` | library calls timed directly |
-| Live lab `draft06` (default) | see [`ecosystem/docker/Dockerfile`](ecosystem/docker/Dockerfile) | 3.6.0 | 0.14.0 | 1.2.0 (`93b05ef`) | condensed signatures by default; full signature on EDNS option 65050 |
-| Live lab `latest` | same | 3.6.0 | 0.16.0 | `7cef019` | every MTL RRSIG is served as a full signature; plain SLH-DSA not validated |
+Every version lives in one file per **stack profile**, [`ecosystem/stacks/<profile>.env`](ecosystem/stacks). The offline
+image and the live-lab images are both built from that file, so a version cannot differ by accident, and every report
+states its profile. Choose with `CIPHEROPS_STACK=<profile>`.
 
-All component commits (NSD, Unbound, ldns) are in [`ecosystem/stacks/`](ecosystem/stacks). The two paths use different
-MTL versions because `draft06` (condensed signatures by default) is the stack whose resolver validates every scenario,
-while the offline image uses the newer commit that `latest` shares. Aligning them on one version is open work.
+| Profile | MTL / liboqs | Signature primitive | Default for | Resolver validates plain SLH-DSA |
+| --- | --- | --- | --- | --- |
+| `latest` | `7cef019` / 0.16.0 | FIPS 205 SLH-DSA, one library call for MTL and the plain baseline | **offline harness** | **no** (SERVFAIL) |
+| `draft06` | 1.2.0 `93b05ef` / 0.14.0 | SPHINCS+-SHA2-128s-simple, the pre-standard form (same sizes) | **live lab** | yes |
+
+The offline harness uses `latest` so that MTL and the baseline are the same FIPS 205 primitive; on `draft06` its gate
+reports NO-GO. The live lab uses `draft06` because only there does a resolver validate all three scenarios. On `latest`
+the Unbound binary still names the SPHINCS+ algorithm that liboqs 0.16 removed, which strongly indicates an upstream
+mismatch; it is not confirmed from source and not yet reported upstream. The evidence, the costs of this split and the
+rejected alternatives are in [docs/design-decisions.md](docs/design-decisions.md).
 
 ## PS-036 requirements
 
@@ -110,6 +115,7 @@ cd A3-PS036-TC161
 
 ```bash
 bash scripts/run_benchmark.sh preflight               # build the image and run the go/no-go gate
+# CIPHEROPS_STACK=draft06 bash scripts/run_benchmark.sh preflight   # reports NO-GO by design (see above)
 bash scripts/run_benchmark.sh configs/quick.yaml      # short demonstration run
 bash scripts/run_benchmark.sh                         # full run (configs/scenarios.yaml); can take over an hour
 ```
@@ -140,7 +146,7 @@ streamlit run dashboard/live_lab/app.py
 | **Compare** | MTL against SLH-DSA and the classical reference from a finished benchmark |
 | **Reset** | remove sessions, captures, runs or signed zones |
 
-Use the **`draft06`** image version for the MTL-versus-non-MTL comparison. A first image build takes tens of minutes;
+Use the **`draft06`** image version (the live lab default) for the MTL-versus-non-MTL comparison. A first image build takes tens of minutes;
 it runs in the background with a live log. Details: [`dashboard/live_lab/README.md`](dashboard/live_lab/README.md).
 
 ## What a run produces
@@ -171,7 +177,7 @@ PYTHONPATH=src python3 -m pytest tests -m "not harness"          # host tests, n
 Harness correctness gates need the compiled harness and reference library, so they run inside the image:
 
 ```bash
-docker run --rm --network none cipherops-bench:pinned \
+docker run --rm --network none cipherops-bench:latest \
   "python3 -m pytest tests/test_harness.py tests/test_crosscheck.py -q"
 ```
 
@@ -205,6 +211,7 @@ docs/           methodology, architecture, flow, output reference
 
 ## Documentation
 
+- [Design decisions](docs/design-decisions.md): why the benchmark is built this way
 - [Methodology](docs/methodology.md): what is measured and how, statistics, limits
 - [Architecture](docs/architecture.md): components and data flow
 - [End-to-end flow](docs/end-to-end-flow.md): the seven stages of a run

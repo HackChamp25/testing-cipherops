@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from live_lab import compare
+from live_lab import compare, driver
 from live_lab.driver import ECO
 from live_lab.suite import SUITES, bench_shape
 
@@ -300,6 +300,7 @@ def build_markdown(sd: dict, figs: dict[str, str]) -> str:
         ("Docker server", prov.get("docker_server", "—")),
         ("Code version (git)", (prov.get("git_commit", "—") or "—")[:12]
          + (" (uncommitted changes)" if prov.get("git_dirty") else "")),
+        ("Signature primitive", driver.STACK_PRIMITIVE.get(stack, "—")),
         ("liboqs (stack)", env.get("LIBOQS_TAG", "—")),
         ("MTL commit (stack)", env.get("MTL_COMMIT", "—")),
         ("ldns commit (stack)", env.get("LDNS_COMMIT", "—")),

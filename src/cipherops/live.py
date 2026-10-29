@@ -51,7 +51,7 @@ PROFILES = {
 UDP_TRIES = 4
 TCP_TIMEOUT_S = 10.0
 NEEDS_CAP = ("network shaping needs the NET_ADMIN capability and tc: run it with "
-             "`docker compose -f docker/compose.yml run --rm live ...`")
+             "`scripts/run_live.sh <run-folder>` (docker compose run --rm live)")
 
 
 class Capture:

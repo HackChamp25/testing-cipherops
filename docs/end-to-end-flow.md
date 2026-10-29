@@ -16,8 +16,8 @@ quick.yaml ──► 1 config + environment ──► 2 go/no-go ──► 3 zon
 | | |
 |---|---|
 | Command (Windows) | `.\scripts\run_benchmark.ps1 -Config configs/quick.yaml` |
-| What it does | `docker compose build` (pinned image), sets `CIPHEROPS_GIT_SHA`, `CIPHEROPS_HOST_IMAGE_ID`, `CIPHEROPS_CPUSET=2`, then `docker compose run --rm bench "python3 -m cipherops.runner run --config configs/quick.yaml"` |
-| Container | Fedora 42, OpenSSL 3.6.0, liboqs 0.16.0, Verisign MTL `7cef019` (-O2), `mtlbench` compiled at build; 1 CPU core (cpuset 2), 4 GB, no network |
+| What it does | `docker compose --env-file ecosystem/stacks/<stack>.env build` (pinned image for the stack profile, default `latest`), sets `CIPHEROPS_GIT_SHA`, `CIPHEROPS_HOST_IMAGE_ID`, `CIPHEROPS_CPUSET=2`, then `docker compose run --rm bench "python3 -m cipherops.runner run --config configs/quick.yaml"` |
+| Container | Fedora 42, OpenSSL, liboqs and Verisign MTL as pinned by the stack profile (-O2), `mtlbench` compiled at build; 1 CPU core (cpuset 2), 4 GB, no network |
 | Where results land | container `/work/results` = Windows `C:\MTL\Cipherops\results` (volume mount) |
 | Entry point | `runner.main()` → `cmd_run(args)` runs stages 1–7 |
 

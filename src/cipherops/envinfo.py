@@ -53,6 +53,7 @@ def collect(harness_path: str) -> dict:
         "captured_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
         "git_sha": os.environ.get("CIPHEROPS_GIT_SHA", "unknown"),
         "host_image_id": os.environ.get("CIPHEROPS_HOST_IMAGE_ID", "unknown"),
+        "stack": os.environ.get("CIPHEROPS_STACK", "unknown"),
         "hardware": {
             "cpu_model": _cpu_model(),
             "logical_cpus_visible": os.cpu_count(),

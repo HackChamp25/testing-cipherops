@@ -23,15 +23,23 @@ DEFAULT_STACK = "draft06"
 # Prefer this order in the UI; only stacks with ecosystem/stacks/<name>.env are shown.
 STACK_CHOICES = ("draft06", "latest")
 STACK_BLURBS = {
-    "draft06": "Condensed MTL by default; full ladder on EDNS 65050 (MTL v1.2 / liboqs 0.14)",
-    "latest": "Always-full MTL RRSIGs; same MTL commit as main Cipherops (liboqs 0.16). "
+    "draft06": "Condensed MTL by default; full ladder on EDNS 65050 (MTL v1.2 / liboqs 0.14). "
+               "Signs with SPHINCS+-SHA2-128s-simple, the pre-standard form of SLH-DSA; all scenarios validate",
+    "latest": "Always-full MTL RRSIGs; FIPS 205 SLH-DSA (liboqs 0.16), same MTL commit as the offline harness. "
               "Plain SLH-DSA is not validated by its Unbound (SERVFAIL)",
+}
+# What the stack's signer, MTL library and resolver actually call in liboqs (read from the built binaries).
+STACK_PRIMITIVE = {
+    "draft06": "SPHINCS+-SHA2-128s-simple (pre-standard form of SLH-DSA, liboqs 0.14), in ldns, MTL and Unbound",
+    "latest": "SLH_DSA_PURE_SHA2_128S (FIPS 205, liboqs 0.16) in ldns and MTL; Unbound still names SPHINCS+",
 }
 MTL_FULL = 65050
 # Scenarios whose zones the stack's Unbound cannot validate. Seen on `latest`: Unbound logs "verify: Using PQ /
 # PQ-MTL Algorithms 246 ... Failed to match any usable anchor" and answers SERVFAIL, while ldns-verify-zone accepts
-# the same signed zone and the same scenario validates (AD) on draft06. The cause inside that Unbound build is not
-# established; this records the observation so that a MTL vs non-MTL comparison is not run on a stack that cannot.
+# the same signed zone and the same scenario validates (AD) on draft06. Strong indication of the cause: liboqs 0.16
+# removed the SPHINCS+ names, ldns signs with SLH_DSA_PURE_SHA2_128S, but the Unbound binary at this commit contains only
+# the SPHINCS+ name. Not confirmed from source and not yet reported upstream. This records the observation so that a
+# MTL vs non-MTL comparison is not run on a stack that cannot.
 UNVALIDATED_SCENARIOS = {"latest": ("slh-dsa",)}
 
 
