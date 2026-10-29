@@ -75,7 +75,7 @@ TILES = {
         "title": "Live",
         "pitch": "Send real lookups and watch the packets they cause.",
         "bullets": [
-            "Switch scenario, run a query, compare cold and warm",
+            "Switch scenario, flush the cache, run a query, compare cold and warm",
             "Decode the capture and draw its message sequence",
         ],
         "cta": "Open Live",
@@ -178,6 +178,27 @@ def _store() -> dict:
     return st.session_state.setdefault("cfg", {})
 
 
+def _bootstrap_cfg_from_disk() -> None:
+    """Browser refresh wipes session_state; restore stack/zone from disk so pcaps do not 'vanish'."""
+    if st.session_state.get("_cfg_bootstrapped"):
+        return
+    st.session_state._cfg_bootstrapped = True
+    inferred = driver.infer_ui_from_disk()
+    if not inferred:
+        return
+    store = _store()
+    for key in ("stack", "zone_size", "scenarios"):
+        if key in inferred and key not in store:
+            store[key] = inferred[key]
+    # Seed widget keys before first sb() draw so selectboxes do not snap to DEFAULT_STACK.
+    if "stack" in inferred and "w_stack" not in st.session_state:
+        st.session_state.w_stack = inferred["stack"]
+    if "zone_size" in inferred and "w_zone_size" not in st.session_state:
+        st.session_state.w_zone_size = inferred["zone_size"]
+    if "scenarios" in inferred and "w_scenarios" not in st.session_state:
+        st.session_state.w_scenarios = list(inferred["scenarios"])
+
+
 def cfg(name: str, default=None):
     return _store().get(name, default)
 
@@ -212,11 +233,12 @@ def _handle() -> driver.LabHandle:
 def activity(
     level: str, title: str, detail: str = "", *,
     phase: str = "ui", source: str = "ui", h: driver.LabHandle | None = None,
+    tech: bool = False,
 ) -> None:
     entry = {
         "t": datetime.now().strftime("%H:%M:%S"),
         "level": level, "title": title, "detail": (detail or "").strip(),
-        "phase": phase, "source": source,
+        "phase": phase, "source": source, "tech": bool(tech),
     }
     log = st.session_state.setdefault("activity", [])
     log.insert(0, entry)
@@ -233,10 +255,11 @@ def activity(
 
 
 def _log_chunks(text: str, *, phase: str, source: str, title: str) -> None:
+    """Keep raw Docker/tool output for debugging; hidden from the simple Activity view."""
     chunks = driver.chunk_log(text)
     for i, ch in enumerate(chunks, 1):
         suffix = f" ({i}/{len(chunks)})" if len(chunks) > 1 else ""
-        activity("info", f"{title}{suffix}", f"```\n{ch}\n```", phase=phase, source=source)
+        activity("info", f"{title}{suffix}", f"```\n{ch}\n```", phase=phase, source=source, tech=True)
 
 
 def prepare_metrics_visible(h: driver.LabHandle) -> bool:
@@ -264,6 +287,22 @@ def readiness(stt: dict) -> dict:
     r["ready"] = r["images"] and r["prepared"] and r["running"]
     r["count"] = sum(1 for k in ("images", "prepared", "running") if r[k])
     return r
+
+
+def _scenario_list(h: driver.LabHandle) -> list[str]:
+    """Scenarios chosen in Setup (and present on disk after Prepare), not only the active one."""
+    chosen = [str(s) for s in (cfg("scenarios") or [])]
+    on_disk: list[str] = []
+    zones = h.work / "zones"
+    if zones.is_dir():
+        on_disk = sorted(
+            p.name for p in zones.iterdir()
+            if p.is_dir() and (p / "manifest.json").is_file()
+        )
+    if on_disk:
+        ordered = [s for s in chosen if s in on_disk]
+        return ordered + [s for s in on_disk if s not in ordered]
+    return chosen
 
 
 def _go(mode: str) -> None:
@@ -380,17 +419,36 @@ def _apply_ui_config(h: driver.LabHandle) -> str | None:
     h.config = path
     h.stack = cfg("stack", "draft06")
     st.session_state.lab_handle = h
+    # Survive browser refresh: session_state alone is not enough for stack/zone.
+    driver.save_ui_prefs({
+        "stack": h.stack,
+        "zone_size": zone,
+        "scenarios": sc,
+        "lab": h.lab,
+        "tag": h.tag,
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+    })
     return None
 
 
 # ─────────────────────────── page chrome ───────────────────────────
 
-def _lab_strip(h: driver.LabHandle, stt: dict) -> None:
+def _lab_strip(h: driver.LabHandle, stt: dict, *, mode: str = "setup") -> None:
     r = readiness(stt)
+    sc = _scenario_list(h)
+    if mode == "live" and r["active"]:
+        scen_chip = _chip(f"Active · {r['active']}", "info")
+    elif sc:
+        label = "Scenario" if len(sc) == 1 else "Scenarios"
+        scen_chip = _chip(f"{label} · {', '.join(sc)}", "info")
+    elif r["active"]:
+        scen_chip = _chip(f"Scenario · {r['active']}", "info")
+    else:
+        scen_chip = ""
     chips = [
         _chip("Lab running", "ok") if r["running"] else _chip("Lab stopped", "idle"),
         _chip("Prepared", "ok") if r["prepared"] else _chip("Not prepared", "warn"),
-        _chip(f"Scenario · {r['active']}", "info") if r["active"] else "",
+        scen_chip,
         _chip(f"Zone · {cfg('zone_size', 'small')}", "idle"),
     ]
     st.markdown(f'<div class="co-strip">{" ".join(c for c in chips if c)}</div>', unsafe_allow_html=True)
@@ -401,7 +459,7 @@ def _page_header(mode: str, h: driver.LabHandle, stt: dict) -> None:
     st.markdown(f"## {tile['icon']} {tile['title']}")
     st.caption(tile["pitch"])
     if mode in ("setup", "live", "reset"):
-        _lab_strip(h, stt)
+        _lab_strip(h, stt, mode=mode)
 
 
 def _gate(stt: dict, what: str) -> bool:
@@ -449,8 +507,11 @@ def sidebar_home(h: driver.LabHandle, stt: dict) -> None:
     for ok, text in ((r["images"], "Images built"), (r["prepared"], "Zones signed"),
                      (r["running"], "Containers running")):
         st.sidebar.markdown(f"{'🟢' if ok else '⚪'}  {text}")
-    if r["active"]:
-        st.sidebar.markdown(f"🔵  Scenario **{r['active']}**")
+    sc = _scenario_list(h)
+    if sc:
+        st.sidebar.markdown(f"🔵  Scenarios **{', '.join(sc)}**")
+    if r["active"] and r["running"]:
+        st.sidebar.markdown(f"▶️  Active **{r['active']}**")
     st.sidebar.markdown("---")
     _hint("Open a tile to see its settings here. Each tile has its own Results view.")
     if st.sidebar.button("Refresh status", width="stretch", key="sb_refresh_home"):
@@ -502,8 +563,20 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
     )
     sb(st.sidebar.number_input, "jobs", 2, "Sign jobs", min_value=1, max_value=8,
        help="How many zones to sign in parallel during Prepare.")
-    sb(st.sidebar.selectbox, "stack", "draft06", "Image version", options=["draft06"],
-       help="Pinned server/tooling build used by the lab.")
+    stacks = driver.list_stacks()
+    stack = sb(
+        st.sidebar.selectbox, "stack", driver.DEFAULT_STACK, "Image version",
+        options=stacks, format_func=driver.stack_label,
+        help="Which pinned Verisign DNS stack to build and run. "
+             "draft06 = condensed-by-default (EDNS 65050). "
+             "latest = always-full MTL, same MTL commit as the main Cipherops library report. "
+             "Change this, then Build images (and Prepare again for Live).",
+    )
+    pins = driver.stack_pins(stack)
+    if pins:
+        mtl = (pins.get("MTL_COMMIT") or "")[:12]
+        oqs = pins.get("LIBOQS_TAG") or "?"
+        _hint(f"Pins for **{stack}**: MTL `{mtl}…` · liboqs {oqs}. Build this version before Prepare / Benchmark.")
     if not sc:
         st.sidebar.warning("Select at least one scenario")
 
@@ -562,7 +635,8 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
     if st.sidebar.button("Prepare", key="btn_prep", width="stretch", disabled=not sc or bool(shape_errors)):
         _apply_ui_config(h)
         jobs = int(cfg("jobs", 2))
-        activity("step", "Prepare", f"size={size} scenarios={sc}", phase="prepare", source="prepare", h=h)
+        scen_txt = ", ".join(sc)
+        activity("step", "Signing zones", f"Size {size} · {scen_txt}", phase="prepare", source="prepare", h=h)
         with st.spinner("Signing…"):
             try:
                 t0 = time.perf_counter()
@@ -579,17 +653,24 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
                 sess["prepare_summary"] = summary
                 driver.save_session(h, sess)
                 _log_chunks(log, phase="prepare", source="prepare", title="prepare")
-                paths = (
+                n_scen = len(summary.get("scenarios") or sc)
+                activity(
+                    "ok", f"Zones signed ({secs:.0f}s)",
+                    f"Prepared {n_scen} scenario(s): {scen_txt}. Open Results for sign times.",
+                    phase="prepare", source="prepare", h=h,
+                )
+                activity(
+                    "info", "Prepare paths",
                     f"work: `{summary['work_dir']}`\n"
                     f"zones: `{summary['zones_dir']}`\n"
                     f"active: `{summary['active_dir']}`\n"
-                    f"compose: `{summary['compose']}`"
+                    f"compose: `{summary['compose']}`",
+                    phase="prepare", source="prepare", h=h, tech=True,
                 )
-                activity("ok", f"Prepare done ({secs:.0f}s)", paths, phase="prepare", source="prepare", h=h)
                 st.sidebar.success(f"Done · {secs:.0f}s")
             except Exception as e:  # noqa: BLE001
                 st.sidebar.error(str(e)[:600])
-                activity("err", "Prepare failed", str(e)[:2000], phase="prepare", source="prepare", h=h)
+                activity("err", "Signing failed", str(e)[:2000], phase="prepare", source="prepare", h=h)
         st.rerun()
 
     # —— Step 3: start / stop ——
@@ -598,24 +679,30 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
           "so starting stops any other zone shape.")
     b3a, b3b = st.sidebar.columns(2)
     if b3a.button("Start", key="btn_up", width="stretch"):
-        activity("step", "Start lab", "", phase="compose", source="compose", h=h)
+        activity("step", "Starting the lab", f"Image set {h.stack}", phase="compose", source="compose", h=h)
         with st.spinner("Starting…"):
             try:
                 log = driver.up(h)
                 st.session_state.last_log = log[-4000:]
+                st.session_state.pop("last_start_error", None)
                 _log_chunks(log, phase="compose", source="compose", title="up")
-                activity("ok", "Lab started", "", phase="compose", source="compose", h=h)
+                activity("ok", "Lab is running", "DNS servers and resolver are up.",
+                         phase="compose", source="compose", h=h)
             except Exception as e:  # noqa: BLE001
-                st.sidebar.error(str(e)[:600])
-                activity("err", "Start failed", str(e)[:2000], phase="compose", source="compose", h=h)
+                msg = str(e)
+                st.session_state.last_start_error = msg[-4000:]
+                st.sidebar.error(msg[:800])
+                activity("err", "Start failed", msg[-3000:], phase="compose", source="compose", h=h)
         st.rerun()
     if b3b.button("Stop", key="btn_down", width="stretch"):
         with st.spinner("Stopping…"):
             try:
                 driver.down(h)
+                st.session_state.pop("last_start_error", None)
                 activity("ok", "Lab stopped", "", phase="compose", source="compose", h=h)
             except Exception as e:  # noqa: BLE001
                 st.sidebar.error(str(e)[:600])
+                activity("err", "Stop failed", str(e)[:2000], phase="compose", source="compose", h=h)
         st.rerun()
 
     st.sidebar.markdown("---")
@@ -665,6 +752,23 @@ def sidebar_live(h: driver.LabHandle, stt: dict) -> None:
     _hint("Use the Query tab to send a lookup; Results shows packets.")
 
     st.sidebar.markdown("---")
+    st.sidebar.markdown("### Resolver cache")
+    if r["running"]:
+        _hint("Empties the resolver. The next lookup is cold. Takes a few seconds.")
+    else:
+        _hint("Start the lab in Setup before flushing.")
+    if st.sidebar.button("Flush cache", key="btn_flush_cache", width="stretch", disabled=not r["running"]):
+        activity("step", "Flush cache", "", phase="cache", source="unbound", h=h)
+        with st.spinner("Flushing the resolver…"):
+            try:
+                driver.flush(h)
+                activity("ok", "Resolver cache empty", "The next lookup is cold.", phase="cache", source="unbound", h=h)
+                st.sidebar.success("Cache empty. The next lookup is cold.")
+            except Exception as e:  # noqa: BLE001
+                st.sidebar.error(str(e)[:600])
+                activity("err", "Flush failed", str(e)[:2000], phase="cache", source="unbound", h=h)
+
+    st.sidebar.markdown("---")
     st.sidebar.markdown("### Capture name")
     label = sb(
         st.sidebar.text_input, "capture_label", "", "Name (optional)",
@@ -701,6 +805,8 @@ def sidebar_benchmark(h: driver.LabHandle, stt: dict) -> None:
         "Runs on its own: for each dataset size it signs the zones, repeats signing and verification, "
         "starts the lab, measures, and stops it. It only needs the built images (Setup, step 1)."
     )
+    bench_stack = cfg("stack", driver.DEFAULT_STACK)
+    _hint(f"Uses **Image version `{bench_stack}`** from Setup — build that stack before you run.")
 
     st.sidebar.markdown("**Run name**")
     label = sb(
@@ -964,14 +1070,26 @@ def setup_overview(h: driver.LabHandle, stt: dict) -> None:
     containers = stt.get("containers") or {}
     r = readiness(stt)
 
+    err = st.session_state.get("last_start_error")
+    if err:
+        with st.container(border=True):
+            st.error("**Start lab failed** (full Docker message below). Fix the conflict, then Start again.")
+            st.code(err[-2500:], language="text")
+            if st.button("Dismiss start error", key="dismiss_start_err"):
+                st.session_state.pop("last_start_error", None)
+                st.rerun()
+
+    sc = _scenario_list(h)
     c = st.columns(4)
     c[0].metric("Docker images", f"{sum(imgs.values())}/{len(imgs) or 3}")
     c[1].metric("Prepared", "yes" if r["prepared"] else "no")
     c[2].metric("Containers up", str(sum(1 for v in containers.values() if v)))
-    c[3].metric("Scenario", r["active"] or "—")
+    scen_label = "Scenario" if len(sc) <= 1 else "Scenarios"
+    c[3].metric(scen_label, ", ".join(sc) if sc else (r["active"] or "—"))
+    active_note = f" · active **{r['active']}**" if r["active"] and r["running"] else ""
     st.caption(
         f"Lab **{h.lab}** · zone size **{cfg('zone_size', 'small')}** · "
-        f"scenarios **{', '.join(cfg('scenarios') or [])}**"
+        f"scenarios **{', '.join(sc) or '—'}**{active_note}"
     )
 
     if r["ready"]:
@@ -1036,12 +1154,13 @@ def setup_results(h: driver.LabHandle) -> None:
 
 def setup_page(h: driver.LabHandle, stt: dict) -> None:
     _page_header("setup", h, stt)
-    overview, results = st.tabs(["Overview", "Results"])
+    overview, results, activity = st.tabs(["Overview", "Results", "Activity log"])
     with overview:
         setup_overview(h, stt)
     with results:
         setup_results(h)
-    _activity_expander(h)
+    with activity:
+        activity_tab(h)
 
 
 # ─────────────────────────── LIVE ───────────────────────────
@@ -1056,12 +1175,17 @@ def show_sequence_diagram(steps: list) -> None:
     m = st.columns(5)
     m[0].metric("Messages", summary["messages"])
     m[1].metric("Client B", f"{summary['client_bytes']:,}")
-    m[2].metric("Max answer", decode.format_bytes(summary["max_bytes"]))
-    m[3].metric("Span", f"{summary['span_ms']} ms")
+    m[2].metric("Max answer", decode.format_bytes(summary["max_bytes"]),
+                help="Largest DNS message in this diagram (reassembled length, not one TCP segment).")
+    m[3].metric("Span", f"{summary['span_ms']} ms",
+                help="Last drawn hop time minus first — pcap timeline width, not Queries latency_ms.")
     m[4].metric("MTL-FULL", summary["mtl_full"])
     st.caption(
         "Solid = query · dashed = response · amber = MTL-FULL. "
-        "Hover an arrow for exact bytes, t (capture offset), and Δ (gap since prior step)."
+        "Each label sits on the **sender**. Arrows are in capture time order: a large TCP "
+        "answer can finish after the next query has already gone out, so a late Root arrow "
+        "is still Root’s answer (often a negative proof), not the SLD’s. "
+        "Hover an arrow for exact bytes, t, and packet number."
     )
 
     try:
@@ -1271,7 +1395,7 @@ def dig_panel(h: driver.LabHandle, stt: dict) -> None:
 
 
 def cache_panel(h: driver.LabHandle, stt: dict) -> None:
-    st.caption("Compare a first lookup (cold cache) with repeats (warm cache).")
+    st.caption("Compare a first lookup (cold cache) with repeats (warm cache). Flush cache in the sidebar empties the resolver on its own.")
     if not _gate(stt, "Cold vs warm"):
         return
     presets = driver.query_presets(h)
@@ -1339,12 +1463,44 @@ def _cache_result_view() -> None:
 
 
 def _pcap_options(h: driver.LabHandle) -> list[str]:
-    captures = sorted(h.capture_dir.glob("*.pcap"), key=lambda p: p.stat().st_mtime, reverse=True)
+    captures = driver.list_pcaps(h)
     options = [str(p) for p in captures]
     last = st.session_state.get("last_pcap")
     if last and last not in options and Path(last).exists():
         options = [last] + options
     return options
+
+
+def _pcap_folder_banner(h: driver.LabHandle, options: list[str]) -> None:
+    """Make the active results folder obvious; offer a one-click jump if captures sit elsewhere."""
+    st.caption(
+        f"Captures for lab **`{h.tag}`** · folder "
+        f"`results/{h.tag}/live-dashboard` · **{len(options)}** file(s). "
+        f"Image version **{h.stack}** · zone **{cfg('zone_size', 'small')}**."
+    )
+    inv = driver.live_capture_inventory()
+    others = [r for r in inv if r["tag"] != h.tag]
+    if not others:
+        return
+    with st.expander(
+        f"Other labs still have captures ({sum(r['count'] for r in others)} file(s)) — "
+        "not deleted; this page only lists the active lab",
+        expanded=not options,
+    ):
+        for r in others[:8]:
+            label = f"**{r['tag']}** · {r['count']} pcap(s) · newest `{r['names'][0] if r['names'] else '?'}`"
+            c1, c2 = st.columns([4, 1])
+            c1.markdown(label)
+            can_switch = bool(r.get("stack") and r.get("zone_size"))
+            if can_switch and c2.button("Open", key=f"open_lab_{r['tag']}"):
+                _store()["stack"] = r["stack"]
+                _store()["zone_size"] = r["zone_size"]
+                st.session_state.w_stack = r["stack"]
+                st.session_state.w_zone_size = r["zone_size"]
+                st.session_state.pop("lab_handle", None)
+                for k in _PCAP_KEYS:
+                    st.session_state.pop(k, None)
+                st.rerun()
 
 
 def _pcap_name(p: str) -> str:
@@ -1374,9 +1530,27 @@ def pcap_decode_view(h: driver.LabHandle, options: list[str]) -> None:
         for line in story:
             st.markdown(line)
         show = df[df["phase"] != "tcp_noise"] if hide_tcp and "phase" in df.columns else df
-        cols = [c for c in ["#", "ms", "phase_label", "hop", "proto", "bytes", "summary", "ad", "rrsigs"]
-                if c in show.columns]
-        st.dataframe(show[cols], width="stretch", hide_index=True, height=360)
+        cols = [c for c in ["#", "ms", "phase_label", "hop", "proto", "bytes", "dns_bytes",
+                            "summary", "ad", "rrsigs"] if c in show.columns]
+        st.caption(
+            "**bytes** = this IP/UDP/TCP payload on the wire · "
+            "**dns_bytes** = DNS message length (TCP length prefix / UDP DNS size). "
+            "Large MTL answers often span several TCP segments — do not read Max answer from a single **bytes** cell."
+        )
+        # Force horizontal scroll: Streamlit squeezes wide text columns unless widths are set.
+        cfg = {
+            "summary": st.column_config.TextColumn("summary", width="large"),
+            "rrsigs": st.column_config.TextColumn("rrsigs", width="medium"),
+            "phase_label": st.column_config.TextColumn("phase_label", width="medium"),
+            "hop": st.column_config.TextColumn("hop", width="medium"),
+            "bytes": st.column_config.NumberColumn("bytes", help="Wire payload in this packet/segment"),
+            "dns_bytes": st.column_config.NumberColumn(
+                "dns_bytes", help="Reassembled DNS message length when known"),
+        }
+        st.dataframe(
+            show[cols], width="stretch", hide_index=True, height=420,
+            column_config={k: v for k, v in cfg.items() if k in cols},
+        )
 
 
 def pcap_sequence_view(h: driver.LabHandle, options: list[str]) -> None:
@@ -1429,10 +1603,14 @@ def pcap_sequence_view(h: driver.LabHandle, options: list[str]) -> None:
 def live_results(h: driver.LabHandle) -> None:
     queries, packets, sequence = st.tabs(["Queries", "Packet decode", "Sequence diagram"])
     options = _pcap_options(h)
+    _pcap_folder_banner(h, options)
+    # Re-hydrate query log from disk after refresh (session_state is empty; session.json is not).
+    if "query_log" not in st.session_state:
+        st.session_state.query_log = list(driver.load_session(h).get("queries") or [])
     with queries:
-        qlog = driver.session_queries(
-            h, st.session_state.query_log if "query_log" in st.session_state else None,
-        )
+        qlog = driver.session_queries(h, st.session_state.get("query_log"))
+        if qlog and not st.session_state.get("query_log"):
+            st.session_state.query_log = list(qlog)
         if qlog:
             qdf = pd.DataFrame(qlog)
             cols = [c for c in ["qname", "qtype", "rcode", "ad", "latency_ms", "response_bytes",
@@ -2219,34 +2397,55 @@ def reset_page(h: driver.LabHandle, stt: dict) -> None:
 
 # ─────────────────────────── ACTIVITY ───────────────────────────
 
+def _is_tech_entry(e: dict) -> bool:
+    if e.get("tech"):
+        return True
+    detail = e.get("detail") or ""
+    title = (e.get("title") or "").lower()
+    # Older sessions: raw Docker dumps were logged as fenced code blocks.
+    if detail.lstrip().startswith("```"):
+        return True
+    if title.startswith(("build", "pull", "up", "prepare", "activate")) and "(" in title:
+        return True
+    return False
+
+
 def activity_tab(h: driver.LabHandle) -> None:
-    top = st.columns([1, 2, 2])
+    entries = st.session_state.get("activity") or []
+    top = st.columns([1, 1, 2])
     if top[0].button("Clear", key="act_clear"):
         st.session_state.activity = []
         st.rerun()
-    entries = st.session_state.get("activity") or []
+    show_tech = top[1].checkbox("Technical details", value=False, key="act_tech",
+                                help="Docker and tool output for debugging. Leave off for a normal demo.")
     if not entries:
-        st.caption("Empty.")
+        st.caption("Nothing yet. Use the sidebar steps — this list fills in as you go.")
         return
-    sources = sorted({e.get("source", "ui") for e in entries})
-    phases = sorted({e.get("phase", "ui") for e in entries})
-    filt_src = top[1].multiselect("Source", sources, default=sources, key="act_src")
-    filt_phase = top[2].multiselect("Phase", phases, default=phases, key="act_phase")
-    filtered = [e for e in entries if e.get("source") in filt_src and e.get("phase") in filt_phase]
+
+    visible = entries if show_tech else [e for e in entries if not _is_tech_entry(e)]
+    if not visible:
+        st.caption("Only technical lines so far. Turn on **Technical details** to see them.")
+        return
+
     blob = "\n\n".join(
-        f"[{e['t']}] {e['level']} {e['title']}\n{e.get('detail', '')}" for e in filtered
+        f"[{e['t']}] {e['level']} {e['title']}\n{e.get('detail', '')}" for e in visible
     )
-    st.download_button("Download", data=blob, file_name=f"activity-{h.tag}.txt", mime="text/plain",
-                       key="act_dl")
-    for e in filtered[:80]:
+    top[2].download_button(
+        "Download", data=blob, file_name=f"activity-{h.tag}.txt", mime="text/plain", key="act_dl",
+    )
+
+    for e in visible[:60]:
         icon = LEVEL_ICON.get(e["level"], "•")
         with st.container(border=True):
             st.markdown(f"{icon} **{e['t']}** · {e['title']}")
-            if e.get("detail") and not e["detail"].startswith("```"):
-                st.caption(e["detail"][:500])
-            elif e.get("detail"):
-                with st.expander("output"):
-                    st.code(e["detail"].strip("`").replace("```", ""))
+            detail = e.get("detail") or ""
+            if not detail:
+                continue
+            if detail.lstrip().startswith("```"):
+                with st.expander("Tool output"):
+                    st.code(detail.strip().strip("`").replace("```", "").lstrip("\n"))
+            else:
+                st.caption(detail[:500])
 
 
 # ─────────────────────────── ENTRY POINT ───────────────────────────
@@ -2267,6 +2466,7 @@ def main() -> None:
     if symbol is not None:
         st.logo(symbol, icon_image=symbol, size="large")  # top-left on Home and on every tile
     _init_nav()
+    _bootstrap_cfg_from_disk()
     h = _handle()
     mode = st.session_state.nav
 

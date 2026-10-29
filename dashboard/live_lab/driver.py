@@ -20,9 +20,45 @@ REPO = Path(__file__).resolve().parents[2]
 ECO = REPO / "ecosystem"
 DEFAULT_CONFIG = "configs/_dashboard.yaml"
 DEFAULT_STACK = "draft06"
+# Prefer this order in the UI; only stacks with ecosystem/stacks/<name>.env are shown.
+STACK_CHOICES = ("draft06", "latest")
+STACK_BLURBS = {
+    "draft06": "Condensed MTL by default; full ladder on EDNS 65050 (MTL v1.2 / liboqs 0.14)",
+    "latest": "Always-full MTL RRSIGs; same MTL commit as main Cipherops (liboqs 0.16)",
+}
 MTL_FULL = 65050
 UNBOUND_IP = "10.53.0.53"
 DASHBOARD_CONFIG = "configs/_dashboard.yaml"
+
+
+def list_stacks() -> list[str]:
+    """Image versions the dashboard can build/run (env file must exist)."""
+    root = ECO / "stacks"
+    out = [s for s in STACK_CHOICES if (root / f"{s}.env").is_file()]
+    for p in sorted(root.glob("*.env")):
+        if p.stem not in out:
+            out.append(p.stem)
+    return out or [DEFAULT_STACK]
+
+
+def stack_label(stack: str) -> str:
+    blur = STACK_BLURBS.get(stack)
+    return f"{stack} — {blur}" if blur else stack
+
+
+def stack_pins(stack: str) -> dict[str, str]:
+    """Key pins from ecosystem/stacks/<stack>.env (MTL, liboqs, …)."""
+    path = ECO / "stacks" / f"{stack}.env"
+    out: dict[str, str] = {}
+    if not path.is_file():
+        return out
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        out[k.strip()] = v.strip()
+    return out
 
 NAMES = {
     "10.53.0.100": "client",
@@ -625,8 +661,13 @@ def list_runs(h: LabHandle, tag: str | None = None) -> list[dict]:
 
 
 def stop_other_labs(h: LabHandle) -> list[str]:
-    """Bring down any other prepared lab. Container names and the 10.53.0.0/24 subnet are fixed,
-    so only one lab can run at a time; a different zone shape is a different lab."""
+    """Bring down any other prepared lab.
+
+    Container names (``eco-root``, …) and the ``10.53.0.0/24`` subnet are fixed, so only one
+    lab can run at a time. We always ``compose down`` other work folders — even when their
+    containers are already stopped — otherwise the old bridge network and name reservations
+    block starting another stack (e.g. draft06 leftovers vs latest).
+    """
     stopped: list[str] = []
     work_root = ECO / "work"
     if not work_root.is_dir():
@@ -634,17 +675,51 @@ def stop_other_labs(h: LabHandle) -> list[str]:
     for compose in work_root.glob("*/compose.yml"):
         if compose.resolve() == h.compose.resolve():
             continue
-        cp = _run(["docker", "compose", "-f", str(compose), "ps", "-q"], check=False, timeout=30)
-        if cp.stdout.strip():
-            _run(["docker", "compose", "-f", str(compose), "down"], check=False, timeout=120)
-            stopped.append(compose.parent.name)
+        _run(
+            ["docker", "compose", "-f", str(compose), "down", "--remove-orphans"],
+            check=False, timeout=120,
+        )
+        stopped.append(compose.parent.name)
     return stopped
+
+
+def _reclaim_fixed_lab_names() -> str:
+    """Force-remove leftover eco-* containers that still hold the fixed names."""
+    names = (
+        "eco-root", "eco-unbound", "eco-client",
+        *[f"eco-tld-{i}" for i in range(1, 10)],
+        "eco-tld-test", "eco-tld-lab",
+        *[f"eco-sld{i}" for i in range(1, 10)],
+    )
+    # Also discover any other eco-* from docker ps -a
+    cp = _run(["docker", "ps", "-aq", "--filter", "name=^eco-"], check=False, timeout=30)
+    ids = cp.stdout.split()
+    extra = ""
+    if ids:
+        rm = _run(["docker", "rm", "-f", *ids], check=False, timeout=60)
+        extra = (rm.stdout or "") + (rm.stderr or "")
+    else:
+        _run(["docker", "rm", "-f", *names], check=False, timeout=60)
+    # Stale dnsnet from another compose project name (stack in the project name)
+    nets = _run(["docker", "network", "ls", "--format", "{{.Name}}"], check=False, timeout=30)
+    for net in nets.stdout.splitlines():
+        net = net.strip()
+        if "cipherops-eco-" in net and net.endswith("_dnsnet"):
+            _run(["docker", "network", "rm", net], check=False, timeout=30)
+    return extra
 
 
 def up(h: LabHandle) -> str:
     stopped = stop_other_labs(h)
+    # Own project may also have exited containers holding names after a failed up
+    _run(compose_cmd(h, "down", "--remove-orphans"), check=False, timeout=120)
+    reclaim = _reclaim_fixed_lab_names()
     cp = _run(compose_cmd(h, "up", "-d"), timeout=180)
-    note = f"Stopped other lab(s) first: {', '.join(stopped)}\n" if stopped else ""
+    note = ""
+    if stopped:
+        note += f"Stopped other lab(s) first: {', '.join(stopped)}\n"
+    if reclaim.strip():
+        note += "Reclaimed leftover eco-* containers/networks\n"
     return note + cp.stdout + cp.stderr
 
 
@@ -1083,7 +1158,120 @@ def set_show_prepare_metrics(h: LabHandle, visible: bool) -> None:
 
 
 def session_queries(h: LabHandle, ui_log: list | None) -> list:
-    """Prefer in-memory query_log when the key exists (even if empty)."""
-    if ui_log is not None:
-        return list(ui_log)
-    return list(load_session(h).get("queries") or [])
+    """Merge UI log with on-disk session so a browser refresh does not wipe Queries."""
+    disk = list(load_session(h).get("queries") or [])
+    if ui_log is None:
+        return disk
+    if not ui_log:
+        return disk
+    # Prefer the longer/fresher view: UI may have rows not yet flushed, disk survives refresh.
+    if len(disk) > len(ui_log):
+        return disk
+    return list(ui_log)
+
+
+# ── UI prefs (survive Streamlit browser refresh; session_state does not) ──
+
+UI_PREFS_PATH = ECO / "results" / ".dashboard_prefs.json"
+
+
+def load_ui_prefs() -> dict:
+    if not UI_PREFS_PATH.is_file():
+        return {}
+    try:
+        data = json.loads(UI_PREFS_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_ui_prefs(prefs: dict) -> None:
+    UI_PREFS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    cur = load_ui_prefs()
+    cur.update({k: v for k, v in prefs.items() if v is not None})
+    UI_PREFS_PATH.write_text(json.dumps(cur, indent=2), encoding="utf-8")
+
+
+def split_lab_tag(tag: str) -> tuple[str, str] | None:
+    """eco-ui-small-latest → (eco-ui-small, latest)."""
+    stacks = list_stacks()
+    for s in sorted(stacks, key=len, reverse=True):
+        suf = f"-{s}"
+        if tag.endswith(suf) and len(tag) > len(suf):
+            return tag[: -len(suf)], s
+    return None
+
+
+def zone_size_for_lab_name(lab: str) -> str | None:
+    for key, preset in ZONE_SIZE_PRESETS.items():
+        if preset.get("name") == lab:
+            return key
+    if lab.startswith("eco-ui-custom-"):
+        return "custom"
+    return None
+
+
+def live_capture_inventory() -> list[dict]:
+    """All live-dashboard folders that still have .pcap files (newest first)."""
+    root = ECO / "results"
+    rows: list[dict] = []
+    if not root.is_dir():
+        return rows
+    for d in root.glob("*/live-dashboard"):
+        pcaps = sorted(d.glob("*.pcap"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not pcaps:
+            continue
+        tag = d.parent.name
+        parts = split_lab_tag(tag)
+        newest = pcaps[0].stat().st_mtime
+        rows.append({
+            "tag": tag,
+            "lab": parts[0] if parts else tag,
+            "stack": parts[1] if parts else "",
+            "zone_size": zone_size_for_lab_name(parts[0]) if parts else None,
+            "count": len(pcaps),
+            "newest": newest,
+            "dir": str(d),
+            "names": [p.name for p in pcaps[:12]],
+        })
+    rows.sort(key=lambda r: r["newest"], reverse=True)
+    return rows
+
+
+def infer_ui_from_disk() -> dict:
+    """Best-effort stack/zone after a hard refresh: prefs, else newest live captures."""
+    prefs = load_ui_prefs()
+    out: dict = {}
+    if prefs.get("stack") in list_stacks():
+        out["stack"] = prefs["stack"]
+    if prefs.get("zone_size") in ZONE_SIZE_PRESETS or prefs.get("zone_size") == "custom":
+        out["zone_size"] = prefs["zone_size"]
+    if prefs.get("scenarios"):
+        out["scenarios"] = list(prefs["scenarios"])
+
+    inv = live_capture_inventory()
+    if not inv:
+        return out
+
+    pref_tag = None
+    z = out.get("zone_size")
+    if z in ZONE_SIZE_PRESETS and out.get("stack"):
+        pref_tag = f"{ZONE_SIZE_PRESETS[z]['name']}-{out['stack']}"
+    pref_has_pcaps = pref_tag is not None and any(r["tag"] == pref_tag for r in inv)
+
+    # Keep saved lab when it still has captures. Otherwise (fresh browser / empty lab) follow newest.
+    if pref_has_pcaps:
+        return out
+    top = inv[0]
+    if top.get("stack"):
+        out["stack"] = top["stack"]
+    if top.get("zone_size"):
+        out["zone_size"] = top["zone_size"]
+    return out
+
+
+def list_pcaps(h: LabHandle) -> list[Path]:
+    d = h.capture_dir
+    if not d.is_dir():
+        return []
+    return sorted(d.glob("*.pcap"), key=lambda p: p.stat().st_mtime, reverse=True)
