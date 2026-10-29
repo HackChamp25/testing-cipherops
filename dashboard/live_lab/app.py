@@ -171,7 +171,7 @@ def _hint(text: str) -> None:
 _SESSION_KEYS = ("last_query", "query_log", "last_stats", "cache_result", "prepare_wall_s",
                  "prepare_summary", "last_log", "replay_fresh")
 _PCAP_KEYS = ("last_pcap", "last_dropped", "last_story", "last_wire", "last_seq_steps",
-              "last_seq_pcap", "auto_decode")
+              "last_seq_pcap")
 
 
 # ─────────────────────────── settings that survive tile switches ───────────────────────────
@@ -845,7 +845,7 @@ def sidebar_live(h: driver.LabHandle, stt: dict) -> None:
                 try:
                     msg = driver.activate(h, scenario, udp=udp)
                     st.session_state.query_log = []
-                    for k in ("last_query", "last_stats", *_PCAP_KEYS):  # they describe the previous scenario
+                    for k in ("last_query", "last_stats", "pcap_story_choice", "pcap_seq_choice", *_PCAP_KEYS):  # they describe the previous scenario
                         st.session_state.pop(k, None)
                     _log_chunks(msg, phase="activate", source="compose", title="activate")
                     activity("ok", f"{scenario} live", "", phase="activate", source="compose", h=h)
@@ -1589,7 +1589,6 @@ def query_panel(h: driver.LabHandle, stt: dict) -> None:
                         df = decode.decode_pcap(pcap_path)
                         st.session_state.last_story = decode.build_story(df)
                         st.session_state.last_wire = decode.wire_summary(df)
-                        st.session_state.auto_decode = True
                         box.write(f"   {len(df)} packets captured")
                         activity("info", "Packet story", "\n".join((st.session_state.last_story or [])[:10]),
                                  phase="pcap", source="pcap", h=h)
@@ -1603,6 +1602,8 @@ def query_panel(h: driver.LabHandle, stt: dict) -> None:
 
             st.session_state.last_query = row
             st.session_state.last_pcap = str(pcap_path) if pcap_path else None
+            if pcap_path:
+                st.session_state.pcap_focus = str(pcap_path)  # Results opens on this query's capture
             st.session_state.last_dropped = dropped
             st.session_state.last_stats = row.get("unbound_stats") or {}
             st.session_state.setdefault("query_log", []).append({**row, "pcap": st.session_state.last_pcap})
@@ -1680,6 +1681,8 @@ def dig_panel(h: driver.LabHandle, stt: dict) -> None:
                 if capture:
                     pcap_path, _ = driver.stop_capture(h)
                     st.session_state.last_pcap = str(pcap_path) if pcap_path else None
+                    if pcap_path:
+                        st.session_state.pcap_focus = str(pcap_path)
                 st.session_state.setdefault("dig_log", []).insert(0, res)
                 activity("ok" if res["exit"] == 0 else "err", res["command"],
                          res["output"][:2000], phase="probe", source="dig", h=h)
@@ -1815,102 +1818,119 @@ def _pcap_name(p: str) -> str:
     return Path(p).name
 
 
+@st.cache_data(show_spinner=False, max_entries=16)
+def _decoded(path: str, mtime_ns: int) -> pd.DataFrame:
+    """Decode a capture once per file version; reruns (tab clicks, polling) reuse the result."""
+    return decode.decode_pcap(path)
+
+
+@st.cache_data(show_spinner=False, max_entries=16)
+def _sequence(path: str, mtime_ns: int) -> list:
+    df = _decoded(path, mtime_ns)
+    return decode.build_sequence_steps(df) if not df.empty else []
+
+
+def _mtime_ns(path: str) -> int:
+    try:
+        return Path(path).stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+def _sync_pcap_choices(options: list[str]) -> None:
+    """Point both capture pickers at the capture of the query just run; otherwise keep the user's pick;
+    otherwise (nothing picked, or the picked file is gone) the newest capture."""
+    focus = st.session_state.pop("pcap_focus", None)
+    for key in ("pcap_story_choice", "pcap_seq_choice"):
+        if focus in options:
+            st.session_state[key] = focus
+        elif st.session_state.get(key) not in options and options:
+            st.session_state[key] = options[0]
+
+
+def _query_for_pcap(pcap: str) -> dict | None:
+    for r in reversed(st.session_state.get("query_log") or []):
+        if r.get("pcap") == pcap:
+            return r
+    return None
+
+
+def _capture_context(pcap: str) -> str:
+    q = _query_for_pcap(pcap)
+    if not q:
+        return f"`{Path(pcap).name}` (a dig or earlier capture; no saved query is linked to it)"
+    return (f"`{q.get('qname')} {q.get('qtype')}` · {q.get('path', '')} · scenario **{q.get('scenario') or '?'}** · "
+            f"{q.get('at', '')} · {q.get('rcode', '')}")
+
+
 def pcap_decode_view(h: driver.LabHandle, options: list[str]) -> None:
     if not options:
         st.caption("No captures yet — run a Live query with Capture on.")
         return
-    choice = st.selectbox("Capture", options, index=0, key="pcap_story_choice", format_func=_pcap_name)
+    choice = st.selectbox("Capture", options, key="pcap_story_choice", format_func=_pcap_name)
+    st.caption(_capture_context(choice))
     hide_tcp = st.checkbox("Hide TCP handshake noise", value=True, key="pcap_hide_tcp")
-    if st.button("Decode", key="pcap_story_decode") or st.session_state.get("auto_decode"):
-        st.session_state.auto_decode = False
-        df = decode.decode_pcap(choice)
-        if df.empty:
-            st.warning("This capture has no DNS packets.")
-            return
-        wire = decode.wire_summary(df)
-        story = decode.build_story(df)
-        w = st.columns(4)
-        w[0].metric("Packets", wire["packets"])
-        w[1].metric("Client B", f"{wire['client_bytes']:,}")
-        w[2].metric("Upstream B", f"{wire['upstream_bytes']:,}")
-        w[3].metric("MTL-FULL", wire["mtl_full_packets"])
-        st.markdown("**What happened**")
-        for line in story:
-            st.markdown(line)
-        show = df[df["phase"] != "tcp_noise"] if hide_tcp and "phase" in df.columns else df
-        cols = [c for c in ["#", "ms", "phase_label", "hop", "proto", "bytes", "dns_bytes",
-                            "summary", "ad", "rrsigs"] if c in show.columns]
-        st.caption(
-            "**bytes** = this IP/UDP/TCP payload on the wire · "
-            "**dns_bytes** = DNS message length (TCP length prefix / UDP DNS size). "
-            "Large MTL answers often span several TCP segments — do not read Max answer from a single **bytes** cell."
-        )
-        # Force horizontal scroll: Streamlit squeezes wide text columns unless widths are set.
-        cfg = {
-            "summary": st.column_config.TextColumn("summary", width="large"),
-            "rrsigs": st.column_config.TextColumn("rrsigs", width="medium"),
-            "phase_label": st.column_config.TextColumn("phase_label", width="medium"),
-            "hop": st.column_config.TextColumn("hop", width="medium"),
-            "bytes": st.column_config.NumberColumn("bytes", help="Wire payload in this packet/segment"),
-            "dns_bytes": st.column_config.NumberColumn(
-                "dns_bytes", help="Reassembled DNS message length when known"),
-        }
-        st.dataframe(
-            show[cols], width="stretch", hide_index=True, height=420,
-            column_config={k: v for k, v in cfg.items() if k in cols},
-        )
+    df = _decoded(choice, _mtime_ns(choice))
+    if df.empty:
+        st.warning("This capture has no DNS packets.")
+        return
+    wire = decode.wire_summary(df)
+    story = decode.build_story(df)
+    w = st.columns(4)
+    w[0].metric("Packets", wire["packets"])
+    w[1].metric("Client B", f"{wire['client_bytes']:,}")
+    w[2].metric("Upstream B", f"{wire['upstream_bytes']:,}")
+    w[3].metric("MTL-FULL", wire["mtl_full_packets"])
+    st.markdown("**What happened**")
+    for line in story:
+        st.markdown(line)
+    show = df[df["phase"] != "tcp_noise"] if hide_tcp and "phase" in df.columns else df
+    cols = [c for c in ["#", "ms", "phase_label", "hop", "proto", "bytes", "dns_bytes",
+                        "summary", "ad", "rrsigs"] if c in show.columns]
+    st.caption(
+        "**bytes** = this IP/UDP/TCP payload on the wire · "
+        "**dns_bytes** = DNS message length (TCP length prefix / UDP DNS size). "
+        "Large MTL answers often span several TCP segments — do not read Max answer from a single **bytes** cell."
+    )
+    # Force horizontal scroll: Streamlit squeezes wide text columns unless widths are set.
+    cfg = {
+        "summary": st.column_config.TextColumn("summary", width="large"),
+        "rrsigs": st.column_config.TextColumn("rrsigs", width="medium"),
+        "phase_label": st.column_config.TextColumn("phase_label", width="medium"),
+        "hop": st.column_config.TextColumn("hop", width="medium"),
+        "bytes": st.column_config.NumberColumn("bytes", help="Wire payload in this packet/segment"),
+        "dns_bytes": st.column_config.NumberColumn(
+            "dns_bytes", help="Reassembled DNS message length when known"),
+    }
+    st.dataframe(
+        show[cols], width="stretch", hide_index=True, height=420,
+        column_config={k: v for k, v in cfg.items() if k in cols},
+    )
 
 
 def pcap_sequence_view(h: driver.LabHandle, options: list[str]) -> None:
     if not options:
         st.caption("No captures yet — run a Live query with Capture on.")
         return
-    # Prefer Capture-decode selection, then last lab capture, then last sequence.
-    idx = 0
-    for pref in (
-        st.session_state.get("pcap_story_choice"),
-        st.session_state.get("last_pcap"),
-        st.session_state.get("last_seq_pcap"),
-    ):
-        if pref in options:
-            idx = options.index(pref)
-            break
-    seq_choice = st.selectbox("Capture", options, index=idx, key="pcap_seq_choice", format_func=_pcap_name)
-    if st.button("Show sequence", key="pcap_seq_decode", type="primary"):
-        df = decode.decode_pcap(seq_choice)
-        if df.empty:
+    seq_choice = st.selectbox("Capture", options, key="pcap_seq_choice", format_func=_pcap_name)
+    st.caption(_capture_context(seq_choice))
+    steps = _sequence(seq_choice, _mtime_ns(seq_choice))
+    if not steps:
+        if _decoded(seq_choice, _mtime_ns(seq_choice)).empty:
             st.warning("This capture has no DNS packets.")
-            st.session_state.pop("last_seq_steps", None)
-            st.session_state.pop("last_seq_pcap", None)
         else:
-            steps = decode.build_sequence_steps(df)
-            st.session_state.last_seq_steps = steps
-            st.session_state.last_seq_pcap = seq_choice
-            if not steps:
-                st.warning(
-                    "Decoded the capture, but no Client/Unbound/Root/TLD/SLD hops "
-                    "were recognized for a sequence diagram."
-                )
-    steps = st.session_state.get("last_seq_steps")
-    shown_pcap = st.session_state.get("last_seq_pcap") or seq_choice
-    if steps and st.session_state.get("last_seq_pcap") == seq_choice:
-        st.caption(f"{Path(shown_pcap).name} · {len(steps)} messages from this capture")
-        show_sequence_diagram(steps)
-    elif steps and st.session_state.get("last_seq_pcap") != seq_choice:
-        st.caption(
-            f"Showing last sequence ({Path(st.session_state.last_seq_pcap).name}). "
-            "Click Show sequence to rebuild for the selected capture."
-        )
-        show_sequence_diagram(steps)
-    elif st.session_state.get("last_seq_pcap"):
-        st.caption("No sequence steps for the last decode.")
-    else:
-        st.caption("Choose a capture and click Show sequence.")
+            st.warning("Decoded the capture, but no Client/Unbound/Root/TLD/SLD hops "
+                       "were recognized for a sequence diagram.")
+        return
+    st.session_state.last_seq_steps, st.session_state.last_seq_pcap = steps, seq_choice
+    st.caption(f"{len(steps)} messages from this capture")
+    show_sequence_diagram(steps)
 
 
 def live_results(h: driver.LabHandle) -> None:
     queries, packets, sequence = st.tabs(["Queries", "Packet decode", "Sequence diagram"])
     options = _pcap_options(h)
+    _sync_pcap_choices(options)
     _pcap_folder_banner(h, options)
     # Re-hydrate query log from disk after refresh (session_state is empty; session.json is not).
     if "query_log" not in st.session_state:
@@ -1920,9 +1940,13 @@ def live_results(h: driver.LabHandle) -> None:
         if qlog and not st.session_state.get("query_log"):
             st.session_state.query_log = list(qlog)
         if qlog:
-            qdf = pd.DataFrame(qlog)
-            cols = [c for c in ["qname", "qtype", "rcode", "ad", "latency_ms", "response_bytes",
-                                "tcp_response_bytes", "transport"] if c in qdf.columns]
+            cur = st.session_state.get("last_query") or qlog[-1]
+            st.markdown(f"**Current query** · `{cur.get('qname')} {cur.get('qtype')}` · {cur.get('path', '')} · "
+                        f"scenario **{cur.get('scenario') or '?'}** · {cur.get('rcode', '')} · "
+                        f"AD={'yes' if cur.get('ad') else 'no'} · {cur.get('at', '')}")
+            qdf = pd.DataFrame(qlog).iloc[::-1]  # newest first
+            cols = [c for c in ["at", "scenario", "path", "qname", "qtype", "rcode", "ad", "latency_ms",
+                                "response_bytes", "tcp_response_bytes", "transport"] if c in qdf.columns]
             st.dataframe(qdf[cols], width="stretch", hide_index=True)
         else:
             st.caption("No queries yet — send one from the Query tab.")
