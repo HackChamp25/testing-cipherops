@@ -146,6 +146,10 @@ def start(params: dict) -> str:
         live = running_suite()
         if live:
             raise driver.LabBusy(f"Benchmark {live['id']} is already {live['state']}.")
+        building = driver.active_build_stack()
+        if building:
+            raise driver.LabBusy(f"Images for {building} are still being built. Wait for the build to finish or "
+                                 "cancel it first: it would distort the timings.")
         busy = driver.active_prepare_tags()
         if busy:
             raise driver.LabBusy(f"Signing is running for lab {', '.join(busy)}. Wait for it to finish or cancel it "
