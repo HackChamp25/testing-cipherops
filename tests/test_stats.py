@@ -46,3 +46,25 @@ def test_label_says_when_trials_are_too_few():
     assert "too few trials" in stats.ci_label(3)
     assert "too few" not in stats.ci_label(7)
     assert stats.ci_label(5).startswith("94% CI")
+
+
+def test_paired_ratio_uses_each_trials_own_pairing():
+    base = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
+    cand = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    r = stats.paired_ratio(base, cand)
+    assert r["n"] == 6 and r["median"] == pytest.approx(10.0) and (r["lo"], r["hi"]) == (10.0, 10.0)
+    assert r["coverage"] == pytest.approx(0.96875)
+
+
+def test_paired_ratio_differs_from_a_ratio_of_medians_when_trials_drift():
+    # a slow trial slows both modes alike: the per-trial ratio is steady even though the medians move a lot
+    base = [10.0, 20.0, 100.0, 12.0, 24.0, 120.0]
+    cand = [1.0, 2.0, 10.0, 1.2, 2.4, 12.0]
+    r = stats.paired_ratio(base, cand)
+    assert (r["lo"], r["hi"]) == (10.0, 10.0)
+
+
+def test_paired_ratio_skips_unusable_pairs():
+    r = stats.paired_ratio([4.0, float("nan"), 9.0, 8.0], [2.0, 1.0, 0.0, 4.0])
+    assert r["n"] == 2 and r["median"] == pytest.approx(2.0)
+    assert stats.paired_ratio([], [])["n"] == 0

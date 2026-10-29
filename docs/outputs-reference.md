@@ -330,6 +330,8 @@ trials[dataset][mode].limited               signing sample used
 transmitted[dataset][mode][udp_limit]       dns_bytes, response_bytes, rrsig_signature_bytes, truncations,
                                             tcp_exchanges, mtl_full_fetches, transmitted_responses
 response_fit[dataset][mode][record_class]   fit_1232_pct, median_bytes   (default answers at 1232)
+paired_ratios[]                             one row per dataset and metric: direct SLH-DSA / MTL taken per trial
+                                            (ratio = median, ratio_lo, ratio_hi, coverage, extrapolated)
 ```
 
 `ci_coverage` is the real coverage of `median_ci` for `n` trials (0.9375 for 5).
