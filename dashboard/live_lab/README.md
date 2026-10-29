@@ -21,6 +21,23 @@ The app opens on a hub of five tiles. **Setup** builds the images (and, for Live
 | **Compare** | MTL vs SLH-DSA and the other modes, side by side | Benchmark, dataset size, network, candidate and baseline | Cards, scaling across sizes, signing, bytes per tier, cache, latency, CSV |
 | **Reset** | Clear only the scopes you pick | Notes on what is kept | What the last reset removed |
 
+## Signing replay
+
+After **Prepare**, Setup opens an animated replay of how the hierarchy was signed (also under Setup → **Signing replay**, any time the lab is prepared). It plays bottom-up: leaf zones, then TLDs, then the root, with the DS record travelling up to each parent and the root DS ending as the trust anchor. Pick a scenario to compare the stories:
+
+- **mtl:** the zone's RRsets become leaves, the leaves are hashed into a Merkle tree, the rungs form the ladder, the ladder is signed once, and each RRset keeps only a short condensed path.
+- **slh-dsa, ecdsa, rsa, ed25519:** every RRset is signed on its own, with a bar per signature drawn to the same scale so the sizes compare.
+
+It is a normal animation: play, pause, restart, speed, and a timeline you can drag. Story time is compressed (each tier takes the same few seconds) and the real signing times are on the labels. Counts, timings and bytes are **measured** from the Prepare manifest. Signature and ladder sizes are **analytical** (draft section 12). The tree shape is **illustrative**: it is drawn from each zone's real RRSIG count (one leaf per RRSIG, one rung per 1-bit of that count), because the signing library does not report its tree. Code: `prepare_story.py` (scene builder, tested in `tests/test_prepare_story.py`) and `assets/prepare_player.html` (the player).
+
+### Live while Prepare runs
+
+**Prepare** no longer blocks the page. It starts a background job (`prepare_job.py`) and Setup shows the signing as it happens: an overall progress bar, a chip per scenario, leaf/TLD/root counters, the hierarchy coloured by state (grey waiting, amber signing, green signed, with the measured RRSIG count and time on each zone) and a zone table with a live clock. The signer prints one `@@EVENT {json}` line per zone start and finish when `ECOLAB_EVENTS=1` is set (`ecolab.sign.emit`); the job writes them to `ecosystem/work/<lab>/prepare-live/events.jsonl`, so the page can be reloaded or closed and picked up again. When signing ends the page opens the replay by itself. **Cancel signing** stops the job and its container. The job signs from a private copy of the config, so changing Zone size in the sidebar while it runs cannot redirect its output. Tests: `tests/test_prepare_job.py`.
+
+### RRSIG counts
+
+An RRSIG count is the number of real RRSIG records in the signed zone: a leaf zone has 2 per name (its record and its NSEC3 proof) plus 7 of its own, a TLD 2 per child plus 7, the root 2 per TLD plus 8 (Small = 55, Medium = 353). Earlier versions also counted NSEC3 records (their type bitmap lists RRSIG), about 1.5x too many. The signer now counts exactly, and manifests written before the fix are recounted from the signed files when the dashboard loads them (the stored figure is kept as `rrsig_count_manifest`). The planned-lab estimate uses the same exact formula.
+
 ## Benchmark
 
 One press of **Run benchmark** does, for each dataset size (default 50, 500 and 5,000 data names): build the hierarchy, sign it with every chosen scenario (timed), repeat signing and verification on sample zones (several trials), start the lab, replay the same seeded workload with repeated cold and warm trials, and stop the lab. It needs only the built images: no Prepare and no running lab. It runs in the background, so you can leave the page; Results fills in when it finishes.

@@ -26,12 +26,15 @@ SUITES_DIR = ECO_DIR / "results" / "suites"
 sys.path.insert(0, str(ROOT / "dashboard"))
 
 from live_lab import compare, decode, driver  # noqa: E402
+from live_lab import prepare_job, prepare_story  # noqa: E402
 from live_lab import suite as suite_mod  # noqa: E402
 
 compare = importlib.reload(compare)
 decode = importlib.reload(decode)
 driver = importlib.reload(driver)
+prepare_story = importlib.reload(prepare_story)
 suite_mod = importlib.reload(suite_mod)
+prepare_job = importlib.reload(prepare_job)  # after suite_mod: it uses the suite's process helpers
 
 st.set_page_config(page_title="Cipherops · MTL DNSSEC Lab", layout="wide", page_icon="🛰️")
 
@@ -165,7 +168,7 @@ def _hint(text: str) -> None:
 
 
 _SESSION_KEYS = ("last_query", "query_log", "last_stats", "cache_result", "prepare_wall_s",
-                 "prepare_summary", "last_log")
+                 "prepare_summary", "last_log", "replay_fresh")
 _PCAP_KEYS = ("last_pcap", "last_dropped", "last_story", "last_wire", "last_seq_steps",
               "last_seq_pcap", "auto_decode")
 
@@ -481,6 +484,62 @@ def _activity_expander(h: driver.LabHandle) -> None:
 
 # ─────────────────────────── sidebars ───────────────────────────
 
+# Full screen needs a user click (browsers block it on load). Icon only, pinned to the top-right of the
+# main pane so the sidebar stays tight — Cipherops sits next to "How to use this lab" / Home as before.
+_FULLSCREEN_HTML = """
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden; }
+  button {
+    width: 32px; height: 32px; border-radius: 8px; padding: 0; cursor: pointer;
+    font-size: 16px; line-height: 1; color: #31333f;
+    background: rgba(255,255,255,.92); border: 1px solid rgba(49,51,63,.18);
+  }
+  button:hover { border-color: #ff4b4b; color: #ff4b4b; }
+  @media (prefers-color-scheme: dark) {
+    button { color: #fafafa; background: rgba(38,39,48,.92); border-color: rgba(250,250,250,.2); }
+    button:hover { border-color: #ff4b4b; color: #ff4b4b; }
+  }
+</style>
+<button id="b" title="Full screen" aria-label="Full screen">&#x26F6;</button>
+<script>
+  (function () {
+    const frame = window.frameElement;
+    if (frame) {
+      Object.assign(frame.style, {
+        position: "fixed", top: "4.1rem", right: "1.25rem",
+        width: "34px", height: "34px", zIndex: "998",
+        border: "none", background: "transparent",
+      });
+      // Collapse the Streamlit slot so this control never pushes page content down.
+      const slot = frame.closest("[data-testid='stElementContainer'], .stElementContainer, .element-container");
+      if (slot) Object.assign(slot.style, { height: "0", margin: "0", padding: "0", overflow: "visible" });
+    }
+    const b = document.getElementById("b");
+    try {
+      const doc = window.parent.document;
+      const sync = () => {
+        const on = !!doc.fullscreenElement;
+        b.textContent = on ? "\\u2715" : "\\u26F6";
+        b.title = on ? "Exit full screen" : "Full screen";
+        b.setAttribute("aria-label", b.title);
+      };
+      b.onclick = () => (doc.fullscreenElement ? doc.exitFullscreen() : doc.documentElement.requestFullscreen());
+      doc.addEventListener("fullscreenchange", sync);
+      sync();
+    } catch (e) {
+      b.title = "Press F11 for full screen";
+      b.setAttribute("aria-label", b.title);
+      b.disabled = true;
+    }
+  })();
+</script>
+"""
+
+
+def _fullscreen_icon() -> None:
+    _embed_html(_FULLSCREEN_HTML, height=1)
+
+
 def _sidebar_brand(mode: str) -> None:
     st.sidebar.title("Cipherops")
     st.sidebar.caption("MTL DNSSEC Lab")
@@ -521,6 +580,45 @@ def sidebar_home(h: driver.LabHandle, stt: dict) -> None:
 def _step_label(n: int, title: str, state: str) -> str:
     mark = {"done": "🟢", "partial": "🟡"}.get(state, "⚪")
     return f"{mark}  **Step {n}** · {title}"
+
+
+def _finish_prepare_job(h: driver.LabHandle) -> None:
+    """Take over a Prepare job that has just ended: update this session and the Activity log, once.
+
+    The worker has already saved the session summary to disk; this adds what only the page can do
+    (open the signing replay, log the result). ``handled`` is stored with the job, so a second browser
+    tab, or a later session, does not repeat it.
+    """
+    stt = prepare_job.status(h)
+    state = stt.get("state")
+    if state not in ("done", "failed", "stopped") or stt.get("handled"):
+        return
+    prepare_job.mark_handled(h)
+    scen_txt = ", ".join(stt.get("scenarios") or [])
+    if state != "done":
+        msg = str(stt.get("error") or "Signing did not finish.")[-2000:]
+        st.sidebar.error(msg[:600])
+        activity("err", "Signing failed", msg, phase="prepare", source="prepare", h=h)
+        return
+    secs = float(stt.get("wall_s") or 0)
+    summary = stt.get("summary") or driver.prepare_summary(h, wall_s=secs)
+    ss = st.session_state
+    ss.prepare_wall_s = secs
+    ss.show_prepare_metrics = True
+    ss.replay_fresh = True  # Setup → Overview opens the signing replay
+    ss.prepare_summary = summary
+    log = prepare_job.log_text(h)
+    ss.last_log = log[-8000:]
+    _log_chunks(log, phase="prepare", source="prepare", title="prepare")
+    n_scen = len(summary.get("scenarios") or stt.get("scenarios") or [])
+    activity("ok", f"Zones signed ({secs:.0f}s)",
+             f"Prepared {n_scen} scenario(s): {scen_txt}. Watch the signing replay in Setup, "
+             "or open Results for sign times.", phase="prepare", source="prepare", h=h)
+    activity("info", "Prepare paths",
+             f"work: `{summary['work_dir']}`\nzones: `{summary['zones_dir']}`\n"
+             f"active: `{summary['active_dir']}`\ncompose: `{summary['compose']}`",
+             phase="prepare", source="prepare", h=h, tech=True)
+    st.sidebar.success(f"Done · {secs:.0f}s")
 
 
 def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
@@ -632,45 +730,22 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
     prep_state = "done" if prepared_session else ("partial" if r["prepared"] else "none")
     st.sidebar.markdown(_step_label(2, "Prepare", prep_state))
     _hint("Sign the DNS hierarchy for each selected scenario.")
-    if st.sidebar.button("Prepare", key="btn_prep", width="stretch", disabled=not sc or bool(shape_errors)):
+    _finish_prepare_job(h)
+    signing = prepare_job.is_running(h)
+    if signing:
+        _hint("Signing is running. Watch it live in Setup.")
+    if st.sidebar.button("Prepare", key="btn_prep", width="stretch",
+                         disabled=not sc or bool(shape_errors) or signing):
         _apply_ui_config(h)
         jobs = int(cfg("jobs", 2))
         scen_txt = ", ".join(sc)
         activity("step", "Signing zones", f"Size {size} · {scen_txt}", phase="prepare", source="prepare", h=h)
-        with st.spinner("Signing…"):
-            try:
-                t0 = time.perf_counter()
-                log = driver.prepare(h, jobs=jobs, scenarios=list(sc))
-                secs = time.perf_counter() - t0
-                st.session_state.last_log = log[-8000:]
-                st.session_state.prepare_wall_s = secs
-                st.session_state.show_prepare_metrics = True
-                summary = driver.prepare_summary(h, wall_s=secs, scenarios=list(sc))
-                st.session_state.prepare_summary = summary
-                sess = driver.load_session(h)
-                sess["prepare_wall_s"] = secs
-                sess["show_prepare_metrics"] = True
-                sess["prepare_summary"] = summary
-                driver.save_session(h, sess)
-                _log_chunks(log, phase="prepare", source="prepare", title="prepare")
-                n_scen = len(summary.get("scenarios") or sc)
-                activity(
-                    "ok", f"Zones signed ({secs:.0f}s)",
-                    f"Prepared {n_scen} scenario(s): {scen_txt}. Open Results for sign times.",
-                    phase="prepare", source="prepare", h=h,
-                )
-                activity(
-                    "info", "Prepare paths",
-                    f"work: `{summary['work_dir']}`\n"
-                    f"zones: `{summary['zones_dir']}`\n"
-                    f"active: `{summary['active_dir']}`\n"
-                    f"compose: `{summary['compose']}`",
-                    phase="prepare", source="prepare", h=h, tech=True,
-                )
-                st.sidebar.success(f"Done · {secs:.0f}s")
-            except Exception as e:  # noqa: BLE001
-                st.sidebar.error(str(e)[:600])
-                activity("err", "Signing failed", str(e)[:2000], phase="prepare", source="prepare", h=h)
+        try:
+            prepare_job.start(h, jobs=jobs, scenarios=list(sc))  # returns at once; Setup shows it live
+            st.session_state.pop("replay_fresh", None)
+        except Exception as e:  # noqa: BLE001
+            st.sidebar.error(str(e)[:600])
+            activity("err", "Signing failed to start", str(e)[:2000], phase="prepare", source="prepare", h=h)
         st.rerun()
 
     # —— Step 3: start / stop ——
@@ -1065,10 +1140,136 @@ def planned_lab(h: driver.LabHandle) -> None:
                                    mime="text/yaml", key="cfg_dl")
 
 
+def _embed_html(html: str, height: int | str = "content") -> None:
+    """Show a self-contained HTML page in an iframe (``st.iframe`` on current Streamlit)."""
+    if hasattr(st, "iframe"):
+        st.iframe(html, height=height)
+    else:  # older Streamlit: needs a fixed height
+        import streamlit.components.v1 as components
+        components.html(html, height=int(height) if isinstance(height, int) else 780)
+
+
+def _clock(seconds: float) -> str:
+    m, s = divmod(int(max(0, seconds)), 60)
+    return f"{m}:{s:02d}"
+
+
+_STATE_TEXT = {"waiting": "waiting", "signing": "signing…", "done": "signed"}
+
+
+@st.fragment(run_every=1.0)
+def _prepare_live_body(h: driver.LabHandle) -> None:
+    """Polls the Prepare job once a second and redraws the monitor. Hands over when the job ends."""
+    job = prepare_job.status(h)
+    if job.get("state") not in prepare_job.ACTIVE_STATES:
+        st.rerun()  # whole page: the sidebar takes over the result and the replay opens
+        return
+    started = float(job.get("started") or time.time())
+    live = prepare_job.live_state(prepare_job.events(h), expected=job.get("scenarios"))
+    elapsed = time.time() - started
+
+    if not live["scenarios"]:
+        st.progress(0.0, text=f"Starting the signing container… {_clock(elapsed)}")
+    else:
+        done, total = live["zones_done"], live["zones_total"]
+        st.progress(min(1.0, live["fraction"]), text=f"{done} of {total} zones signed · {_clock(elapsed)} elapsed")
+
+        pills = []
+        for x in live["scenarios"]:
+            pills.append(f"**{x['scenario']}** {_STATE_TEXT[x['state']]} ({x['done']}/{x['total']})")
+        pills += [f"**{s}** waiting" for s in live["pending"]]
+        st.markdown("  ·  ".join(pills))
+
+        cur = next(x for x in live["scenarios"] if x["scenario"] == live["current"])
+        algs = cur["algorithms"]
+        if algs:
+            st.caption("Signing **{}** with: ".format(cur["scenario"]) + " · ".join(
+                f"{prepare_job.TIER_LABEL[t].lower()} {algs[t]}" for t in prepare_job.TIER_ORDER if t in algs))
+
+        cols = st.columns(len(prepare_job.TIER_ORDER))
+        for col, tier in zip(cols, prepare_job.TIER_ORDER):
+            t = cur["tiers"].get(tier) or {"total": 0, "done": 0, "signing": 0}
+            col.metric(prepare_job.TIER_LABEL[tier], f"{t['done']} / {t['total']}",
+                       f"{t['signing']} signing now" if t["signing"] else None, delta_color="off")
+
+        left, right = st.columns([3, 2])
+        with left:
+            # natural size: stretching a small graph to the column makes the boxes huge and the text tiny
+            st.graphviz_chart(prepare_job.live_dot(cur))
+        with right:
+            tier_rank = {t: i for i, t in enumerate(prepare_job.TIER_ORDER)}
+            rows = []
+            for z in sorted(cur["zones"], key=lambda z: (tier_rank.get(z["tier"], 9), z["origin"])):
+                if z["state"] == "done":
+                    took = f"{float(z.get('sign_s') or 0):.1f} s"
+                elif z["state"] == "signing" and z.get("elapsed") is not None:
+                    took = f"{z['elapsed']:.0f} s…"
+                else:
+                    took = ""
+                rows.append({"Zone": z["origin"], "Tier": prepare_job.TIER_LABEL.get(z["tier"], z["tier"]),
+                             "State": _STATE_TEXT[z["state"]],
+                             "RRSIGs": int(z["rrsigs"]) if z.get("rrsigs") is not None else None,
+                             "Sign time": took})
+            st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", height=min(420, 38 + 35 * len(rows)))
+
+    st.caption("Zones sign in parallel (Sign jobs), tier by tier: leaf zones first, then each TLD with its "
+               "children's DS records, then the root. RRSIG counts and times are measured as each zone finishes.")
+    with st.expander("Signer output"):
+        st.code(prepare_job.log_text(h, 4000) or "(nothing printed yet)", language="text")
+    if st.button("Cancel signing", key="btn_prep_cancel"):
+        prepare_job.cancel(h)
+        activity("info", "Signing cancelled", "", phase="prepare", source="prepare", h=h)
+        st.rerun()
+
+
+def prepare_live_panel(h: driver.LabHandle) -> None:
+    st.markdown("### Signing live")
+    _prepare_live_body(h)
+
+
+def setup_replay(h: driver.LabHandle, *, key: str) -> None:
+    """Animated replay of how Prepare signed the hierarchy (built from the Prepare manifests on disk)."""
+    manifests = driver.list_manifests(h) if (prepare_metrics_visible(h) and h.prepared()) else {}
+    if not manifests:
+        st.info("The signing replay appears here after you run Prepare (Step 2 in the sidebar).")
+        return
+    names = compare.order_scenarios(manifests)
+    pick = names[0]
+    if len(names) > 1:
+        pick = st.radio(
+            "Scenario", names, horizontal=True, key=f"replay_pick_{key}",
+            index=names.index("mtl") if "mtl" in names else 0,
+            help="Each scenario signs the same zones. Compare how many signatures each one needs.",
+        )
+    size_key = cfg("zone_size", "small")
+    size_label = driver.ZONE_SIZE_PRESETS.get(size_key, {}).get("label", str(size_key))
+    scene = prepare_story.build_scene(
+        manifests[pick], lab=h.lab, scenario=pick,
+        zones_dir=h.work / "zones" / pick, size_label=size_label,
+    )
+    _embed_html(prepare_story.render_html(scene), height="content")
+    st.caption(
+        "**Want more records?** Change **Zone size** in the sidebar (Small, Medium, Large, or **Custom…** for "
+        "TLDs, leaf zones and names per leaf zone), then press **Prepare**. The replay always shows the last Prepare."
+    )
+    st.caption(
+        "Time is compressed so every tier takes the same few seconds; the real signing times are on the labels. "
+        "Record counts are the RRSIGs found in the signed zone files; the tree is drawn from that count "
+        "(one leaf per signed RRset, one perfect tree per 1-bit of the count)."
+    )
+
+
 def setup_overview(h: driver.LabHandle, stt: dict) -> None:
     imgs = stt.get("images") or {}
     containers = stt.get("containers") or {}
     r = readiness(stt)
+
+    if st.session_state.get("replay_fresh") and h.prepared():
+        with st.container(border=True):
+            top, hide = st.columns([6, 1])
+            top.markdown("**Signing replay** · how Prepare just signed the hierarchy")
+            hide.button("Hide", key="hide_replay", on_click=lambda: st.session_state.pop("replay_fresh", None))
+            setup_replay(h, key="fresh")
 
     err = st.session_state.get("last_start_error")
     if err:
@@ -1154,9 +1355,16 @@ def setup_results(h: driver.LabHandle) -> None:
 
 def setup_page(h: driver.LabHandle, stt: dict) -> None:
     _page_header("setup", h, stt)
-    overview, results, activity = st.tabs(["Overview", "Results", "Activity log"])
+    if prepare_job.is_running(h):
+        # Signing is in progress: show it live. The other tabs describe the previous Prepare, so they
+        # wait until it ends (the page reruns by itself and opens the replay).
+        prepare_live_panel(h)
+        return
+    overview, replay, results, activity = st.tabs(["Overview", "Signing replay", "Results", "Activity log"])
     with overview:
         setup_overview(h, stt)
+    with replay:
+        setup_replay(h, key="tab")
     with results:
         setup_results(h)
     with activity:
@@ -2462,6 +2670,7 @@ PAGES = {
 
 def main() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
+    _fullscreen_icon()  # symbol only, top-right; no layout cost on the sidebar or page body
     symbol, _full = _brand()
     if symbol is not None:
         st.logo(symbol, icon_image=symbol, size="large")  # top-left on Home and on every tile

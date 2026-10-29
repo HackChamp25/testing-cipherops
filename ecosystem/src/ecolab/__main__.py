@@ -24,7 +24,7 @@ def _list(v: str | None, default: list) -> list:
 
 
 def cmd_prepare(a) -> None:
-    from .sign import sign_scenario
+    from .sign import emit, sign_scenario
     from .topology import write_active, write_compose
 
     from .sign import load_manifest
@@ -38,6 +38,7 @@ def cmd_prepare(a) -> None:
     path = write_compose(lab, lab.stack)
     write_active(lab, scenarios[0], load_manifest(lab, scenarios[0]), int(lab.cfg["resolver"]["udp_limits"][0]))
     print(f"Compose file: ecosystem/{path.relative_to(path.parents[2]).as_posix()}")
+    emit("prepare_done")
 
 
 def cmd_signtrials(a) -> None:
