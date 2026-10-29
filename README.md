@@ -125,6 +125,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_live.ps1 -Run <run-folder
 
 ---
 
+## Compare with an earlier version
+
+`python3 scripts/show_fixes.py` runs the old code (default `origin/main`) and the working tree side by side from temporary copies and prints what changed: suite recognised while starting, lab buttons refused during a benchmark, `dig` file-read attempts, and the negative checks the harness runs per mode. The harness part needs the built image.
+
+---
+
 ## Output
 
 Each run writes under `results/runs/<id>/` — `report.html`, CSVs, figures, `environment.json`, and (live mode) `pcap/`. Column-level detail: [Outputs reference](docs/outputs-reference.md).
