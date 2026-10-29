@@ -104,6 +104,7 @@ def start(h: driver.LabHandle, *, jobs: int, scenarios: list[str]) -> None:
     """Launch Prepare as a detached worker. Returns at once."""
     if is_running(h):
         raise RuntimeError("Signing is already running for this lab.")
+    driver.require_no_suite()
     d = job_dir(h)
     d.mkdir(parents=True, exist_ok=True)
     for name in ("events.jsonl", "progress.log"):

@@ -30,6 +30,93 @@ MTL_FULL = 65050
 UNBOUND_IP = "10.53.0.53"
 DASHBOARD_CONFIG = "configs/_dashboard.yaml"
 
+# ─────────────────────────── single-user guard ───────────────────────────
+# The lab uses fixed container names and one subnet, and the benchmark measures timing, so nothing else may
+# touch the lab, the signed zones or the CPU while a benchmark suite runs. The suite process names itself
+# through this variable; every other process is "someone else" and is refused.
+SUITES_DIR = ECO / "results" / "suites"
+SUITE_OWNER_ENV = "CIPHEROPS_SUITE_OWNER"
+ACTIVE_STATES = ("starting", "running")
+STARTING_GRACE_S = 60
+
+
+class LabBusy(RuntimeError):
+    """The lab is in use by a running benchmark suite or signing job."""
+
+
+def pid_alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    if os.name == "nt":
+        cp = subprocess.run(["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"], capture_output=True, text=True,
+                            creationflags=NO_WINDOW)
+        return str(int(pid)) in cp.stdout
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True  # exists but belongs to another user
+    return True
+
+
+def effective_job_state(st: dict, *, now: float | None = None) -> dict:
+    """Normalise a job's status: a worker that vanished, or never appeared, reads as 'stopped'.
+
+    'starting' has no worker pid for a moment after launch, so it counts as active for a short grace period.
+    """
+    st = dict(st)
+    if st.get("state") in ACTIVE_STATES:
+        now = time.time() if now is None else now
+        if st.get("pid"):
+            if not pid_alive(st["pid"]):
+                st["state"] = "stopped"
+                st["error"] = st.get("error") or "The process ended before finishing."
+        elif now - float(st.get("started") or 0) > STARTING_GRACE_S:
+            st["state"] = "stopped"
+            st["error"] = st.get("error") or "The process never started."
+    return st
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def active_suite_id() -> str | None:
+    """Id of a benchmark suite that is starting or running, if any."""
+    if not SUITES_DIR.is_dir():
+        return None
+    for d in sorted(SUITES_DIR.iterdir()):
+        if d.is_dir() and effective_job_state(_read_json(d / "status.json")).get("state") in ACTIVE_STATES:
+            return d.name
+    return None
+
+
+def active_prepare_tags() -> list[str]:
+    """Lab tags that have a signing job starting or running."""
+    work = ECO / "work"
+    if not work.is_dir():
+        return []
+    return [d.parent.parent.name for d in sorted(work.glob("*/prepare-live/status.json"))
+            if effective_job_state(_read_json(d)).get("state") in ACTIVE_STATES]
+
+
+def require_no_suite(*, force: bool = False) -> None:
+    """Refuse an operation that would disturb a running benchmark suite (the suite's own process passes)."""
+    if force:
+        return
+    sid = active_suite_id()
+    if sid and sid != os.environ.get(SUITE_OWNER_ENV):
+        raise LabBusy(f"Benchmark {sid} is running and is using the lab. Wait for it to finish or cancel it first.")
+
+
+def require_not_signing(h: "LabHandle") -> None:
+    if h.tag in active_prepare_tags():
+        raise LabBusy(f"Signing is still running for lab {h.tag}. Wait for it to finish or cancel it first.")
+
 
 def list_stacks() -> list[str]:
     """Image versions the dashboard can build/run (env file must exist)."""
@@ -424,6 +511,7 @@ def build_images(h: LabHandle) -> str:
 
     First build can take a long time (OpenSSL / liboqs / MTL from source).
     """
+    require_no_suite()
     env_file = ECO / "stacks" / f"{h.stack}.env"
     compose = ECO / "docker" / "build.yml"
     if not env_file.is_file():
@@ -442,6 +530,7 @@ def pull_images(h: LabHandle, registry: str) -> str:
 
     Expects remote tags like ``{registry}/cipherops-eco-nsd:{stack}`` (and unbound, tools).
     """
+    require_no_suite()
     registry = (registry or "").strip().rstrip("/")
     if not registry:
         raise RuntimeError("registry is empty — set a host like ghcr.io/org/cipherops")
@@ -611,6 +700,7 @@ def prepare(h: LabHandle, jobs: int = 2, scenarios: list[str] | None = None) -> 
 
 def sign_trials(h: LabHandle, scenarios: list[str], trials: int, names: list[int], out_container_path: str) -> str:
     """Repeat sign + verify of sample leaf zones in the tools image; CSV goes to ``out_container_path``."""
+    require_no_suite()
     img = f"cipherops-eco-tools:{h.stack}"
     cp = _run([
         "docker", "run", "--rm", "--network", "none",
@@ -757,6 +847,8 @@ def _reclaim_fixed_lab_names() -> str:
 
 
 def up(h: LabHandle) -> str:
+    require_no_suite()
+    require_not_signing(h)
     stopped = stop_other_labs(h)
     # Own project may also have exited containers holding names after a failed up
     _run(compose_cmd(h, "down", "--remove-orphans"), check=False, timeout=120)
@@ -770,17 +862,20 @@ def up(h: LabHandle) -> str:
     return note + cp.stdout + cp.stderr
 
 
-def down(h: LabHandle) -> str:
+def down(h: LabHandle, *, force: bool = False) -> str:
+    require_no_suite(force=force)
     cp = _run(compose_cmd(h, "down"), timeout=120, check=False)
     return cp.stdout + cp.stderr
 
 
 def client_exec(h: LabHandle, inner: str, timeout: int | None = 120) -> str:
+    require_no_suite()
     cp = _run(compose_cmd(h, "exec", "-T", "client", "bash", "-lc", inner), timeout=timeout)
     return cp.stdout
 
 
 def activate(h: LabHandle, scenario: str, udp: int = 1232) -> str:
+    require_not_signing(h)
     return client_exec(h, f"python3 -m ecolab activate {h.config} --scenario {scenario} --udp {udp}", timeout=180)
 
 
@@ -808,6 +903,11 @@ def probe(h: LabHandle, qname: str, qtype: str = "A", *, server: str = "10.53.0.
     raise RuntimeError(f"no JSON from probe:\n{out[-2000:]}")
 
 
+DIG_PLAIN_FLAGS = frozenset({"-4", "-6", "-x"})
+DIG_VALUE_FLAGS = frozenset({"-t", "-q", "-c", "-p"})   # the next argument is the value
+DIG_MAX_ARGS = 40
+
+
 def dig_argv(line: str) -> list[str]:
     """Parse a user-typed dig command into dig's arguments; defaults the server to Unbound."""
     parts = shlex.split(line)
@@ -815,9 +915,21 @@ def dig_argv(line: str) -> list[str]:
         parts = parts[1:]
     if not parts:
         raise ValueError("Enter a dig command, e.g. dig host000000.zone00.test A +dnssec")
-    # -f / -k make dig read files from the client container.
-    if any(p.startswith(("-f", "-k")) for p in parts):
-        raise ValueError("dig -f and -k are not allowed here")
+    if len(parts) > DIG_MAX_ARGS:
+        raise ValueError(f"Too many dig arguments (max {DIG_MAX_ARGS}).")
+    # dig bundles single-letter flags (-4f reads a file), so a deny-list on "-f"/"-k" is not enough:
+    # only an explicit allow-list of dash options is accepted.
+    i = 0
+    while i < len(parts):
+        p = parts[i]
+        if p in DIG_VALUE_FLAGS:
+            i += 1
+            if i >= len(parts) or parts[i].startswith("-"):
+                raise ValueError(f"dig {p} needs a value, e.g. {p} A")
+        elif p.startswith("-") and p not in DIG_PLAIN_FLAGS:
+            raise ValueError(f"dig option {p!r} is not allowed here "
+                             f"(allowed: {', '.join(sorted(DIG_PLAIN_FLAGS | DIG_VALUE_FLAGS))}, and +options)")
+        i += 1
     if not any(p.startswith("@") for p in parts):
         parts.insert(0, f"@{UNBOUND_IP}")
     return parts
@@ -826,6 +938,7 @@ def dig_argv(line: str) -> list[str]:
 def dig(h: LabHandle, line: str, timeout: int = 30) -> dict:
     """Run dig inside the client container (no shell); returns the command, exit code and output."""
     argv = dig_argv(line)
+    require_no_suite()
     cp = _run(compose_cmd(h, "exec", "-T", "client", "dig", *argv), timeout=timeout, check=False)
     out = (cp.stdout + cp.stderr).rstrip()
     if cp.returncode in (126, 127) and "executable file not found" in out:
@@ -1106,6 +1219,10 @@ def clear_demo_data(
     (the live-dashboard folder is handled by the other scopes).
     Does not remove Docker images.
     """
+    if work or benchmarks or suites:
+        require_no_suite()
+    if work:
+        require_not_signing(h)
     d = h.capture_dir
     d.mkdir(parents=True, exist_ok=True)
     removed = {"session": 0, "activity": 0, "pcaps": 0, "work": 0, "benchmarks": 0, "suites": 0}
@@ -1173,6 +1290,7 @@ def suite_footprint() -> dict:
 def clear_suites() -> int:
     """Delete benchmark suites, their per-size runs and signed zones; returns the number of suites removed."""
     import shutil
+    require_no_suite()
     for compose in (ECO / "work").glob("eco-bench-*/compose.yml"):
         _run(["docker", "compose", "-f", str(compose), "down"], check=False, timeout=120)
     n = suite_footprint()["suites"]
