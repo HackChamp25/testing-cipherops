@@ -49,6 +49,8 @@ The offline Docker image uses Fedora 42, OpenSSL 3.6.0, liboqs 0.16.0, and Veris
 
 The mentor approved choosing Verisign's MTL reference implementation but has not tested a specific version. PS-036's mentor-tested implementation requirement, and the availability of SLH-DSA-specific test fixtures, need clarification with the organizers.
 
+Live-lab note: on the `latest` stack, plain SLH-DSA (no MTL) is not validated by its Unbound (SERVFAIL), although the signed zone passes `ldns-verify-zone` and the same scenario validates on `draft06`. Use `draft06` for the MTL vs non-MTL comparison; the dashboard warns when `latest` is combined with `slh-dsa`.
+
 Verisign MTL 1.2.1 is a candidate for aligning the offline and live lab paths, subject to compatibility and correctness testing. It is not yet the pinned version for either path. The current offline preflight's bundled known-answer vectors cover ML-DSA; SLH-DSA is checked through reference-tool round trips and harness smoke tests.
 
 ![Cipherops architecture](docs/architecture-slide1.png)

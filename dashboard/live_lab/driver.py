@@ -24,9 +24,19 @@ DEFAULT_STACK = "draft06"
 STACK_CHOICES = ("draft06", "latest")
 STACK_BLURBS = {
     "draft06": "Condensed MTL by default; full ladder on EDNS 65050 (MTL v1.2 / liboqs 0.14)",
-    "latest": "Always-full MTL RRSIGs; same MTL commit as main Cipherops (liboqs 0.16)",
+    "latest": "Always-full MTL RRSIGs; same MTL commit as main Cipherops (liboqs 0.16). "
+              "Plain SLH-DSA is not validated by its Unbound (SERVFAIL)",
 }
 MTL_FULL = 65050
+# Scenarios whose zones the stack's Unbound cannot validate. Seen on `latest`: Unbound logs "verify: Using PQ /
+# PQ-MTL Algorithms 246 ... Failed to match any usable anchor" and answers SERVFAIL, while ldns-verify-zone accepts
+# the same signed zone and the same scenario validates (AD) on draft06. The cause inside that Unbound build is not
+# established; this records the observation so that a MTL vs non-MTL comparison is not run on a stack that cannot.
+UNVALIDATED_SCENARIOS = {"latest": ("slh-dsa",)}
+
+
+def unvalidated_scenarios(stack: str, scenarios) -> list[str]:
+    return [s for s in scenarios if s in UNVALIDATED_SCENARIOS.get(stack, ())]
 UNBOUND_IP = "10.53.0.53"
 DASHBOARD_CONFIG = "configs/_dashboard.yaml"
 
