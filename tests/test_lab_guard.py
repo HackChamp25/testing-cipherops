@@ -2,6 +2,8 @@
 active, and dig's argument restrictions cannot be bypassed. No Docker and no Streamlit."""
 
 import json
+import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -80,7 +82,7 @@ def test_second_suite_cannot_start_while_one_is_starting(eco, monkeypatch):
 
 def test_suite_start_is_refused_while_signing_runs(eco):
     root, _ = eco
-    d = root / "work" / "eco-ui-small" / "prepare-live"
+    d = root / "jobs" / "eco-ui-small" / "prepare-live"
     d.mkdir(parents=True)
     (d / "status.json").write_text(json.dumps({"state": "starting", "started": time.time()}), encoding="utf-8")
     with pytest.raises(driver.LabBusy):
@@ -154,7 +156,7 @@ def test_cancel_path_may_force_down(eco):
 def test_up_and_activate_refused_while_signing_the_same_lab(eco):
     root, calls = eco
     h = _handle(root)
-    d = h.work / "prepare-live"
+    d = root / "jobs" / h.tag / "prepare-live"
     d.mkdir(parents=True)
     (d / "status.json").write_text(json.dumps({"state": "starting", "started": time.time()}), encoding="utf-8")
     for op in (lambda: driver.up(h), lambda: driver.activate(h, "mtl"),
@@ -198,3 +200,38 @@ def test_dig_presets_are_all_accepted(eco):
     root, _ = eco
     for line in driver.dig_presets(_handle(root)):
         driver.dig_argv(line)
+
+
+# ───────────── Prepare must start even when Docker left work/ owned by root ─────────────
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can write anywhere")
+def test_prepare_starts_when_work_dir_is_not_writable(eco, monkeypatch):
+    root, _ = eco
+    h = _handle(root)
+    monkeypatch.setattr(pj.subprocess, "Popen", lambda *a, **k: None)
+    (root / "work").chmod(0o555)
+    h.work.chmod(0o555)
+    try:
+        pj.start(h, jobs=1, scenarios=["mtl"])
+    finally:
+        (root / "work").chmod(0o755)
+        h.work.chmod(0o755)
+    assert pj.is_running(h)
+    assert not str(pj.job_dir(h)).startswith(str(root / "work"))
+
+
+def test_remove_tree_falls_back_to_docker_for_root_owned_files(eco, monkeypatch):
+    root, calls = eco
+    target = root / "work" / "stale"
+    target.mkdir(parents=True)
+    monkeypatch.setattr(shutil, "rmtree", lambda *a, **k: None)  # as if the files belong to root
+    assert driver.remove_tree(target) is False  # still there: the recorded docker call is a stub
+    assert any(c[:2] == ["docker", "run"] and "rm" in c and c[-1] == "/eco/work/stale" for c in calls)
+
+
+def test_remove_tree_refuses_paths_outside_ecosystem(eco, tmp_path_factory, monkeypatch):
+    root, calls = eco
+    outside = tmp_path_factory.mktemp("outside")
+    monkeypatch.setattr(shutil, "rmtree", lambda *a, **k: None)
+    assert driver.remove_tree(outside) is False
+    assert calls == []
