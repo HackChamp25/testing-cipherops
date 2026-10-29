@@ -11,7 +11,7 @@ Contents
 2. Background you need (DNS, DNSSEC, MTL) in plain words
 3. Architecture at a glance
 4. Repository map
-5. The main flow, step by step (`run_benchmark.ps1` to report)
+5. The main flow, step by step (`run_benchmark.sh` or `.ps1` to report)
 6. File-by-file reference
 7. Live mode flow (real server, real packets, Wireshark)
 8. NSD cross-check flow
@@ -120,9 +120,9 @@ How the DNS draft (draft-fregly) carries this:
 ## 3. Architecture at a glance
 
 ```
-            YOU (Windows PowerShell)
+            YOU (shell or PowerShell)
                  |
-                 |  .\scripts\run_benchmark.ps1   (or docker compose run ...)
+                 |  scripts/run_benchmark.sh  or  .\scripts\run_benchmark.ps1   (or docker compose run ...)
                  v
  +------------------------------------------------------------------+
  |  Docker container  (Fedora 42, pinned libraries, no network)    |
@@ -138,7 +138,7 @@ How the DNS draft (draft-fregly) carries this:
  |        |  4. dnswire.py     build real DNS answers, count bytes  |
  |        |  5. cache.py       cache memory: measured + analytical  |
  |        |     analytical.py  draft section 12 size formulas       |
- |        |  6. stats.py       medians, bootstrap 95% CIs           |
+ |        |  6. stats.py       medians, CIs of the median           |
  |        |  7. report.py      report.md / .html / figures          |
  |        v                                                         |
  |   results/runs/<timestamp>-<run_name>/   (shared with Windows)   |
@@ -179,7 +179,7 @@ Cipherops/
 │   ├── dnswire.py          builds real DNS answers, counts bytes, UDP/TCP model
 │   ├── cache.py            cache usage, measured and analytical
 │   ├── analytical.py       MTL draft section 12 size formulas
-│   ├── stats.py            summary statistics, bootstrap CIs
+│   ├── stats.py            summary statistics, median CIs
 │   ├── preflight.py        go/no-go gate (PS-036 "defer if unavailable")
 │   ├── envinfo.py          records hardware/software versions
 │   ├── results.py          loads a finished run (for the report)
@@ -188,8 +188,11 @@ Cipherops/
 │   └── live.py             live mode: real client, real NSD, pcap capture
 ├── dashboard/              Streamlit live lab (app.py launches live_lab/app.py)
 ├── scripts/
-│   ├── run_benchmark.ps1   Windows: build image + run (start here)
-│   ├── run_benchmark.sh    Linux/macOS equivalent
+│   ├── run_benchmark.sh    Linux/macOS: build image + run (start here)
+│   ├── run_benchmark.ps1   Windows equivalent
+│   ├── run_live.sh         live validation of a finished run (Linux/macOS)
+│   ├── run_live.ps1        Windows equivalent
+│   ├── show_fixes.py       compare an earlier commit with the working tree
 │   ├── make_pdf.ps1        report.html -> report.pdf via Edge/Chrome
 │   ├── probe.py            one quick trial per mode (debugging)
 │   ├── own.py              learning trace: every variable of stages 1-7 on tiny zones
@@ -209,11 +212,11 @@ Cipherops/
 
 This is what happens when you type:
 
-```powershell
-.\scripts\run_benchmark.ps1 -Config configs/quick.yaml
+```bash
+bash scripts/run_benchmark.sh configs/quick.yaml        # Windows: .\scripts\run_benchmark.ps1 -Config configs/quick.yaml
 ```
 
-### Step 1. `scripts/run_benchmark.ps1` (on Windows)
+### Step 1. `scripts/run_benchmark.sh` (Windows: `run_benchmark.ps1`)
 
 1. `docker compose -f docker/compose.yml build` builds the pinned image
    (only slow the first time; later builds use the cache).
@@ -222,9 +225,9 @@ This is what happens when you type:
    end up in `environment.json`.
 3. Runs `docker compose run --rm bench "python3 -m cipherops.runner run --config configs/quick.yaml"`.
 
-Why `cmd /c` inside `Invoke-Native`: Windows PowerShell 5.1 treats Docker's
-progress messages on stderr as errors. Routing through `cmd` avoids that;
-failures are detected from the exit code instead.
+(On Windows, `run_benchmark.ps1` does the same through `cmd /c` inside
+`Invoke-Native`, because Windows PowerShell 5.1 treats Docker's progress
+messages on stderr as errors; failures are detected from the exit code.)
 
 ### Step 2. Inside Docker: `runner.py` → `main()` → `cmd_run()`
 
@@ -344,8 +347,9 @@ For each dataset and mode:
 ### Step 7. Statistics: `summarise()` → `summary.json`
 
 For each dataset × mode: n, mean, median, std, p05, p95, min, max of each
-timing, plus a **bootstrap 95 % confidence interval of the median**
-(`stats.bootstrap_ci()`), plus whether all correctness checks passed, plus
+timing, plus a **distribution-free confidence interval of the median**
+(`stats.median_ci()`, from order statistics) and its real coverage
+(`stats.median_ci_coverage()`), plus whether all correctness checks passed, plus
 transmitted bytes and UDP-fit percentages.
 
 ### Step 8. Report: `report.write()`
@@ -580,7 +584,9 @@ maximum).
 | Function | Why |
 |---|---|
 | `summarize(values)` | n, mean, median, std, p05, p95, min, max |
-| `bootstrap_ci(values)` | 95 % confidence interval of the median by resampling 2,000 times. Works with few trials and makes no normality assumption. |
+| `median_ci(values)` | Exact distribution-free interval for the median from sorted trial values (widest pair covering at least 95 %, or the full range if there are too few trials). |
+| `median_ci_coverage(n)` | The real coverage of that interval for `n` trials (93.8 % for 5, 75 % for 3). |
+| `ci_label(n)` | Text for tables and figure titles that states the coverage. |
 
 ### 6.10 `src/cipherops/preflight.py`
 
@@ -640,6 +646,10 @@ helpers (`NSD`, `_udp`, `_tcp`, `signed_zone_text`, `load_run_zone`) that
 | `test_harness.py` | (Docker only) Real signing in every mode: all signatures verify, every negative check rejected (including cross-message, wrong key, truncation), ECDSA wire form verifies, `mtlverify` and OpenSSL accept the artifacts, SLH-DSA signature is 7,856 B, MTL sizes within draft bounds, public key lengths match the DNSKEY field, artifacts round-trip. |
 | `test_crosscheck.py` | Signed zone file parses, every RRset signed; (Docker) NSD serves it. |
 | `test_dashboard.py` | Every live-lab tile renders without an exception. |
+| `test_stats.py` | The order-statistic confidence interval of the median: exact coverage figures, narrowing with more trials, empirical coverage matches the formula, labels warn when trials are too few. |
+| `test_lab_run.py` | Live-lab pass validity: SERVFAIL and timeouts are not latency; invalid passes are left out of the summary but their failures stay counted. |
+| `test_lab_guard.py` | Demo safety: lab operations are refused while a benchmark runs, a launching suite counts as active, `dig` accepts only allow-listed options, Prepare starts when `work/` is root-owned, root-owned folders are removed, the image build is a one-at-a-time background job. |
+| `test_compare.py`, `test_live.py`, `test_prepare_job.py`, `test_prepare_story.py` | Dashboard helpers, packet decoding, the signing job and its replay (no Docker). |
 
 ```powershell
 $env:PYTHONPATH="src"; python -m pytest -q                         # host: quick tests
@@ -664,9 +674,10 @@ docker compose -f docker/compose.yml run --rm bench "python3 -m pytest -q tests"
 
 Command (service `live`: no outside network, but `NET_ADMIN` for tc-netem):
 
-```powershell
-.\scripts\run_live.ps1 -Run 20261007T045213Z-quick-demo
-.\scripts\run_live.ps1 -Run <run> -Profiles lan -Udp 1232 -Repeats 1     # quick look
+```bash
+bash scripts/run_live.sh <run-folder>                    # all profiles, both UDP sizes, 3 repeats
+bash scripts/run_live.sh <run-folder> lan 1232 1         # quick look
+# Windows: .\scripts\run_live.ps1 -Run <run-folder> [-Profiles lan -Udp 1232 -Repeats 1]
 ```
 
 Who is who (all inside the container):
@@ -719,7 +730,7 @@ Flow of `live.run()`:
 Check the capture against the client's own count:
 
 ```powershell
-python scripts/pcap_bytes.py results/runs/20261007T045213Z-quick-demo
+python scripts/pcap_bytes.py results/runs/<run-folder>
 ```
 
 Open a `.pcap` in Wireshark and filter `dns` to see each question, answer,

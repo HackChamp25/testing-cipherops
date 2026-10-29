@@ -1,8 +1,9 @@
 # Cipherops outputs reference
 
-Every file a run writes, every column in it, what unit it is in, how it is calculated and a real
-example value. Examples come from the quick demo run `results/runs/20261007T045213Z-quick-demo`
-(`configs/quick.yaml`: zones of 20 / 60 / 200 names, 3 trials) unless a row says otherwise.
+Every file a run writes, every column in it, what unit it is in, how it is calculated and an
+example value. The examples are illustrative values from one earlier quick demo run
+(`configs/quick.yaml`: zones of 20 / 60 / 200 names, 3 trials) on one machine. They show the shape of the data
+and are **not results**; every run's own numbers are in its `report.html`.
 
 To watch these values being produced one by one, run `scripts/own.py` (see its header).
 
@@ -23,7 +24,7 @@ To watch these values being produced one by one, run `scripts/own.py` (see its h
 | full signature | MTL: condensed signature + signed ladder. What a resolver needs when it has no ladder yet. |
 | warm / cold verify | warm: the resolver already holds a verified ladder, so only hashes are checked. cold: first contact, the ladder's SLH-DSA signature is checked too. |
 | limited | direct SLH-DSA signs only a sample of RRsets on medium/large (`direct_sign_limit`: 60 and 100); the zone total is extrapolated. |
-| median, 95% CI | middle value over the trials; bootstrap confidence interval: resample the trial values 2,000 times, take the median of each, keep the 2.5th–97.5th percentile. |
+| median, CI | middle value over the trials; confidence interval of the median from order statistics (exact, any distribution): the widest pair of sorted trial values that covers the median with at least 95% probability, or the full range if there are too few trials. Coverage depends only on the trial count: 75% for 3, 93.8% for 5, 96.9% for 6. |
 
 ## Where each file comes from
 
@@ -321,7 +322,7 @@ MTL sizes measured against the draft's maximum formulas (16-byte hashes, N = RRs
 ## Stage 6: `summary.json`
 
 ```
-trials[dataset][mode][metric] = {n, mean, median, std, p05, p95, min, max, median_ci95: [lo, hi]}
+trials[dataset][mode][metric] = {n, mean, median, std, p05, p95, min, max, median_ci: [lo, hi], ci_coverage}
     metrics: sign_total_ns, sign_per_rrset_ns, verify_warm_total_ns, verify_per_rrset_ns,
              verify_full_median_ns, keygen_ns
 trials[dataset][mode].all_checks_passed     every trial exit 0, no failures, tamper rejected
@@ -331,8 +332,7 @@ transmitted[dataset][mode][udp_limit]       dns_bytes, response_bytes, rrsig_sig
 response_fit[dataset][mode][record_class]   fit_1232_pct, median_bytes   (default answers at 1232)
 ```
 
-Example: `trials.large.slh-dsa-mtl.sign_total_ns.median` = 515,744,810 (0.516 s), `median_ci95` =
-[472,079,179, 575,446,920]; `n` = 3.
+`ci_coverage` is the real coverage of `median_ci` for `n` trials (0.9375 for 5).
 
 ## Stage 7: report
 

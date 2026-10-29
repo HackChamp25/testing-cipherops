@@ -1,175 +1,211 @@
 <div align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/media/cipherops-logo-dark.png">
-    <img src="docs/media/cipherops-logo-light.png" alt="CipherOps" width="480">
+    <img src="docs/media/cipherops-logo-light.png" alt="CipherOps" width="420">
   </picture>
 
   # CipherOps
 
-  **PQC DNSSEC MTL benchmark using a reference implementation**
+  **A reproducible benchmark of Merkle Tree Ladder (MTL) mode for post-quantum DNSSEC signatures**
 
-  AIORI Hackathon 3 · PS-036 · Team **A3-PS036-TC161**
-
-  <p>
-    <a href="https://portal.aiori.in/aiori-3/hackathon-guideline/"><img alt="AIORI 3 Hackathon" src="https://img.shields.io/static/v1?label=AIORI%203&message=Hackathon&color=1E90FF&labelColor=0B1C2C&style=for-the-badge"></a>
-    <a href="https://portal.aiori.in/aiori-3/hackathon-guideline/"><img alt="Problem statement PS-036" src="https://img.shields.io/static/v1?label=problem&message=PS-036&color=1E90FF&labelColor=0B1C2C&style=for-the-badge"></a>
-    <a href="https://youtu.be/FaVfeO5WTV8"><img alt="Project video" src="https://img.shields.io/static/v1?label=video&message=YouTube&color=3A7BD5&labelColor=0B1C2C&style=for-the-badge&logo=youtube&logoColor=white"></a>
-  </p>
+  AIORI Hackathon 3 · PS-036 · Team A3-PS036-TC161
 </div>
 
-Post-quantum DNSSEC signatures are large; answers stop fitting in one UDP packet.
-**Merkle Tree Ladder (MTL) mode** signs a zone once and attaches a short proof per record.
-Cipherops measures what that changes — against classical DNSSEC and against plain SLH-DSA —
-using the [Verisign MTL](https://github.com/verisign/MTL) reference stack, unmodified.
+## What this is
 
-## For the panel
+Post-quantum signatures are large. A single SLH-DSA-SHA2-128s signature is 7,856 bytes, so a signed DNS answer
+no longer fits in one UDP packet: it is truncated, retried over TCP, or fragmented. **MTL mode**
+([draft-harvey-cfrg-mtl-mode](https://datatracker.ietf.org/doc/draft-harvey-cfrg-mtl-mode/)) signs a whole zone once and
+gives each record a short authentication path instead.
 
-| | |
-| :--- | :--- |
-| **Presentation** | [`A3-PS036-TC161.pptx.pdf`](A3-PS036-TC161.pptx.pdf) |
-| **Project video** | [YouTube](https://youtu.be/FaVfeO5WTV8) |
-| **Live lab (browser)** | [Quick start below](#live-lab-browser) — root → TLD → leaf, validating Unbound, packet sequence from real captures |
-| **How we measure** | [Methodology](docs/methodology.md) · [Architecture](docs/architecture.md) |
-
-Numbers live in each run’s `report.html` under `results/runs/` — not duplicated here, so this page stays current when you re-run.
-
----
-
-## What you get
+CipherOps measures what that changes, for **one PQC algorithm (SLH-DSA-SHA2-128s) with and without MTL**, against a
+classical reference, across **three dataset sizes**: signing time, verification time, transmitted bytes and cache
+use. It drives the unmodified [Verisign MTL](https://github.com/verisign/MTL) reference library, liboqs and OpenSSL.
+**No cryptography is implemented here.**
 
 | Mode | Algorithm | Library |
-| ----------------------------------- | ----------------------------- | ------------------------------------------------------------------------ |
-| `slh-dsa-mtl` | SLH-DSA-SHA2-128s in MTL mode | [Verisign MTL](https://github.com/verisign/MTL) |
-| `slh-dsa` | SLH-DSA-SHA2-128s directly | liboqs |
-| `ed25519`, `ecdsa-p256`, `rsa-2048` | Classical DNSSEC | OpenSSL |
+| --- | --- | --- |
+| `slh-dsa-mtl` | SLH-DSA-SHA2-128s with MTL | Verisign MTL reference library |
+| `slh-dsa` | SLH-DSA-SHA2-128s without MTL | liboqs |
+| `ed25519`, `ecdsa-p256`, `rsa-2048` | classical DNSSEC references | OpenSSL |
 
-The offline Docker image uses Fedora 42, OpenSSL 3.6.0, liboqs 0.16.0, and Verisign MTL `7cef019`. The live lab's default [`draft06` stack](ecosystem/stacks/draft06.env) uses liboqs 0.14.0 and Verisign MTL 1.2.0 (`93b05ef`); it is a separate pinned stack.
+There are two measurement paths that answer different questions:
 
-### Reference implementation status
+| | Offline harness | Live lab |
+| --- | --- | --- |
+| What it is | a C harness (`harness/mtlbench.c`) times each library call; DNS messages are built and counted in Python | a root → TLD → leaf hierarchy of unmodified NSD servers behind a validating Unbound, in Docker |
+| Best for | signing and verification time, signature and response sizes, cache arithmetic | what a resolver actually does: bytes per hop from packet captures, truncation, TCP retry, Unbound's cache counters |
+| Environment | one pinned image, one dedicated CPU core, no network | three images per stack; containers share all host CPUs |
+| Start it with | `scripts/run_benchmark.sh` | `streamlit run dashboard/live_lab/app.py` |
 
-The mentor approved choosing Verisign's MTL reference implementation but has not tested a specific version. PS-036's mentor-tested implementation requirement, and the availability of SLH-DSA-specific test fixtures, need clarification with the organizers.
+## Status and limits
 
-Live-lab note: on the `latest` stack, plain SLH-DSA (no MTL) is not validated by its Unbound (SERVFAIL), although the signed zone passes `ldns-verify-zone` and the same scenario validates on `draft06`. Use `draft06` for the MTL vs non-MTL comparison; the dashboard warns when `latest` is combined with `slh-dsa`.
+Read this before relying on any number.
 
-Verisign MTL 1.2.1 is a candidate for aligning the offline and live lab paths, subject to compatibility and correctness testing. It is not yet the pinned version for either path. The current offline preflight's bundled known-answer vectors cover ML-DSA; SLH-DSA is checked through reference-tool round trips and harness smoke tests.
+- **Reference implementation.** The mentor approved choosing Verisign's MTL implementation but has **not tested a
+  specific version**. PS-036 asks for a mentor-tested implementation; that is unconfirmed, and nothing in this
+  repository claims full PS-036 compliance.
+- **Fixtures.** The reference library's bundled known-answer vectors cover ML-DSA, not SLH-DSA. SLH-DSA-specific fixtures
+  are unconfirmed. SLH-DSA is checked by round trips, negative cases and agreement between two independent
+  implementations (liboqs and OpenSSL, plus Verisign's `mtlverify`). That is an interoperability check, **not** a
+  NIST known-answer test. See [methodology §3](docs/methodology.md#3-gono-go-gate).
+- **Versions differ between the two paths** (table below). Offline and live-lab numbers are not interchangeable.
+- **`latest` stack:** its Unbound answers SERVFAIL for plain SLH-DSA although the signed zone is valid and `draft06`
+  validates it. The live MTL-versus-non-MTL comparison is valid on `draft06` only.
+- **Live-lab timings are indicative.** Containers are not pinned to cores, and the host CPU governor is recorded, not
+  changed. Byte counts and relative comparisons are more reliable than absolute milliseconds.
+- **Few trials give wide intervals.** With 5 trials the interval of the median covers 94%, not 95%
+  ([methodology §6.2](docs/methodology.md#62-statistics)).
+- Code points (DNSSEC algorithm numbers, the `mtl-mode-full` EDNS option) are lab placeholders, not IANA assignments.
+  Nothing here is for the Internet, and no security claim is made.
 
-![Cipherops architecture](docs/architecture-slide1.png)
+### Pinned software
 
-### Scope (honest)
+| Path | Base | OpenSSL | liboqs | Verisign MTL | Behaviour |
+| --- | --- | --- | --- | --- | --- |
+| Offline harness (`docker/`) | Fedora 42 | 3.6.0 | 0.16.0 | `7cef019` | library calls timed directly |
+| Live lab `draft06` (default) | see [`ecosystem/docker/Dockerfile`](ecosystem/docker/Dockerfile) | 3.6.0 | 0.14.0 | 1.2.0 (`93b05ef`) | condensed signatures by default; full signature on EDNS option 65050 |
+| Live lab `latest` | same | 3.6.0 | 0.16.0 | `7cef019` | every MTL RRSIG is served as a full signature; plain SLH-DSA not validated |
 
-- Empirical timings and wire sizes on pinned environments — not a security proof or a production DNSSEC product.
-- Offline harness (zone sign / verify / model) plus an optional live hierarchy (NSD + Unbound) with packet capture.
-- Absolute milliseconds depend on the host; fair comparisons share the same image and configs.
+All component commits (NSD, Unbound, ldns) are in [`ecosystem/stacks/`](ecosystem/stacks). Verisign MTL 1.2.1 is a
+candidate for aligning the paths; it is **not** adopted and has not been tested.
 
----
+## PS-036 requirements
 
-## Requirements
+| Requirement | Where it is met | State |
+| --- | --- | --- |
+| One supported PQC algorithm | SLH-DSA-SHA2-128s | done |
+| One mentor-tested MTL reference implementation | Verisign MTL | **unconfirmed** (see above) |
+| Three dataset sizes | 50 / 500 / 5,000 names by default; quick run 20 / 60 / 200 | done |
+| With and without MTL | `slh-dsa-mtl` vs `slh-dsa`, plus classical references | done |
+| Repeated trials, pinned environment | pinned image, dedicated core, seeded order, discarded warm-up | done offline; live lab not core-pinned |
+| Signing time, verification time, transmitted bytes | `trials.csv`, `responses.csv`, `workload.csv`; live-lab captures | done |
+| Record configuration and workload parameters | `config.yaml`, `environment.json`, `suite.json` in each run | done |
+| Cache: measured vs analytical, kept apart | `cache.csv` has a `kind` column; the report never mixes them | done |
+| Defer if implementation or fixtures are missing | go/no-go gate (`preflight`) blocks the run | done for the implementation; SLH-DSA fixtures unconfirmed |
+| No new cryptography, resolver or deployment | the harness only calls libraries; the lab uses stock servers | done |
 
-- **Docker** (Desktop or Engine) — about 3 CPUs / 6 GB RAM
-- **git**
-- **Python 3.11+** — dashboard / live lab only
+## Quick start
+
+**Requirements:** Docker with Compose v2, about 3 CPU cores and 6 GB of RAM (the harness is pinned to core 2 by
+default; pass a different core as the second argument of the script), git. Python 3.11+ is needed only for the
+dashboard and the host tests. Commands below are for Linux and macOS; PowerShell equivalents (`scripts/*.ps1`) exist
+for Windows but were not re-run in the latest review.
 
 ```bash
 git clone https://github.com/aiori-hackathon/A3-PS036-TC161.git
 cd A3-PS036-TC161
 ```
 
-First image build compiles OpenSSL, liboqs, and MTL (a few minutes). Later runs reuse it.
+### 1. Offline benchmark
 
----
+```bash
+bash scripts/run_benchmark.sh preflight               # build the image and run the go/no-go gate
+bash scripts/run_benchmark.sh configs/quick.yaml      # short demonstration run
+bash scripts/run_benchmark.sh                         # full run (configs/scenarios.yaml); can take over an hour
+```
 
-## Live lab (browser)
+The first build compiles OpenSSL, liboqs and MTL from source (several minutes); later runs reuse the cache. A run
+prints its folder, `results/runs/<timestamp>-<name>/`; open `report.html` there. If the gate fails, no numbers are
+produced and the run exits with `NO-GO`.
 
-Interactive control room for the multi-zone eco stack: prepare zones, start services, pick a scenario, query, then inspect metrics and **packet sequences from the capture you just took**.
+Optional, on a finished run: serve its signed zone from a real NSD over LAN, WAN and lossy network profiles and
+capture the packets.
+
+```bash
+bash scripts/run_live.sh <run-folder> lan 1232 1      # one profile, one UDP size, one repeat
+```
+
+### 2. Live lab (browser)
 
 ```bash
 pip install -r requirements-dashboard.txt
 streamlit run dashboard/live_lab/app.py
 ```
 
-Needs Docker. Start with **Small** zone size for Live. The **Benchmark** tile runs the PS-036 benchmark (three dataset sizes, repeated trials) by itself once the images are built, and **Compare** shows MTL against SLH-DSA from it. Walkthrough: [`dashboard/live_lab/README.md`](dashboard/live_lab/README.md).
+| Tile | Use |
+| --- | --- |
+| **Setup** | step 1 build or pull the images; step 2 choose zone size and scenarios, then **Prepare** (signs the hierarchy); step 3 **Start** the lab |
+| **Live** | send queries or `dig`, switch scenario, capture packets, view the packet sequence |
+| **Benchmark** | one press runs the PS-036 benchmark: three dataset sizes, repeated signing and measurement trials; needs only the built images |
+| **Compare** | MTL against SLH-DSA and the classical reference from a finished benchmark |
+| **Reset** | remove sessions, captures, runs or signed zones |
 
----
+Use the **`draft06`** image version for the MTL-versus-non-MTL comparison. A first image build takes tens of minutes;
+it runs in the background with a live log. Details: [`dashboard/live_lab/README.md`](dashboard/live_lab/README.md).
 
-## Offline benchmark
+## What a run produces
 
-### 1. Preflight (go / no-go)
+Each offline run writes `results/runs/<id>/`:
 
-```powershell
-# Windows
-powershell -ExecutionPolicy Bypass -File .\scripts\run_benchmark.ps1 -Command preflight
-```
+| File | Content |
+| --- | --- |
+| `report.html`, `report.md`, `figures/` | the report: method, results, limitations, traceability to PS-036, demonstration pseudocode |
+| `config.yaml`, `environment.json`, `preflight.json` | the exact settings, software and hardware, and go/no-go checks |
+| `trials.csv`, `ops.parquet` | one row per trial; one row per timed library call |
+| `responses.csv`, `workload.csv`, `sizes.csv` | DNS message sizes and workload byte accounting; measured MTL sizes against the draft's formulas |
+| `cache.csv` | cache rows, each marked `measured` or `analytical` |
+| `summary.json`, `raw/`, `artifacts/` | statistics with confidence intervals; raw harness output; the signatures used for the byte analysis |
+
+A live-lab benchmark writes `ecosystem/results/suites/<id>/` with `suite.json` (parameters, host and image
+provenance), per-size signing and measurement CSVs, and its own `report.html`. Column definitions:
+[docs/outputs-reference.md](docs/outputs-reference.md). Numbers are not copied into the documentation; they live in each
+run's report so they cannot drift.
+
+## Tests
 
 ```bash
-# macOS / Linux
-bash scripts/run_benchmark.sh preflight
+pip install -r requirements-dashboard.txt
+PYTHONPATH=src python3 -m pytest tests -m "not harness"          # host tests, no Docker needed
 ```
 
-### 2. Run
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run_benchmark.ps1 -Config configs/quick.yaml   # short demo
-powershell -ExecutionPolicy Bypass -File .\scripts\run_benchmark.ps1                              # full ~1.5 h
-```
+Harness correctness gates need the compiled harness and reference library, so they run inside the image:
 
 ```bash
-bash scripts/run_benchmark.sh configs/quick.yaml
-bash scripts/run_benchmark.sh
+docker run --rm --network none cipherops-bench:pinned \
+  "python3 -m pytest tests/test_harness.py tests/test_crosscheck.py -q"
 ```
 
-### 3. Live validation (optional)
+`python3 scripts/show_fixes.py` runs an earlier commit and the working tree side by side and prints what changed in
+demo safety, `dig` input checks and harness negative cases.
 
-Replay lookups against NSD over LAN / WAN / lossy profiles; captures land in the run folder.
+## Troubleshooting
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run_live.ps1 -Run <run-folder>
-```
-
----
-
-## Compare with an earlier version
-
-`python3 scripts/show_fixes.py` runs the old code (default `origin/main`) and the working tree side by side from temporary copies and prints what changed: suite recognised while starting, lab buttons refused during a benchmark, `dig` file-read attempts, and the negative checks the harness runs per mode. The harness part needs the built image.
-
----
-
-## Output
-
-Each run writes under `results/runs/<id>/` — `report.html`, CSVs, figures, `environment.json`, and (live mode) `pcap/`. Column-level detail: [Outputs reference](docs/outputs-reference.md).
-
----
-
-## Configuration
-
-`configs/scenarios.yaml` is the full matrix; `configs/quick.yaml` is the short demo. Knobs: trials, modes, zone sizes, wire workload, seed. See comments in those files.
-
----
+| Symptom | Cause and fix |
+| --- | --- |
+| `Permission denied` under `ecosystem/work` or `results` | Docker creates files as root on Linux. The dashboard's Reset removes them; by hand use `sudo rm -rf`. |
+| Prepare or Start disabled in Setup | the images for the chosen version are not built yet (step 1) |
+| Every query to `slh-dsa` returns SERVFAIL on `latest` | known limitation of that stack; use `draft06` |
+| Docker refuses to start the benchmark container with a `cpuset` error | the host has fewer than 3 cores; pass another core number as the second script argument |
+| Lab buttons greyed out | a benchmark is running and owns the lab; wait or cancel it |
+| Image build seems idle | it runs in the background; open Setup to see the log, or Cancel build |
 
 ## Repository layout
 
 ```
-configs/        run settings
-docker/         pinned image and compose
-harness/        mtlbench.c linked to reference libs
-src/cipherops/  offline runner, report, live validation
-ecosystem/      multi-zone lab (NSD / Unbound / MTL signing)
-dashboard/      Streamlit live lab: setup, live queries, benchmark suite, compare
-scripts/        Windows / Unix entry points
-docs/           methodology, architecture, brand (docs/media)
-tests/          gates and unit tests
+configs/        offline run settings (full and quick)
+docker/         pinned offline image and Compose services
+harness/        mtlbench.c, linked to the reference libraries
+src/cipherops/  runner, preflight gate, workload, DNS wire model, statistics, report
+ecosystem/      live lab: images, stack pins, lab orchestration (ecolab), IETF draft notes
+dashboard/      Streamlit live lab (dashboard/app.py launches live_lab/app.py)
+scripts/        run_benchmark, run_live, show_fixes, learning trace (own.py)
+tests/          unit tests (host) and harness gates (Docker)
+docs/           methodology, architecture, flow, output reference
 ```
 
 ## Documentation
 
-- [Methodology](docs/methodology.md)
-- [Architecture](docs/architecture.md)
-- [Outputs reference](docs/outputs-reference.md)
-- [Live lab](dashboard/live_lab/README.md)
+- [Methodology](docs/methodology.md): what is measured and how, statistics, limits
+- [Architecture](docs/architecture.md): components and data flow
+- [End-to-end flow](docs/end-to-end-flow.md): the seven stages of a run
+- [Outputs reference](docs/outputs-reference.md): every file and column
+- [Live lab guide](dashboard/live_lab/README.md)
+- [IETF draft notes](ecosystem/drafts/README.md)
 
-## Team
+Presentation: [`A3-PS036-TC161.pptx.pdf`](A3-PS036-TC161.pptx.pdf).
 
-**A3-PS036-TC161** — Akash Joshi · Anitha · Induradhakrishnan
+## Team and licence
 
-## License
-
-MIT — see [LICENSE](LICENSE). Verisign MTL, liboqs, OpenSSL, and NSD keep their own licences at build time.
+**A3-PS036-TC161**: Akash Joshi, Anitha, Induradhakrishnan. MIT licence, see [LICENSE](LICENSE). Verisign MTL, liboqs,
+OpenSSL and NSD keep their own licences.
