@@ -76,7 +76,7 @@ def test_planned_rrsigs_use_the_exact_model(preset, total):
 
 
 def test_exact_rrsigs_formula_by_tier():
-    # 2 leaf zones of 5 names under one TLD: leaf 2*5+7 each, TLD 2*2+7, root 2*1+8
+    # 2 SLD zones of 5 names under one TLD: leaf 2*5+7 each, TLD 2*2+7, root 2*1+8
     assert driver.exact_rrsigs(10, 4) == 17 + 17 + 11 + 10
 
 
@@ -111,7 +111,7 @@ def test_sign_scenario_emits_events_in_order(tmp_path, monkeypatch, capsys):
     plan = evs[0]["zones"]
     assert {z["origin"] for z in plan} == {"a.test.", "b.test.", "test.", "."}
     assert next(z for z in plan if z["origin"] == "test.")["parent"] == "."
-    # bottom-up: both leaf zones finish before the TLD starts, and the TLD before the root
+    # bottom-up: both SLD zones finish before the TLD starts, and the TLD before the root
     pos = {(e["event"], e.get("origin")): i for i, e in enumerate(evs)}
     assert max(pos[("zone_done", "a.test.")], pos[("zone_done", "b.test.")]) < pos[("zone_start", "test.")]
     assert pos[("zone_done", "test.")] < pos[("zone_start", ".")]
@@ -196,7 +196,7 @@ def test_live_dot_folds_large_hierarchies():
            _ev("zone_done", 2, scenario="mtl", origin="z0.test.", tier="sld", rrsigs=9, sign_s=1, verify_s=0,
                signed_bytes=1, algorithm="A")]
     dot = pj.live_dot(pj.live_state(evs, now=3)["scenarios"][0])
-    assert "60 leaf zones" in dot and "1 signed" in dot and "z7.test." not in dot
+    assert "60 SLD zones" in dot and "1 signed" in dot and "z7.test." not in dot
 
 
 # ───────────── the background worker ─────────────

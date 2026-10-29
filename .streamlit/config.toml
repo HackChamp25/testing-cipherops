@@ -1,0 +1,3 @@
+[theme]
+# A calm accent for the one primary button per screen; red stays reserved for failures.
+primaryColor = "#2457c5"

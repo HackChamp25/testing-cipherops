@@ -36,8 +36,8 @@ OUTRO_S = 5.0      # summary card after the root
 ZONE_END = 0.88    # a zone's signing finishes this far into its phase; the rest is DS hand-off
 
 TIER_ORDER = ("sld", "tld", "root")
-TIER_LABEL = {"sld": "Leaf zone", "tld": "TLD", "root": "Root"}
-TIER_PLURAL = {"sld": "Leaf zones", "tld": "TLDs", "root": "Root"}
+TIER_LABEL = {"sld": "SLD zone", "tld": "TLD", "root": "Root"}
+TIER_PLURAL = {"sld": "SLD zones", "tld": "TLDs", "root": "Root"}
 
 # Direct (per-RRset) signature sizes; SLH-DSA comes from the project's own constant.
 DIRECT_SIG_BYTES = {"slh-dsa": SLH_DSA_SHA2_128S_SIG_BYTES, "ecdsa": 64, "ed25519": 64, "rsa": 256}
@@ -154,7 +154,7 @@ def _plan(zones: list[dict], size_label: str, exact: bool) -> dict:
             head = f"{TIER_PLURAL[tier]} · {groups} = {total:,} RRsets" if len(counts) > 1 else \
                 f"{TIER_PLURAL[tier]} · {len(zs)} × {zs[0]['n_leaves']:,} RRsets"
         unit = [z["n_names"] if tier == "sld" else z["children"] for z in zs]
-        one, many = {"sld": ("name", "names"), "tld": ("leaf zone", "leaf zones"), "root": ("TLD", "TLDs")}[tier]
+        one, many = {"sld": ("name", "names"), "tld": ("SLD zone", "SLD zones"), "root": ("TLD", "TLDs")}[tier]
         noun = one if max(unit) == 1 else many
         proof = "record + NSEC3 proof" if tier == "sld" else "DS + NSEC3 proof"
         if exact:
@@ -278,7 +278,7 @@ def _totals(zones: list[dict]) -> dict:
 def _outro(scene: dict) -> list[str]:
     tot, fam = scene["totals"], scene["family"]
     tiers = tot["by_tier"]
-    lines = [f"Signed bottom-up: {tiers['sld']} leaf · {tiers['tld']} TLD · {tiers['root']} root "
+    lines = [f"Signed bottom-up: {tiers['sld']} SLD · {tiers['tld']} TLD · {tiers['root']} root "
              f"({tot['zones']} zones, {tot['rrsigs']:,} RRSIGs)"]
     if fam == "mtl":
         lines.append(f"Only {tot['slow_sigs']} SLH-DSA signatures computed: one signed ladder per zone, "

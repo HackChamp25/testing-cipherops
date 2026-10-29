@@ -57,7 +57,7 @@ def test_algorithm_table_reports_the_paired_ratio_for_timings_and_ratios_of_valu
     frame = hub.offline_frame(run, "small")
     paired = hub.offline_paired(run, "small", "slh-dsa")
     t = hub.algorithm_table(frame, "slh-dsa", paired).set_index("Algorithm")
-    mtl = t.loc["SLH-DSA + MTL"]
+    mtl = t.loc["SLH-DSA-MTL"]
     assert "lower" in mtl["Signing time: vs SLH-DSA"] and "[" in mtl["Signing time: vs SLH-DSA"]
     assert mtl["Bytes on the wire: vs SLH-DSA"] == "30× lower"
     assert t.loc["SLH-DSA  (baseline)", "Signing time: vs SLH-DSA"] == ""
@@ -181,7 +181,7 @@ def test_live_suite_reduces_to_the_same_frame_and_table_as_an_offline_run(tmp_pa
     assert row.loc["mtl", "wire_bytes"] == 3e5 and row.loc["slh-dsa", "cache_bytes"] == 2e6
     assert row.loc["mtl", "cold_ms"] == 9.0 and set(f.sign_basis) == {"estimated"}
     t = hub.algorithm_table(f, "slh-dsa").set_index("Algorithm")
-    assert t.loc["SLH-DSA + MTL", "Signing time: vs SLH-DSA"].endswith("lower")
+    assert t.loc["SLH-DSA-MTL", "Signing time: vs SLH-DSA"].endswith("lower")
     assert "Resolver cache" in t.columns
 
 

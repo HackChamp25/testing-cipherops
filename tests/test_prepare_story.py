@@ -173,10 +173,10 @@ def test_plan_says_how_many_records_go_where_and_why(tmp_path):
     plan = _exact_scene(tmp_path)["plan"]
     assert plan["size"] == "Small (smoke)" and plan["names"] == 10 and plan["exact"] is True
     sld, tld, root = plan["tiers"]
-    assert sld["head"] == "Leaf zones · 2 × 17 RRsets"
+    assert sld["head"] == "SLD zones · 2 × 17 RRsets"
     assert sld["why"] == "5 names × 2 (record + NSEC3 proof) + 7 zone records"
     assert tld["head"] == "TLD · 11 RRsets"
-    assert tld["why"] == "2 leaf zones × 2 (DS + NSEC3 proof) + 7 zone records"
+    assert tld["why"] == "2 SLD zones × 2 (DS + NSEC3 proof) + 7 zone records"
     assert root["head"] == "Root · 10 RRsets"
     assert root["why"] == "1 TLD × 2 (DS + NSEC3 proof) + 8 zone records"
 
@@ -194,7 +194,7 @@ def test_plan_groups_unequal_leaf_zones(tmp_path):
         z["signed_file"] = z["origin"].strip(".") + ".signed"
         _write_signed(tmp_path / z["signed_file"], 2 * z["n_names"] + 7 if z["tier"] == "sld" else 11)
     sld = ps.build_scene(man, zones_dir=tmp_path)["plan"]["tiers"][0]
-    assert sld["head"] == "Leaf zones · 1 × 17 + 1 × 57 = 74 RRsets"
+    assert sld["head"] == "SLD zones · 1 × 17 + 1 × 57 = 74 RRsets"
     assert sld["why"] == "5 / 25 names × 2 (record + NSEC3 proof) + 7 zone records"
 
 

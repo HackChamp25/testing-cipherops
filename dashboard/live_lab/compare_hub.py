@@ -23,7 +23,7 @@ _SRC = Path(__file__).resolve().parents[2] / "src"
 if str(_SRC) not in sys.path:
     sys.path.append(str(_SRC))
 from cipherops import results  # noqa: E402
-from live_lab import compare  # noqa: E402
+from live_lab import compare, terms  # noqa: E402
 from cipherops.codepoints import MODES  # noqa: E402
 
 RESULTS_DIR = Path(__file__).resolve().parents[2] / "results"
@@ -61,10 +61,6 @@ METRIC_NOTES = {
     },
 }
 
-SHORT = {
-    "slh-dsa-mtl": "SLH-DSA + MTL", "slh-dsa": "SLH-DSA", "ed25519": "Ed25519", "ecdsa-p256": "ECDSA P-256",
-    "rsa-2048": "RSA-2048", "mtl": "SLH-DSA + MTL", "mixed-mtl": "Mixed MTL", "ecdsa": "ECDSA P-256", "rsa": "RSA-2048",
-}
 COLORS = {
     "rsa-2048": "#7f8fa9", "ecdsa-p256": "#4c78a8", "ed25519": "#9aa9c4", "slh-dsa": "#e4572e", "slh-dsa-mtl": "#2e9e6f",
     "rsa": "#7f8fa9", "ecdsa": "#4c78a8", "mixed-mtl": "#8e6bbf", "mtl": "#2e9e6f",
@@ -79,7 +75,7 @@ def order_keys(keys) -> list[str]:
 
 
 def short(key: str) -> str:
-    return SHORT.get(key, key)
+    return terms.algorithm_label(key, short=True)
 
 
 def _na(v):

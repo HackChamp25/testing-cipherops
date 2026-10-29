@@ -27,13 +27,16 @@ ECO_DIR = ROOT / "ecosystem"
 SUITES_DIR = ECO_DIR / "results" / "suites"
 sys.path.insert(0, str(ROOT / "dashboard"))
 
-from live_lab import compare, compare_hub, decode, driver  # noqa: E402
+from live_lab import compare, compare_hub, decode, driver, evidence, home, terms  # noqa: E402
 from live_lab import build_job, prepare_job, prepare_story  # noqa: E402
 from live_lab import suite as suite_mod  # noqa: E402
 from cipherops import evolution  # noqa: E402
 
 compare = importlib.reload(compare)
 compare_hub = importlib.reload(compare_hub)
+terms = importlib.reload(terms)
+evidence = importlib.reload(evidence)
+home = importlib.reload(home)
 decode = importlib.reload(decode)
 driver = importlib.reload(driver)
 build_job = importlib.reload(build_job)
@@ -41,10 +44,9 @@ prepare_story = importlib.reload(prepare_story)
 suite_mod = importlib.reload(suite_mod)
 prepare_job = importlib.reload(prepare_job)  # after suite_mod: it uses the suite's process helpers
 
-st.set_page_config(page_title="Cipherops · MTL DNSSEC Lab", layout="wide", page_icon="🛰️")
+st.set_page_config(page_title=f"{terms.APP_NAME} · {terms.APP_SUBTITLE}", layout="wide", page_icon=":material/hub:")
 
-APP_NAME = "Cipherops · MTL DNSSEC Lab"
-APP_TAGLINE = "Root → TLD → SLD · validating Unbound · Verisign MTL"
+APP_NAME = terms.APP_NAME
 
 IMAGE_LABELS = {
     "cipherops-eco-nsd": "NSD authoritative servers",
@@ -58,89 +60,30 @@ SCENARIO_BLURB = {
     "ed25519": "Ed25519",
     "slh-dsa": "Post-quantum SLH-DSA (large signatures)",
     "mtl": "SLH-DSA with MTL condensed signatures",
-    "mixed-mtl": "ECDSA at root/TLD, MTL at the leaf zone",
+    "mixed-mtl": "ECDSA at root and TLD, SLH-DSA-MTL at the SLD",
 }
 
 LEVEL_ICON = {"info": "ℹ️", "ok": "✅", "warn": "⚠️", "err": "❌", "step": "▶️"}
 ACTIVITY_CAP = 500
 
 NAV_MODES = ("home", "setup", "live", "benchmark", "compare", "learn", "reset")
-TILE_TEXT_HEIGHT = 290  # px; fits heading, pitch and bullets even when the copy wraps
-
-TILES = {
-    "setup": {
-        "icon": "🛠️",
-        "title": "Setup",
-        "pitch": "Build the lab once. Everything else depends on it.",
-        "bullets": [
-            "Choose zone size and the DNSSEC scenarios to sign",
-            "Get the images, sign the hierarchy, start the containers",
-        ],
-        "cta": "Open Setup",
-    },
-    "live": {
-        "icon": "📡",
-        "title": "Live",
-        "pitch": "Send real lookups and watch the packets they cause.",
-        "bullets": [
-            "Switch scenario, flush the cache, run a query, compare cold and warm",
-            "Decode the capture and draw its message sequence",
-        ],
-        "cta": "Open Live",
-    },
-    "benchmark": {
-        "icon": "📊",
-        "title": "Benchmark",
-        "pitch": "The PS-036 benchmark: three dataset sizes, repeated trials, on its own.",
-        "bullets": [
-            "Signs, starts the lab, measures and stops it for each size",
-            "Signing, verification and bytes, with the settings recorded",
-        ],
-        "cta": "Open Benchmark",
-    },
-    "compare": {
-        "icon": "⚖️",
-        "title": "Compare",
-        "pitch": "Every algorithm side by side, and any run against any other.",
-        "bullets": [
-            "Offline harness or live lab: signing, verification, size, bytes on the wire, cache",
-            "Run against run: stack profiles, repeats or machines, with what differs spelled out",
-        ],
-        "cta": "Open Compare",
-    },
-    "learn": {
-        "icon": "📖",
-        "title": "Learn",
-        "pitch": "Why DNSSEC needs MTL, in six short animated scenes.",
-        "bullets": [
-            "From a poisoned DNS cache to the chain of trust, the quantum threat and the packet-size problem",
-            "No setup needed; the background for everything the other tiles measure",
-        ],
-        "cta": "Open Learn",
-    },
-    "reset": {
-        "icon": "🧹",
-        "title": "Reset",
-        "pitch": "Clean up exactly what you pick, and nothing else.",
-        "bullets": [
-            "Session, logs, captures, saved runs, signed zones",
-            "See what will go before you confirm",
-        ],
-        "cta": "Open Reset",
-    },
-}
+TILES = terms.TILES  # display text for every tile lives in terms.py; the dict keys are the navigation ids
 
 _CSS = """
 <style>
 .co-chip{display:inline-block;padding:2px 11px;border-radius:999px;font-size:.78rem;
-  font-weight:600;letter-spacing:.01em;vertical-align:middle}
-.co-ok{background:#0f3d2b;color:#6df0b0}
-.co-warn{background:#47360a;color:#ffd166}
-.co-idle{background:#2a2f3a;color:#b6bdcc}
-.co-info{background:#0e2f52;color:#7cc4ff}
-.co-hero h1{margin-bottom:.1rem}
-.co-sub{opacity:.75;margin-top:0}
-.co-strip{margin:.2rem 0 .8rem 0;opacity:.95}
+  font-weight:600;letter-spacing:.01em;vertical-align:middle;color:inherit;border:1px solid transparent}
+/* tinted background + coloured border + the theme's own text colour: readable on light and dark themes,
+   and every chip carries its word, so colour is never the only signal */
+.co-ok{background:rgba(34,160,107,.18);border-color:rgba(34,160,107,.75)}
+.co-warn{background:rgba(230,160,20,.20);border-color:rgba(200,140,10,.80)}
+.co-idle{background:rgba(128,128,128,.16);border-color:rgba(128,128,128,.55)}
+.co-info{background:rgba(60,140,230,.18);border-color:rgba(60,140,230,.75)}
+.co-bad{background:rgba(220,60,50,.18);border-color:rgba(220,60,50,.80)}
+.co-strip{margin:.2rem 0 .8rem 0}
+/* long button labels wrap instead of being cut off */
+div[data-testid="stButton"] button, div[data-testid="stDownloadButton"] button{height:auto;min-height:2.5rem}
+div[data-testid="stButton"] button p, div[data-testid="stDownloadButton"] button p{white-space:normal;line-height:1.25}
 </style>
 """
 
@@ -335,6 +278,14 @@ def _go(mode: str) -> None:
         pass
 
 
+def _go_to(mode: str, settings: dict | None = None) -> None:
+    """Open a tile, first presetting some of its controls (stored settings win over a widget's old value)."""
+    for key, value in (settings or {}).items():
+        _store()[key] = value
+        st.session_state.pop(f"w_{key}", None)
+    _go(mode)
+
+
 def _init_nav() -> None:
     if "nav" in st.session_state:
         return
@@ -408,7 +359,7 @@ def _apply_ui_config(h: driver.LabHandle) -> str | None:
     """Write configs/_dashboard.yaml from the stored settings and point the handle at it."""
     sc = list(cfg("scenarios") or ["ecdsa", "slh-dsa", "mtl"])
     if not sc:
-        return "Select at least one scenario in Setup."
+        return "Select at least one algorithm in Setup."
     zone = cfg("zone_size", "small")
     shape, errors, _warnings = _shape()
     st.session_state.shape_errors = errors
@@ -455,19 +406,19 @@ def _lab_strip(h: driver.LabHandle, stt: dict, *, mode: str = "setup") -> None:
     r = readiness(stt)
     sc = _scenario_list(h)
     if mode == "live" and r["active"]:
-        scen_chip = _chip(f"Active · {r['active']}", "info")
+        scen_chip = _chip(f"Active · {terms.algorithm_label(r['active'], short=True)}", "info")
     elif sc:
-        label = "Scenario" if len(sc) == 1 else "Scenarios"
-        scen_chip = _chip(f"{label} · {', '.join(sc)}", "info")
+        label = "Algorithm" if len(sc) == 1 else "Algorithms"
+        scen_chip = _chip(f"{label} · {', '.join(terms.algorithm_label(x, short=True) for x in sc)}", "info")
     elif r["active"]:
-        scen_chip = _chip(f"Scenario · {r['active']}", "info")
+        scen_chip = _chip(f"Algorithm · {terms.algorithm_label(r['active'], short=True)}", "info")
     else:
         scen_chip = ""
     chips = [
         _chip("Lab running", "ok") if r["running"] else _chip("Lab stopped", "idle"),
-        _chip("Prepared", "ok") if r["prepared"] else _chip("Not prepared", "warn"),
+        _chip("Zones signed", "ok") if r["prepared"] else _chip("Zones not signed", "warn"),
         scen_chip,
-        _chip(f"Zone · {cfg('zone_size', 'small')}", "idle"),
+        _chip(f"Dataset size · {str(cfg('zone_size', 'small')).capitalize()}", "idle"),
     ]
     st.markdown(f'<div class="co-strip">{" ".join(c for c in chips if c)}</div>', unsafe_allow_html=True)
 
@@ -476,6 +427,7 @@ def _page_header(mode: str, h: driver.LabHandle, stt: dict) -> None:
     tile = TILES[mode]
     st.markdown(f"## {tile['icon']} {tile['title']}")
     st.caption(tile["pitch"])
+    st.caption(f"**Use it when:** {tile['use_when']} · **Not for:** {tile['not_for']} · **Needs:** {tile['needs']}")
     if mode in ("setup", "live", "reset"):
         _lab_strip(h, stt, mode=mode)
 
@@ -598,8 +550,8 @@ def _chrome_bar() -> None:
     _embed_html(_chrome_html(_lab_revision()), height=1)
 
 def _sidebar_brand(mode: str) -> None:
-    st.sidebar.title("Cipherops")
-    st.sidebar.caption("MTL DNSSEC Lab")
+    st.sidebar.title(terms.APP_NAME)
+    st.sidebar.caption(terms.APP_SUBTITLE)
     if mode != "home":
         st.sidebar.button("← Home", on_click=_go, args=("home",), key="sb_home", width="stretch")
         st.sidebar.markdown("---")
@@ -607,28 +559,26 @@ def _sidebar_brand(mode: str) -> None:
 
 def sidebar_home(h: driver.LabHandle, stt: dict) -> None:
     _sidebar_brand("home")
-    st.sidebar.markdown("### How to use this lab")
+    st.sidebar.markdown("### Where things are")
     st.sidebar.markdown(
-        "1. **Setup** (first, once) — pick zone size and scenarios, get the images, "
-        "sign the hierarchy, start the lab  \n"
-        "2. **Live** — send a lookup, compare cold and warm, read the packets  \n"
-        "3. **Benchmark** — three dataset sizes, repeated trials; needs only the images, "
-        "not Prepare or a running lab  \n"
-        "4. **Compare** — MTL vs SLH-DSA and the other modes, side by side  \n"
-        "5. **Learn** — why DNSSEC needs MTL, a short animated walkthrough  \n"
-        "6. **Reset** — clear only what you choose"
+        f"1. **{terms.tile_title('compare')}**: results of a finished run, no setup needed  \n"
+        f"2. **{terms.tile_title('setup')}**: build the live lab (first, once)  \n"
+        f"3. **{terms.tile_title('live')}**: one lookup and its packets  \n"
+        f"4. **{terms.tile_title('benchmark')}**: three dataset sizes through a real resolver; needs only the images  \n"
+        f"5. **{terms.tile_title('learn')}**: why DNSSEC needs MTL  \n"
+        f"6. **{terms.tile_title('reset')}**: clear only what you choose"
     )
     st.sidebar.markdown("---")
     r = readiness(stt)
     st.sidebar.markdown("### Lab readiness")
     for ok, text in ((r["images"], "Images built"), (r["prepared"], "Zones signed"),
                      (r["running"], "Containers running")):
-        st.sidebar.markdown(f"{'🟢' if ok else '⚪'}  {text}")
+        st.sidebar.markdown(f"{':green[:material/check_circle:]' if ok else ':gray[:material/radio_button_unchecked:]'}  {text}")
     sc = _scenario_list(h)
     if sc:
-        st.sidebar.markdown(f"🔵  Scenarios **{', '.join(sc)}**")
+        st.sidebar.markdown(f":blue[:material/label:]  Algorithms **{', '.join(terms.algorithm_label(x, short=True) for x in sc)}**")
     if r["active"] and r["running"]:
-        st.sidebar.markdown(f"▶️  Active **{r['active']}**")
+        st.sidebar.markdown(f":blue[:material/play_circle:]  Active **{terms.algorithm_label(r['active'], short=True)}**")
     st.sidebar.markdown("---")
     _hint("Open a tile to see its settings here. Each tile has its own Results view.")
     if st.sidebar.button("Refresh status", width="stretch", key="sb_refresh_home"):
@@ -636,7 +586,8 @@ def sidebar_home(h: driver.LabHandle, stt: dict) -> None:
 
 
 def _step_label(n: int, title: str, state: str) -> str:
-    mark = {"done": "🟢", "partial": "🟡"}.get(state, "⚪")
+    mark = {"done": ":green[:material/check_circle:]", "partial": ":orange[:material/timelapse:]"}.get(
+        state, ":gray[:material/radio_button_unchecked:]")
     return f"{mark}  **Step {n}** · {title}"
 
 
@@ -672,7 +623,7 @@ def _finish_prepare_job(h: driver.LabHandle) -> None:
     activity("ok", f"Zones signed ({secs:.0f}s)",
              f"Prepared {n_scen} scenario(s): {scen_txt}. Watch the signing replay in Setup, "
              "or open Results for sign times.", phase="prepare", source="prepare", h=h)
-    activity("info", "Prepare paths",
+    activity("info", "Sign zones: paths",
              f"work: `{summary['work_dir']}`\nzones: `{summary['zones_dir']}`\n"
              f"active: `{summary['active_dir']}`\ncompose: `{summary['compose']}`",
              phase="prepare", source="prepare", h=h, tech=True)
@@ -723,15 +674,16 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
     _finish_build_job(h)
     building = build_job.is_running()
     st.sidebar.markdown(_step_label(1, "Images", "done" if r["images"] else "none"))
-    _hint("Choose the DNS stack version, then build it. Prepare, Start and the benchmark all run inside these images.")
+    _hint("Choose the software stack, then build its images. Sign zones, Start and the live-lab benchmark all run inside them.")
     stacks = driver.list_stacks()
     stack = sb(
-        st.sidebar.selectbox, "stack", driver.DEFAULT_STACK, "Image version",
-        options=stacks, format_func=driver.stack_label,
-        help="Which pinned Verisign DNS stack to build and run. "
-             "draft06 = condensed-by-default (EDNS 65050). "
-             "latest = always-full MTL, same MTL commit as the main Cipherops library report. "
-             "Change this, then Build images (and Prepare again for Live).",
+        st.sidebar.selectbox, "stack", driver.DEFAULT_STACK, "Software stack",
+        options=stacks,
+        format_func=lambda s: f"{terms.stack_label(s)}: {driver.STACK_BLURBS.get(s, '')}".rstrip(': '),
+        help="Which pinned software stack to build and run. "
+             f"draft-06 = condensed signatures by default, full signature on the mtl-mode-full option (code point {driver.MTL_FULL}, a lab value). "
+             "latest = always-full MTL signatures and FIPS 205 SLH-DSA, the same MTL commit as the offline harness. "
+             "Change this, then build the images and Sign zones again.",
     )
     pins = driver.stack_pins(stack)
     if pins:
@@ -775,11 +727,11 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
 
     # —— Step 2: prepare (zone design, then sign) ——
     prep_state = "done" if prepared_session else ("partial" if r["prepared"] else "none")
-    st.sidebar.markdown(_step_label(2, "Prepare", prep_state))
-    _hint("Design the zones, then sign them for each selected scenario.")
+    st.sidebar.markdown(_step_label(2, "Sign zones", prep_state))
+    _hint("Design the zones, then sign them with each selected algorithm.")
     size_keys = list(driver.ZONE_SIZE_PRESETS.keys())
     size = sb(
-        st.sidebar.selectbox, "zone_size", "small", "Zone size", options=size_keys,
+        st.sidebar.selectbox, "zone_size", "small", "Dataset size", options=size_keys,
         format_func=lambda k: driver.ZONE_SIZE_PRESETS[k]["label"],
         help="Controls how many zones and names are generated. Use Small for a first visit, "
              "or Custom to set the numbers yourself.",
@@ -788,12 +740,12 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
         st.sidebar.markdown("**Custom zones**")
         sb(st.sidebar.text_input, "custom_tlds", "test", "TLDs",
            help="Comma-separated, e.g. test, lab. One server per TLD (up to 9).")
-        sb(st.sidebar.number_input, "custom_sld_count", 4, "Leaf zones", min_value=1, max_value=200, step=1,
+        sb(st.sidebar.number_input, "custom_sld_count", 4, "SLD zones", min_value=1, max_value=200, step=1,
            help="Second-level zones, spread round-robin over the TLDs.")
-        sb(st.sidebar.text_input, "custom_sizes", "25, 50", "Names per leaf zone",
-           help="Comma-separated; the list repeats across the leaf zones, e.g. 25, 100, 250.")
+        sb(st.sidebar.text_input, "custom_sizes", "25, 50", "Names per SLD zone",
+           help="Comma-separated; the list repeats across the SLD zones, e.g. 25, 100, 250.")
         sb(st.sidebar.number_input, "custom_servers", 1, "Leaf servers", min_value=1, max_value=9, step=1,
-           help="Servers that host the leaf zones (up to 9, and no more than leaf zones).")
+           help="Servers that host the SLD zones (up to 9, and no more than SLD zones).")
         sb(st.sidebar.number_input, "custom_seed", driver.DEFAULT_SEED, "Seed", min_value=0,
            max_value=2**31 - 1, step=1, help="Same numbers and seed give the same zones every time.")
     shape, shape_errors, shape_warnings = _shape()
@@ -801,18 +753,19 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
         for msg in shape_errors:
             st.sidebar.error(msg)
     else:
-        _hint(f"{shape['sld_count']} leaf zones · TLDs: {', '.join(shape['tlds'])}")
+        _hint(f"{shape['sld_count']} SLD zones · TLDs: {', '.join(shape['tlds'])}")
         for msg in shape_warnings:
             st.sidebar.warning(msg)
 
     all_sc = list(driver.SCENARIO_ALGS.keys())
     default_sc = [s for s in ("ecdsa", "slh-dsa", "mtl") if s in all_sc]
     sc = sb(
-        st.sidebar.multiselect, "scenarios", default_sc, "Scenarios", options=all_sc,
-        help="DNSSEC modes to sign. Change this, then run Prepare again.",
+        st.sidebar.multiselect, "scenarios", default_sc, "Algorithms", options=all_sc,
+        format_func=terms.algorithm_label,
+        help="Algorithms to sign with. Change this, then Sign zones again.",
     )
     sb(st.sidebar.number_input, "jobs", 2, "Sign jobs", min_value=1, max_value=8,
-       help="How many zones to sign in parallel during Prepare.")
+       help="How many zones to sign in parallel when you sign the zones.")
     if not sc:
         st.sidebar.warning("Select at least one scenario")
     _warn_unvalidated(stack, sc)
@@ -824,7 +777,7 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
         _hint("Build or pull the images (step 1) first.")
     if signing:
         _hint("Signing is running. Watch it live in Setup.")
-    if st.sidebar.button("Prepare", key="btn_prep", width="stretch",
+    if st.sidebar.button("Sign zones", key="btn_prep", width="stretch",
                          disabled=not sc or bool(shape_errors) or signing or bool(bench_busy) or building or no_images):
         _apply_ui_config(h)
         jobs = int(cfg("jobs", 2))
@@ -844,14 +797,14 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
           "so starting stops any other zone shape.")
     can_start = bool(r["prepared"])
     if not can_start:
-        _hint("Start stays off until Prepare has signed this zone size (compose + manifests on disk).")
+        _hint("Start stays off until the zones of this dataset size are signed (compose + manifests on disk).")
     b3a, b3b = st.sidebar.columns(2)
     # Their rule (Start needs a prepared lab) plus ours (not while a benchmark, signing or build owns the lab, and
     # not before the images exist).
     start_off = (not can_start) or bool(bench_busy or signing or building or no_images)
     if b3a.button("Start", key="btn_up", width="stretch", disabled=start_off):
         if not h.prepared():
-            st.sidebar.error("Run Prepare first — there is nothing signed to start for this lab.")
+            st.sidebar.error("Sign the zones first — there is nothing signed to start for this lab.")
             activity("err", "Start blocked", "Lab is not prepared", phase="compose", source="compose", h=h)
         else:
             activity("step", "Starting the lab", f"Image set {h.stack}", phase="compose", source="compose", h=h)
@@ -888,9 +841,9 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
 def sidebar_live(h: driver.LabHandle, stt: dict) -> None:
     _sidebar_brand("live")
     r = readiness(stt)
-    st.sidebar.markdown("### Live")
+    st.sidebar.markdown(f"### {terms.tile_title('live')}")
 
-    st.sidebar.markdown(_step_label(1, "Scenario", "done" if r["running"] and r["active"] else "none"))
+    st.sidebar.markdown(_step_label(1, "Algorithm", "done" if r["running"] and r["active"] else "none"))
     _hint("Which signed mode the live servers use right now.")
     scenarios: list[str] = []
     try:
@@ -901,7 +854,8 @@ def sidebar_live(h: driver.LabHandle, stt: dict) -> None:
     active = r["active"]
     if scenarios:
         default = active if active in scenarios else scenarios[0]
-        scenario = sb(st.sidebar.selectbox, "live_scenario", default, "Active scenario", options=scenarios)
+        scenario = sb(st.sidebar.selectbox, "live_scenario", default, "Active algorithm", options=scenarios,
+                        format_func=terms.algorithm_label)
         st.session_state.selected_scenario = scenario
         _hint(SCENARIO_BLURB.get(scenario, ""))
         if r["running"] and scenario and scenario != active and not suite_mod.running_suite():
@@ -925,7 +879,7 @@ def sidebar_live(h: driver.LabHandle, stt: dict) -> None:
         elif not r["running"] and scenario != active:
             _hint("Start the lab in Setup to apply this choice.")
     else:
-        _hint("Prepare the lab in Setup first.")
+        _hint("Sign the zones in Setup first.")
 
     done_q = bool(st.session_state.get("query_log") or st.session_state.get("last_query"))
     st.sidebar.markdown(_step_label(2, "Query", "done" if done_q else "none"))
@@ -976,7 +930,7 @@ def sidebar_benchmark(h: driver.LabHandle, stt: dict) -> None:
     suites = suite_mod.list_suites()
     done = [s for s in suites if s["complete"]]
     live = suite_mod.running_suite()
-    st.sidebar.markdown("### Benchmark")
+    st.sidebar.markdown(f"### {terms.tile_title('benchmark')}")
     if live:
         st.sidebar.markdown("🔵  A benchmark is running")
     else:
@@ -986,7 +940,7 @@ def sidebar_benchmark(h: driver.LabHandle, stt: dict) -> None:
         "starts the lab, measures, and stops it. It only needs the built images (Setup, step 1)."
     )
     bench_stack = cfg("stack", driver.DEFAULT_STACK)
-    _hint(f"Uses **Image version `{bench_stack}`** from Setup — build that stack before you run.")
+    _hint(f"Uses **software stack `{terms.stack_label(bench_stack)}`** from Setup — build that stack before you run.")
 
     st.sidebar.markdown("**Run name**")
     label = sb(
@@ -1002,10 +956,10 @@ def sidebar_benchmark(h: driver.LabHandle, stt: dict) -> None:
     sizes = sb(st.sidebar.multiselect, "bench_sizes", SUITE_DEFAULT_SIZES, "Dataset sizes",
                options=SUITE_SIZE_CHOICES, format_func=_size_label,
                help="Data names in the whole hierarchy. PS-036 asks for three sizes: 50, 500 and 5,000.")
-    sc = sb(st.sidebar.multiselect, "bench_scenarios", ["ecdsa", "slh-dsa", "mtl"], "Scenarios",
-            options=list(driver.SCENARIO_ALGS),
-            help="slh-dsa is the PQC algorithm without MTL, mtl is the same algorithm with MTL. "
-                 "ecdsa is a classical reference.")
+    sc = sb(st.sidebar.multiselect, "bench_scenarios", ["ecdsa", "slh-dsa", "mtl"], "Algorithms",
+            options=list(driver.SCENARIO_ALGS), format_func=terms.algorithm_label,
+            help="SLH-DSA is the post-quantum algorithm without MTL, SLH-DSA-MTL is the same algorithm with MTL. "
+                 "ECDSAP256SHA256 is a classical reference.")
     sb(st.sidebar.number_input, "bench_trials", 5, "Measurement trials", min_value=1, max_value=10,
        help="Each trial replays the workload with a cold cache, then again warm. One discarded warm-up trial "
             "runs first. The interval of the median needs at least 6 trials to reach 95%; with 5 it covers 94%.")
@@ -1039,7 +993,7 @@ def sidebar_benchmark(h: driver.LabHandle, stt: dict) -> None:
         sb(st.number_input, "timeout_s", float(wl_default["timeout_s"]), "Lookup timeout (s)",
            min_value=1.0, max_value=30.0, step=1.0, format="%.0f")
     with st.sidebar.expander("Network profiles", expanded=False):
-        st.caption("lan is the zero-delay baseline. Delay is added towards each tier on the resolver; "
+        st.caption("lan is the zero-delay baseline. Delay is added towards each level on the resolver; "
                    "loss applies to the resolver's queries. Only the profiles ticked above are run.")
         for prof in EDITABLE_PROFILES:
             base = driver.PROFILE_DEFAULTS[prof]
@@ -1089,7 +1043,7 @@ def sidebar_benchmark(h: driver.LabHandle, stt: dict) -> None:
 
 def sidebar_reset(h: driver.LabHandle, stt: dict) -> None:
     _sidebar_brand("reset")
-    st.sidebar.markdown("### Reset")
+    st.sidebar.markdown(f"### {terms.tile_title('reset')}")
     _hint("Pick what to clear in the main area. Nothing is removed until you press the button.")
     st.sidebar.markdown("**Always kept**")
     st.sidebar.markdown("- Docker images  \n- Configuration files  \n- Repository code")
@@ -1100,73 +1054,10 @@ def sidebar_reset(h: driver.LabHandle, stt: dict) -> None:
 
 # ─────────────────────────── HOME ───────────────────────────
 
-def _tile_chip(mode: str, stt: dict, h: driver.LabHandle) -> str:
-    r = readiness(stt)
-    if mode == "setup":
-        if r["ready"]:
-            return _chip("Ready", "ok")
-        if r["count"] == 0:
-            return _chip("Start here", "warn")
-        return _chip(f"In progress · {r['count']}/3", "info")
-    if mode == "benchmark":
-        if suite_mod.running_suite():
-            return _chip("Running", "info")
-        if not r["images"]:
-            return _chip("Needs images", "warn")
-        n = len([s for s in suite_mod.list_suites() if s["complete"]])
-        return _chip(f"Ready · {n} saved" if n else "Ready", "ok")
-    if mode == "live":
-        if not r["ready"]:
-            return _chip("Needs Setup", "warn")
-        return _chip(f"Live · {r['active']}", "ok") if r["active"] else _chip("Ready", "ok")
-    if mode == "compare":
-        has = bool(compare_hub.offline_catalogue(ROOT / "results")) or bool(driver.list_labs())
-        return _chip("Has data", "ok") if has else _chip("No data yet", "idle")
-    if mode == "learn":
-        return _chip("No setup needed", "ok")
-    return _chip("Maintenance", "idle")
-
-
 def home_page(h: driver.LabHandle, stt: dict) -> None:
     _symbol, full = _brand()
-    if full is not None:
-        logo_col, title_col = st.columns([1, 4], vertical_alignment="center")
-        logo_col.image(full, width=190)
-    else:
-        title_col = st.container()
-    title_col.markdown(
-        f'<div class="co-hero"><h1>{APP_NAME}</h1><p class="co-sub">{APP_TAGLINE}</p></div>',
-        unsafe_allow_html=True,
-    )
-    _lab_strip(h, stt)
-    if stt.get("error"):
-        st.error(f"Could not read lab status: {stt['error']}")
-
-    r = readiness(stt)
-    if not r["ready"]:
-        st.info("**Start with Setup** to build the images. Live also needs the lab signed and running; "
-                "Benchmark only needs the images.")
-
-    order = [("setup", "live"), ("benchmark", "compare"), ("learn", "reset")]
-    for pair in order:
-        cols = st.columns(2)
-        for col, mode in zip(cols, pair):
-            tile = TILES[mode]
-            with col, st.container(border=True):
-                # Fixed-height text block so all four tiles (and their buttons) line up,
-                # however the copy wraps.
-                with st.container(height=TILE_TEXT_HEIGHT, border=False):
-                    st.markdown(f"### {tile['icon']} {tile['title']}  {_tile_chip(mode, stt, h)}",
-                                unsafe_allow_html=True)
-                    st.markdown(f"**{tile['pitch']}**")
-                    for b in tile["bullets"]:
-                        st.markdown(f"- {b}")
-                # Every tile opens with the same call-to-action style: readiness is shown by the chip
-                # and the banner above, not by making some buttons look disabled.
-                st.button(
-                    f"{tile['cta']} →", key=f"open_{mode}", on_click=_go, args=(mode,),
-                    type="primary", width="stretch",
-                )
+    home.render(home.Context(
+        h=h, stt=stt, ready=readiness(stt), go=_go_to, lab_strip=lambda: _lab_strip(h, stt, mode="home"), brand=full))
 
 
 # ─────────────────────────── SETUP ───────────────────────────
@@ -1184,12 +1075,12 @@ def _render_prepare_summary(h: driver.LabHandle) -> None:
         st.session_state.prepare_summary = summary
     if not summary:
         return
-    with st.expander("What Prepare created", expanded=True):
+    with st.expander("What Sign zones created", expanded=True):
         wall = summary.get("wall_s")
         wall_txt = f"{wall:.1f}" if isinstance(wall, (int, float)) else (wall or "—")
         st.markdown(
             f"Signed **{summary.get('lab')}** in **{wall_txt}** s — "
-            f"leaf zones first, then TLD, then root. "
+            f"SLD zones first, then TLD, then root. "
             f"Files below are what the running lab serves."
         )
         st.code(
@@ -1218,15 +1109,15 @@ def planned_lab(h: driver.LabHandle) -> None:
         scenarios = list(cfg("scenarios") or [])
         stats = driver.shape_stats(shape, scenarios, int(cfg("jobs", 2)))
         m = st.columns(5)
-        m[0].metric("Zones", stats["zones"], help="Root + TLDs + leaf zones")
+        m[0].metric("Zones", stats["zones"], help="Root + TLDs + SLD zones")
         m[1].metric("Leaf names", f"{stats['names']:,}")
         m[2].metric("Containers", stats["containers"], help="Root, TLD and leaf servers, resolver and client")
-        m[3].metric("Signatures", f"~{stats['est_rrsigs']:,}", help="RRSIGs per scenario (estimate)")
-        m[4].metric("Prepare time", driver.format_duration(stats["est_prepare_s"]),
+        m[3].metric("Signatures", f"~{stats['est_rrsigs']:,}", help="RRSIGs per algorithm (estimate)")
+        m[4].metric("Signing time", driver.format_duration(stats["est_prepare_s"]),
                     help="Rough estimate from the Medium lab; SLH-DSA dominates.")
         sizes = ", ".join(str(s) for s in shape["sld_sizes"])
         st.caption(
-            f"TLDs **{', '.join(shape['tlds'])}** · {shape['sld_count']} leaf zones on "
+            f"TLDs **{', '.join(shape['tlds'])}** · {shape['sld_count']} SLD zones on "
             f"{shape['sld_servers']} server(s) · names per zone cycle **{sizes}** · "
             f"lab folder **{h.tag}**"
         )
@@ -1307,13 +1198,13 @@ def _prepare_live_body(h: driver.LabHandle) -> None:
                     took = f"{z['elapsed']:.0f} s…"
                 else:
                     took = ""
-                rows.append({"Zone": z["origin"], "Tier": prepare_job.TIER_LABEL.get(z["tier"], z["tier"]),
+                rows.append({"Zone": z["origin"], "Level": prepare_job.TIER_LABEL.get(z["tier"], z["tier"]),
                              "State": _STATE_TEXT[z["state"]],
                              "RRSIGs": int(z["rrsigs"]) if z.get("rrsigs") is not None else None,
                              "Sign time": took})
             st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", height=min(420, 38 + 35 * len(rows)))
 
-    st.caption("Zones sign in parallel (Sign jobs), tier by tier: leaf zones first, then each TLD with its "
+    st.caption("Zones sign in parallel (Sign jobs), level by level: SLD zones first, then each TLD with its "
                "children's DS records, then the root. RRSIG counts and times are measured as each zone finishes.")
     with st.expander("Signer output"):
         st.code(prepare_job.log_text(h, 4000) or "(nothing printed yet)", language="text")
@@ -1355,7 +1246,7 @@ def setup_replay(h: driver.LabHandle, *, key: str) -> None:
     """Animated replay of how Prepare signed the hierarchy (built from the Prepare manifests on disk)."""
     manifests = driver.list_manifests(h) if (prepare_metrics_visible(h) and h.prepared()) else {}
     if not manifests:
-        st.info("The signing replay appears here after you run Prepare (Step 2 in the sidebar).")
+        st.info("The signing replay appears here after you sign the zones (Step 2 in the sidebar).")
         return
     names = compare.order_scenarios(manifests)
     pick = names[0]
@@ -1363,7 +1254,8 @@ def setup_replay(h: driver.LabHandle, *, key: str) -> None:
         pick = st.radio(
             "Scenario", names, horizontal=True, key=f"replay_pick_{key}",
             index=names.index("mtl") if "mtl" in names else 0,
-            help="Each scenario signs the same zones. Compare how many signatures each one needs.",
+            help="Each algorithm signs the same zones. Compare how many signatures each one needs.",
+            format_func=terms.algorithm_label,
         )
     size_key = cfg("zone_size", "small")
     size_label = driver.ZONE_SIZE_PRESETS.get(size_key, {}).get("label", str(size_key))
@@ -1373,11 +1265,11 @@ def setup_replay(h: driver.LabHandle, *, key: str) -> None:
     )
     _embed_html(prepare_story.render_html(scene), height="content")
     st.caption(
-        "**Want more records?** Change **Zone size** in the sidebar (Small, Medium, Large, or **Custom…** for "
-        "TLDs, leaf zones and names per leaf zone), then press **Prepare**. The replay always shows the last Prepare."
+        "**Want more records?** Change **Dataset size** in the sidebar (Small, Medium, Large, or **Custom…** for "
+        "TLDs, SLD zones and names per SLD zone), then press **Sign zones**. The replay always shows the last signing."
     )
     st.caption(
-        "Time is compressed so every tier takes the same few seconds; the real signing times are on the labels. "
+        "Time is compressed so every level takes the same few seconds; the real signing times are on the labels. "
         "Record counts are the RRSIGs found in the signed zone files; the tree is drawn from that count "
         "(one leaf per signed RRset, one perfect tree per 1-bit of the count)."
     )
@@ -1391,7 +1283,7 @@ def setup_overview(h: driver.LabHandle, stt: dict) -> None:
     if st.session_state.get("replay_fresh") and h.prepared():
         with st.container(border=True):
             top, hide = st.columns([6, 1])
-            top.markdown("**Signing replay** · how Prepare just signed the hierarchy")
+            top.markdown("**Signing replay** · how the zones were just signed")
             hide.button("Hide", key="hide_replay", on_click=lambda: st.session_state.pop("replay_fresh", None))
             setup_replay(h, key="fresh")
 
@@ -1421,13 +1313,13 @@ def setup_overview(h: driver.LabHandle, stt: dict) -> None:
         with st.container(border=True):
             st.success("Setup complete. The lab is signed, running and ready.")
             a, b, _ = st.columns([1, 1, 2])
-            a.button("Continue to Live →", on_click=_go, args=("live",), key="setup_to_live",
+            a.button("Continue to Demonstrate →", on_click=_go, args=("live",), key="setup_to_live",
                      type="primary", width="stretch")
-            b.button("Continue to Benchmark →", on_click=_go, args=("benchmark",),
+            b.button("Continue to Live-lab benchmark →", on_click=_go, args=("benchmark",),
                      key="setup_to_bench", width="stretch")
     else:
         nxt = ("Build or pull the images (Step 1)" if not r["images"]
-               else "Run Prepare to sign the zones (Step 2)" if not r["prepared"]
+               else "Sign the zones (Step 2)" if not r["prepared"]
                else "Press Start to launch the containers (Step 3)")
         st.info(f"**Next:** {nxt} — use the sidebar.")
 
@@ -1451,7 +1343,7 @@ def setup_overview(h: driver.LabHandle, stt: dict) -> None:
 
 def setup_results(h: driver.LabHandle) -> None:
     if not (prepare_metrics_visible(h) and h.prepared()):
-        st.info("Signing results appear here after you run Prepare.")
+        st.info("Signing results appear here after you sign the zones.")
         return
     _render_prepare_summary(h)
     rows = driver.manifest_rows(h)
@@ -1463,9 +1355,12 @@ def setup_results(h: driver.LabHandle) -> None:
     view = df[df["scenario"].isin(pick)] if pick else df
     wall = st.session_state.get("prepare_wall_s") or driver.load_session(h).get("prepare_wall_s")
     if wall:
-        st.metric("Prepare wall", f"{wall:.1f}s")
+        st.metric("Signing wall time", f"{wall:.1f}s")
     st.dataframe(
-        view[["scenario", "tier", "origin", "sign_seconds", "verify_seconds", "signed_bytes", "rrsig_count"]],
+        view[["scenario", "tier", "origin", "sign_seconds", "verify_seconds", "signed_bytes", "rrsig_count"]]
+        .assign(scenario=lambda d: d["scenario"].map(terms.algorithm_label), tier=lambda d: d["tier"].map(terms.level_label))
+        .rename(columns={"scenario": "Algorithm", "tier": "Level", "origin": "Zone", "sign_seconds": "Signing (s)",
+                         "verify_seconds": "Verify (s)", "signed_bytes": "Signed size (B)", "rrsig_count": "RRSIGs"}),
         width="stretch", hide_index=True,
     )
     agg = view.groupby("scenario", as_index=False).agg(
@@ -1850,7 +1745,7 @@ def _pcap_folder_banner(h: driver.LabHandle, options: list[str]) -> None:
     st.caption(
         f"Captures for lab **`{h.tag}`** · folder "
         f"`results/{h.tag}/live-dashboard` · **{len(options)}** file(s). "
-        f"Image version **{h.stack}** · zone **{cfg('zone_size', 'small')}**."
+        f"Software stack **{terms.stack_label(h.stack)}** · dataset size **{str(cfg('zone_size', 'small')).capitalize()}**."
     )
     inv = driver.live_capture_inventory()
     others = [r for r in inv if r["tag"] != h.tag]
@@ -1928,7 +1823,7 @@ def _capture_context(pcap: str) -> str:
 
 def pcap_decode_view(h: driver.LabHandle, options: list[str]) -> None:
     if not options:
-        st.caption("No captures yet — run a Live query with Capture on.")
+        st.caption("No captures yet — run a query in Demonstrate with Capture on.")
         return
     choice = st.selectbox("Capture", options, key="pcap_story_choice", format_func=_pcap_name)
     st.caption(_capture_context(choice))
@@ -1973,7 +1868,7 @@ def pcap_decode_view(h: driver.LabHandle, options: list[str]) -> None:
 
 def pcap_sequence_view(h: driver.LabHandle, options: list[str]) -> None:
     if not options:
-        st.caption("No captures yet — run a Live query with Capture on.")
+        st.caption("No captures yet — run a query in Demonstrate with Capture on.")
         return
     seq_choice = st.selectbox("Capture", options, key="pcap_seq_choice", format_func=_pcap_name)
     st.caption(_capture_context(seq_choice))
@@ -2035,8 +1930,24 @@ def live_results(h: driver.LabHandle) -> None:
         pcap_sequence_view(h, options)
 
 
+_PRESENTING_CSS = """
+<style>
+section[data-testid="stSidebar"]{display:none}
+[data-testid="stMain"] .block-container{max-width:100%}
+[data-testid="stMain"] p, [data-testid="stMain"] li, [data-testid="stMain"] td, [data-testid="stMain"] th,
+[data-testid="stMain"] code, [data-testid="stMain"] label{font-size:1.2rem}
+</style>
+"""
+
+
 def live_page(h: driver.LabHandle, stt: dict) -> None:
     _page_header("live", h, stt)
+    presenting = st.toggle("Presenting", value=bool(cfg("presenting", False)), key="w_presenting",
+                           help="For a live demonstration: hides the sidebar and the activity log and enlarges the text. "
+                                "Turn it off here to bring the controls back.")
+    _store()["presenting"] = presenting
+    if presenting:
+        st.markdown(_PRESENTING_CSS, unsafe_allow_html=True)
     query, dig_tab, cache, results = st.tabs(["Query", "dig terminal", "Cold vs warm", "Results"])
     with query:
         query_panel(h, stt)
@@ -2046,7 +1957,8 @@ def live_page(h: driver.LabHandle, stt: dict) -> None:
         cache_panel(h, stt)
     with results:
         live_results(h)
-    _activity_expander(h)
+    if not presenting:
+        _activity_expander(h)
 
 
 # ─────────────────────────── BENCHMARK ───────────────────────────
@@ -2079,7 +1991,7 @@ def _bench_plan() -> None:
         rows = []
         for n in p["sizes"]:
             s = driver.shape_stats(suite_mod.bench_shape(n), p["scenarios"], p["jobs"])
-            rows.append({"Dataset": _size_label(n), "Zones": s["zones"], "Leaf zones": suite_mod.bench_shape(n)["sld_count"],
+            rows.append({"Dataset": _size_label(n), "Zones": s["zones"], "SLD zones": suite_mod.bench_shape(n)["sld_count"],
                          "Est. RRSIGs": s["est_rrsigs"],
                          "Est. signing": driver.format_duration(suite_mod.estimate_seconds(
                              [n], p["scenarios"], p["jobs"], p["sign_trials"], p["sample_names"]))})
@@ -2192,10 +2104,10 @@ def _suite_settings(sd: dict) -> None:
         wl = s.get("workload") or driver.WORKLOAD_DEFAULTS
         st.markdown(
             f"**Workload** NXDOMAIN {round(float(wl['nx_fraction']) * 100)}% · zone skew {wl['zone_zipf_s']} · "
-            f"name skew {wl['name_zipf_s']} · timeout {wl['timeout_s']} s · seeded (same seed for every scenario)"
+            f"name skew {wl['name_zipf_s']} · timeout {wl['timeout_s']} s · seeded (same seed for every algorithm)"
         )
-        hier = [{"Dataset": f"{n:,}", "Leaf zones": suite_mod.bench_shape(n)["sld_count"],
-                 "Names per leaf zone": ", ".join(str(x) for x in suite_mod.bench_shape(n)["sld_sizes"])}
+        hier = [{"Dataset": f"{n:,}", "SLD zones": suite_mod.bench_shape(n)["sld_count"],
+                 "Names per SLD zone": ", ".join(str(x) for x in suite_mod.bench_shape(n)["sld_sizes"])}
                 for n in s["sizes"]]
         st.dataframe(pd.DataFrame(hier), width="stretch", hide_index=True)
         first = next(iter(sd["runs"].values()), {})
@@ -2235,7 +2147,7 @@ def benchmark_results(h: driver.LabHandle) -> None:
     m[2].metric("Duration", driver.format_duration(s.get("seconds", 0)).lstrip("~"))
     m[3].metric("Dataset sizes", ", ".join(f"{n:,}" for n in sd["datasets"]))
     _suite_settings(sd)
-    st.button("Open in Compare →", on_click=_open_in_compare, args=(pick,), key="bench_to_compare")
+    st.button("Open in Results →", on_click=_open_in_compare, args=(pick,), key="bench_to_compare")
 
     stats = compare.signing_trial_stats(sd["trials"], sd["full"])
     tabs = st.tabs([f"{n:,} names" for n in sd["datasets"]])
@@ -2329,8 +2241,8 @@ CMP_VIEWS = {"algorithms": "Algorithms side by side", "runs": "Run against run",
 CMP_SOURCES = {"offline": "Offline harness", "live": "Live lab", "lab": "Single lab"}
 CMP_SOURCE_NOTE = {
     "offline": "Pinned image, one dedicated core, repeated trials: the PS-036 timings (FIPS 205 SLH-DSA on the `latest` stack).",
-    "live": "Real Unbound and NSD in containers (a finished Benchmark): real packets and cache, indicative timings (not core-pinned).",
-    "lab": "One lab's last Prepare plus one saved run, for older data. A Benchmark is easier to compare.",
+    "live": "Real Unbound and NSD in containers (a finished live-lab benchmark): real packets and cache, indicative timings (not core-pinned).",
+    "lab": "One lab's last signing plus one saved run, for older data. A live-lab benchmark is easier to compare.",
 }
 CMP_BADGE = {"measured": ":green-badge[Measured]", "estimated": ":blue-badge[Estimated]",
              "extrapolated": ":orange-badge[Extrapolated]"}
@@ -2422,7 +2334,7 @@ def _cmp_pickers(view: str, source: str, cat: list[dict], h: driver.LabHandle) -
     """Sidebar: which run(s), which dataset, which pair. Returns the choices with the data loaded."""
     by = {e["id"]: e for e in cat}
     ids = list(by)
-    st.sidebar.markdown("### Compare")
+    st.sidebar.markdown(f"### {terms.tile_title('compare')}")
     a_id = sb(st.sidebar.selectbox, f"cmp_a_{source}", ids[0], "Run A" if view == "runs" else "Run",
               options=ids, format_func=lambda i: by[i]["title"])
     ea, eb = by[a_id], None
@@ -2528,16 +2440,16 @@ def _cmp_scaling(source: str, a: dict, prof, udp) -> pd.DataFrame:
 
 def _cmp_live_detail(df: pd.DataFrame, sd, ds, use_suite: bool, man_rows: list, name: str) -> None:
     scen_order, colors = list(df.scenario), compare.COLORS
-    signing, wire, cache, allnums = st.tabs(["Signing & size", "Bytes by tier", "Cache & latency", "All numbers"])
+    signing, wire, cache, allnums = st.tabs(["Signing & size", "Bytes by level", "Cache & latency", "All numbers"])
     with signing:
         if use_suite:
             st.markdown(":blue-badge[Estimated] sign and verify time from the repeated sample trials · "
                         ":green-badge[Measured] signed size and the single full signing run")
         else:
-            st.markdown(":green-badge[Measured] from the last Prepare")
+            st.markdown(":green-badge[Measured] from the last signing")
         sg = df.dropna(subset=["sign_s"]) if "sign_s" in df else df
         if sg.empty:
-            st.info("No signing data: run Prepare in Setup.")
+            st.info("No signing data: sign the zones in Setup.")
         else:
             c1, c2 = st.columns(2)
             long = sg.melt(id_vars="scenario", value_vars=["sign_s", "verify_s"], var_name="what", value_name="seconds")
@@ -2579,7 +2491,7 @@ def _cmp_live_detail(df: pd.DataFrame, sd, ds, use_suite: bool, man_rows: list, 
         st.markdown(":green-badge[Measured] from packet counts in the saved run")
         bw = df.dropna(subset=["upstream_bytes"]) if "upstream_bytes" in df else df
         if bw.empty:
-            st.info("No benchmark data: run a benchmark in the Benchmark tile.")
+            st.info("No benchmark data: run a benchmark in the Live-lab benchmark tile.")
         else:
             c1, c2 = st.columns(2)
             hops = bw.melt(id_vars="scenario", value_vars=["root_bytes", "tld_bytes", "sld_bytes"],
@@ -2588,7 +2500,7 @@ def _cmp_live_detail(df: pd.DataFrame, sd, ds, use_suite: bool, man_rows: list, 
             hops["KB"] = hops["bytes"] / 1024
             f1 = px.bar(hops, x="scenario", y="KB", color="hop", barmode="stack",
                         category_orders={"scenario": scen_order},
-                        title="Resolver ↔ authoritative bytes by tier, cold pass (KB)")
+                        title="Resolver ↔ authoritative bytes by level, cold pass (KB)")
             c1.plotly_chart(_plot_cfg(f1), width="stretch")
             tr = bw.melt(id_vars="scenario", value_vars=["truncated", "tcp_conns", "upstream_queries"],
                          var_name="what", value_name="count")
@@ -2599,7 +2511,7 @@ def _cmp_live_detail(df: pd.DataFrame, sd, ds, use_suite: bool, man_rows: list, 
             c2.plotly_chart(_plot_cfg(f2), width="stretch")
             cb = bw["client_bytes"].dropna()
             if not cb.empty:
-                same = "the same in every scenario" if cb.nunique() == 1 else "shown in the table"
+                same = "the same for every algorithm" if cb.nunique() == 1 else "shown in the table"
                 st.caption(f"Client ↔ resolver traffic is {same} (about {compare.fmt_bytes(cb.median())}). "
                            "Warm passes are answered from cache and send no upstream traffic.")
 
@@ -2607,7 +2519,7 @@ def _cmp_live_detail(df: pd.DataFrame, sd, ds, use_suite: bool, man_rows: list, 
         cc = df.dropna(subset=["cache_rrset"]) if "cache_rrset" in df else df
         st.markdown("##### Measured :green-badge[Measured]")
         if cc.empty:
-            st.info("No benchmark data: run a benchmark in the Benchmark tile.")
+            st.info("No benchmark data: run a benchmark in the Live-lab benchmark tile.")
         else:
             c1, c2 = st.columns(2)
             mem = cc.melt(id_vars="scenario", value_vars=["cache_rrset", "cache_message"],
@@ -2630,7 +2542,7 @@ def _cmp_live_detail(df: pd.DataFrame, sd, ds, use_suite: bool, man_rows: list, 
         an = df.dropna(subset=["analytic_sig_bytes"])
         per = compare.analytical_per_signature(man_rows)
         if an.empty:
-            st.info("No analytical estimate for these scenarios (needs Prepare for an SLH-DSA or MTL scenario).")
+            st.info("No analytical estimate for these algorithms (needs the zones signed with SLH-DSA or SLH-DSA-MTL).")
         else:
             c1, c2 = st.columns([3, 2])
             ax = an.assign(MB=an.analytic_sig_bytes / 1024 ** 2)
@@ -2676,7 +2588,7 @@ def _cmp_algorithms(source: str, pick: dict, h: driver.LabHandle) -> None:
         bits.append(f"network {pick['prof']}, UDP {pick['udp']}")
     st.caption(" · ".join(bits))
     for note in compare.lookup_problems(a["summary"]):
-        st.warning(note + ". Do not compare this scenario until the failures are explained.")
+        st.warning(note + ". Do not compare this algorithm until the failures are explained.")
     bands = [r["band"] for r in (a["run"].summary.get("noise_floor", []) if a["run"] is not None else [])
              if r["dataset"] == ds]
     if bands:
@@ -2789,7 +2701,7 @@ def _cmp_algorithms(source: str, pick: dict, h: driver.LabHandle) -> None:
                            file_name=f"algorithms-{ea['id']}-{ds}.csv", mime="text/csv")
 
     if source != "offline" and a["raw"] is not None and not a["raw"].empty:
-        with st.expander("Live-lab detail: bytes by tier, latency, analytical sizes"):
+        with st.expander("Live-lab detail: bytes by level, latency, analytical sizes"):
             _cmp_live_detail(a["raw"], a["sd"], ds, source == "live", a["man_rows"], ea["id"])
 
 
@@ -3055,10 +2967,10 @@ def compare_page(h: driver.LabHandle, stt: dict) -> None:
             st.info("No offline run yet. Run `bash scripts/run_benchmark.sh configs/quick.yaml` for a short one, or "
                     "the full run without arguments.")
         elif source == "live":
-            st.info("No finished live-lab benchmark yet. Run a **benchmark** in the Benchmark tile.")
+            st.info("No finished live-lab benchmark yet. Run a **benchmark** in the Live-lab benchmark tile.")
             st.button("Go to Benchmark", on_click=_go, args=("benchmark",), key="cmp_to_bench")
         else:
-            st.info("No saved lab run with results yet. The Live tile and the Benchmark tile create them.")
+            st.info("No saved lab run with results yet. The Demonstrate tile and the Live-lab benchmark tile create them.")
         if others:
             st.caption("Data is available from: " + ", ".join(others) + ".")
         return
@@ -3311,7 +3223,7 @@ def learn_page(h: driver.LabHandle, stt: dict) -> None:
     import streamlit.components.v1 as components
     components.html(_learn_html(page.stat().st_mtime), height=1180, scrolling=True)
     st.caption("A teaching aid, not a measurement: its sizes are the draft's maximum-size formulas. "
-               "The measured results are in the Compare tile and in each run's report.")
+               "The measured results are in the Results tile and in each run's report.")
     st.button("Back to Home", on_click=_go, args=("home",), key="learn_home")
 
 

@@ -23,7 +23,7 @@ def test_size_figures_match_the_formulas():
     full = cond + analytical.max_signed_ladder(MTL_SECURITY_PARAMETER_N, N_RRSETS, SLH_DSA_SHA2_128S_SIG_BYTES)
     assert cond == 284 and f"{cond} bytes in all" in html and f"condensed ≈ {cond} B" in html
     assert f"≈{DNS_OVERHEAD + cond} B per signed answer" in html
-    assert f"'SLH-DSA + MTL','condensed',{DNS_OVERHEAD + cond}" in html
+    assert f"'SLH-DSA-MTL','condensed',{DNS_OVERHEAD + cond}" in html
     assert f"'Plain SLH-DSA','per answer',{DNS_OVERHEAD + SLH_DSA_SHA2_128S_SIG_BYTES}" in html
     assert f"{full / 1000:.1f} KB" in html
     assert "14 hashes" in html and 60 + 14 * MTL_SECURITY_PARAMETER_N == cond

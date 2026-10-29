@@ -428,7 +428,7 @@ const scenes = [
     s += `<g id="tree" class="tree fx">${t}<text class="end mono t-good" x="740" y="44">1 × SLH-DSA signs the ladder</text><text class="end mono muted" x="740" y="64">every RRset is a leaf</text></g>`;
     s += `<text id="cached" class="mono mid t-good fx" x="130" y="268">ladder cached ✓</text>`;
     s += `<g id="miss" class="chip warn fx" transform="translate(480 140)"><rect x="-170" y="-18" width="340" height="36" rx="8"/><text class="mid mono" y="5" style="fill:var(--warn)">new record or no ladder → full signature</text></g>`;
-    const x0=250, sc=600/8200, rows=[['Plain SLH-DSA','per answer',7969,'over'],['SLH-DSA + MTL','condensed',397,'mtl'],['ECDSA P-256','classical',177,'fit']];
+    const x0=250, sc=600/8200, rows=[['Plain SLH-DSA','per answer',7969,'over'],['SLH-DSA-MTL','condensed',397,'mtl'],['ECDSA P-256','classical',177,'fit']];
     s += `<line class="axis" x1="${x0}" y1="312" x2="${x0}" y2="470"/>`;
     rows.forEach((r,i)=>{ const y=334+i*48, w=r[2]*sc;
       s += `<text x="236" y="${y+5}" class="end" style="font:600 14px var(--f-display)">${r[0]}</text><text x="236" y="${y+21}" class="end mono muted">${r[1]}</text>`+

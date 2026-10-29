@@ -28,7 +28,7 @@ from live_lab import suite as _suite
 
 EVENT_PREFIX = "@@EVENT "
 TIER_ORDER = ("sld", "tld", "root")
-TIER_LABEL = {"sld": "Leaf zones", "tld": "TLD zones", "root": "Root"}
+TIER_LABEL = {"sld": "SLD zones", "tld": "TLD zones", "root": "Root"}
 ACTIVE_STATES = ("starting", "running")
 
 
@@ -325,7 +325,7 @@ def live_dot(scenario: dict, collapse_over: int = 40) -> str:
         for parent, group in leaves.items():
             n_done = sum(1 for z in group if z["state"] == "done")
             gid = f"leaves of {parent}"
-            lines.append(_node(gid, f"{len(group)} leaf zones\\n{n_done} signed",
+            lines.append(_node(gid, f"{len(group)} SLD zones\\n{n_done} signed",
                                _group_state([z["state"] for z in group])))
             lines.append(f'"{parent}" -> "{gid}";')
         known = {z["origin"] for z in zones if z["tier"] != "sld"}

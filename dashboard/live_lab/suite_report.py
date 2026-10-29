@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from live_lab import compare, driver
+from live_lab import compare, driver, terms
 from live_lab.driver import ECO
 from live_lab.suite import SUITES, bench_shape
 
@@ -25,7 +25,7 @@ LABELS = {
     "ed25519": "Ed25519",
     "slh-dsa": "SLH-DSA-SHA2-128s without MTL",
     "mtl": "SLH-DSA-SHA2-128s with MTL",
-    "mixed-mtl": "Mixed (classical parent, MTL leaf)",
+    "mixed-mtl": "Mixed (ECDSA root and TLD, SLH-DSA-MTL SLD)",
 }
 
 TRACEABILITY = [
@@ -165,10 +165,10 @@ def build_markdown(sd: dict, figs: dict[str, str]) -> str:
 
     L: list[str] = []
     L.append("# DNS Lab Benchmark: MTL Mode for Post-Quantum DNSSEC")
-    L.append("### PS-036 · Real hierarchy (NSD + Unbound + ldns) · Cipherops ecosystem")
+    L.append("### PS-036 · Real hierarchy (NSD + Unbound + ldns) · CipherOps live lab")
     L.append("")
     L.append(
-        f"Suite `{sid}` · stack **{stack}** · "
+        f"Run `{sid}` · software stack **{stack}** · "
         f"{suite.get('trials', '?')} measurement trials · "
         f"{suite.get('sign_trials', '?')} signing trials · "
         f"{suite.get('n_queries', '?')} lookups per pass · "
@@ -182,7 +182,7 @@ def build_markdown(sd: dict, figs: dict[str, str]) -> str:
         "Post-quantum signatures such as SLH-DSA-SHA2-128s are large enough that DNSSEC answers "
         "often no longer fit a 1232-byte UDP buffer. Merkle Tree Ladder (MTL) mode signs a zone "
         "with one PQC signature over a Merkle ladder and attaches a short authentication path to "
-        "each RRset. This report is the **real-DNS** counterpart to the main Cipherops library "
+        "each RRset. This report is the **real-DNS** counterpart to the main CipherOps library "
         "report: a multi-zone hierarchy is signed with ldns, served by Verisign MTL-mode NSD, "
         "validated by Unbound, and measured with repeated cold/warm trials and packet captures."
     )
@@ -287,7 +287,7 @@ def build_markdown(sd: dict, figs: dict[str, str]) -> str:
     L.append("### 4.1 Pinned environment")
     L.append("")
     pin_rows = [
-        ("Suite id", sid),
+        ("Run id", sid),
         ("Stack", stack),
         ("Host platform", host.get("platform", "—")),
         ("Host CPUs", host.get("cpus", "—")),
@@ -336,9 +336,9 @@ def build_markdown(sd: dict, figs: dict[str, str]) -> str:
     L.append("### 4.2 Datasets and hierarchy")
     L.append("")
     L.append(
-        "Each dataset size uses the same shape: one root, one TLD (`test.`), up to four leaf "
-        "zones on one leaf server. Only the number of data names changes; names are split across "
-        "the leaf zones. This is **not** a single zone of N names (that is the main library harness)."
+        "Each dataset size uses the same shape: one root, one TLD (`test.`), up to four SLD "
+        "zones on one SLD server. Only the number of data names changes; names are split across "
+        "the SLD zones. This is **not** a single zone of N names (that is the main library harness)."
     )
     L.append("")
     shape_rows = []
@@ -347,8 +347,8 @@ def build_markdown(sd: dict, figs: dict[str, str]) -> str:
         detail = (suite.get("sizes_detail") or {}).get(str(n), {})
         shape_rows.append({
             "dataset (names)": f"{n:,}",
-            "leaf zones": sh["sld_count"],
-            "names per leaf": ", ".join(str(x) for x in sh["sld_sizes"]),
+            "SLD zones": sh["sld_count"],
+            "names per SLD zone": ", ".join(str(x) for x in sh["sld_sizes"]),
             "zones total": detail.get("zones", 1 + 1 + sh["sld_count"]),
             "lab tag": detail.get("tag", f"eco-bench-{n}-{stack}"),
             "run folder": detail.get("run_folder", "—"),
@@ -358,12 +358,12 @@ def build_markdown(sd: dict, figs: dict[str, str]) -> str:
     L.append("*Table 1: datasets.*")
     L.append("")
 
-    L.append("### 4.3 Scenarios")
+    L.append("### 4.3 Algorithms")
     L.append("")
-    L.append("| Scenario | Meaning |")
+    L.append("| Algorithm | Meaning |")
     L.append("|---|---|")
     for sc in compare.order_scenarios(scenarios):
-        L.append(f"| `{sc}` | {_label(sc)} |")
+        L.append(f"| {terms.algorithm_label(sc)} (`{sc}`) | {_label(sc)} |")
     L.append("")
 
     L.append("### 4.4 Measurement procedure")
@@ -372,7 +372,7 @@ def build_markdown(sd: dict, figs: dict[str, str]) -> str:
     L.append(
         f"- For each dataset size the suite signs every zone once per scenario "
         f"(**Measured once**), with `jobs={suite.get('jobs', 1)}`.\n"
-        f"- It then repeats signing and `ldns-verify-zone` on sample leaf zones "
+        f"- It then repeats signing and `ldns-verify-zone` on sample SLD zones "
         f"({suite.get('sign_trials')} trials; sample sizes derived from "
         f"`sample_names={suite.get('sample_names')}`). A two-point fit (fixed cost per zone + "
         f"cost per RRSIG) extrapolates to the full hierarchy (**Estimated**, CI of the median).\n"
@@ -581,7 +581,7 @@ def build_markdown(sd: dict, figs: dict[str, str]) -> str:
 
     L.append("## Appendix B. Artifacts")
     L.append("")
-    L.append(f"- Suite directory: `ecosystem/results/suites/{sid}/`")
+    L.append(f"- Run directory: `ecosystem/results/suites/{sid}/`")
     L.append("- `suite.json`, `params.json`, `signing_full.csv`, `signing_trials_*.csv`")
     L.append("- `report.md`, `report.html`, `figures/` (this report)")
     for n, d in sorted((suite.get("sizes_detail") or {}).items(), key=lambda kv: int(kv[0])):
@@ -599,7 +599,7 @@ def build_markdown(sd: dict, figs: dict[str, str]) -> str:
         "3. FIPS 205, *Stateless Hash-Based Digital Signature Standard*.\n"
         "4. RFC 4033–4035 (DNSSEC); RFC 5155 (NSEC3).\n"
         "5. Verisign MTL reference library, https://github.com/verisign/MTL.\n"
-        "6. Cipherops main library report (companion): `results/runs/<id>/report.html`.\n"
+        "6. CipherOps offline-harness report (companion): `results/runs/<id>/report.html`.\n"
     )
     return "\n".join(L) + "\n"
 
@@ -631,7 +631,7 @@ def build_html(md: str, root: Path) -> str:
         "@media print{body{margin:0;max-width:none}h2{page-break-after:avoid}"
         "table,img{page-break-inside:avoid}}"
     )
-    title = "Cipherops DNS lab benchmark report"
+    title = "CipherOps live-lab benchmark report"
     return (
         f"<!doctype html><html><head><meta charset='utf-8'><title>{title}</title>"
         f"<style>{css}</style></head><body>{body}</body></html>"
