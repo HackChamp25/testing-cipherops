@@ -155,6 +155,7 @@ def build_markdown(sd: dict, figs: dict[str, str]) -> str:
     stack = suite.get("stack", "draft06")
     env = _stack_env(stack)
     host = suite.get("host") or {}
+    prov = suite.get("provenance") or {}
     sizes = sd["datasets"]
     scenarios = list(suite.get("scenarios") or [])
     sf = compare.scaling_frame(sd)
@@ -198,7 +199,7 @@ def build_markdown(sd: dict, figs: dict[str, str]) -> str:
     L.append(
         "**Provenance in this report.** Signing and verification times appear as "
         "**Measured once** (full zones that were served) and, where sample trials exist, as "
-        "**Estimated** (extrapolated from repeated sample-zone trials, with bootstrap 95% CI). "
+        "**Estimated** (extrapolated from repeated sample-zone trials, with a distribution-free CI of the median). "
         "Wire bytes and Unbound cache are **Measured** from the lab. Signature-storage totals "
         "tagged **Analytical** use draft-harvey-cfrg-mtl-mode section 12 formulas only."
     )
@@ -291,6 +292,14 @@ def build_markdown(sd: dict, figs: dict[str, str]) -> str:
         ("Host platform", host.get("platform", "—")),
         ("Host CPUs", host.get("cpus", "—")),
         ("Host Python", host.get("python", "—")),
+        ("CPU model", prov.get("cpu_model", "—")),
+        ("Memory", prov.get("mem_total", "—")),
+        ("Kernel", prov.get("kernel", "—")),
+        ("CPU frequency governor", prov.get("cpu_governor", "—")),
+        ("CPU isolation", prov.get("cpu_isolation", "—")),
+        ("Docker server", prov.get("docker_server", "—")),
+        ("Code version (git)", (prov.get("git_commit", "—") or "—")[:12]
+         + (" (uncommitted changes)" if prov.get("git_dirty") else "")),
         ("liboqs (stack)", env.get("LIBOQS_TAG", "—")),
         ("MTL commit (stack)", env.get("MTL_COMMIT", "—")),
         ("ldns commit (stack)", env.get("LDNS_COMMIT", "—")),
@@ -301,6 +310,19 @@ def build_markdown(sd: dict, figs: dict[str, str]) -> str:
         ("Networks", ", ".join(suite.get("networks") or [])),
     ]
     L.append(_md_table(pd.DataFrame(pin_rows, columns=["Item", "Value"])))
+    gov = str(prov.get("cpu_governor") or "")
+    if gov and gov not in ("performance", "unavailable"):
+        L.append("")
+        L.append(f"> **Timing caveat.** The host CPU governor was `{gov}`, so the clock speed can change during the "
+                 "run. Repeat on a host set to `performance` for tighter timings. Lab containers also share every "
+                 "host CPU; the offline harness, by contrast, runs on a dedicated core.")
+    built = prov.get("images") or {}
+    if built:
+        L.append("")
+        L.append("Images used (from `docker image inspect` at the start of the suite):")
+        L.append("")
+        for name, info in built.items():
+            L.append(f"- `{name}:{stack}` = `{info.get('id', 'unavailable')}` (built {info.get('created', 'unavailable')})")
     imgs = _images_from_runs(sd)
     if imgs:
         L.append("")
@@ -352,7 +374,7 @@ def build_markdown(sd: dict, figs: dict[str, str]) -> str:
         f"- It then repeats signing and `ldns-verify-zone` on sample leaf zones "
         f"({suite.get('sign_trials')} trials; sample sizes derived from "
         f"`sample_names={suite.get('sample_names')}`). A two-point fit (fixed cost per zone + "
-        f"cost per RRSIG) extrapolates to the full hierarchy (**Estimated**, 95% bootstrap CI).\n"
+        f"cost per RRSIG) extrapolates to the full hierarchy (**Estimated**, CI of the median).\n"
         f"- The lab is started; the seeded workload ({suite.get('n_queries')} lookups, "
         f"nx_fraction={wl.get('nx_fraction')}, name Zipf s={wl.get('name_zipf_s')}, "
         f"zone Zipf s={wl.get('zone_zipf_s')}) is replayed for {suite.get('trials')} trials, "

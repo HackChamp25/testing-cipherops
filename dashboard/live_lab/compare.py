@@ -87,6 +87,22 @@ def bench_by_scenario(summary: pd.DataFrame, profile: str | None = None,
     return pd.DataFrame(rows, columns=cols)
 
 
+def lookup_problems(summary: pd.DataFrame | None) -> list[str]:
+    """Plain-language notes about passes in which lookups failed. Such passes are left out of every figure, so a
+    scenario that cannot be resolved shows no numbers instead of misleadingly fast ones."""
+    if summary is None or summary.empty or "failed" not in summary:
+        return []
+    out = []
+    for _, r in summary.iterrows():
+        failed = int(r.get("failed") or 0)
+        trials, valid = int(r.get("trials") or 0), int(r.get("valid_trials") if "valid_trials" in r else r.get("trials") or 0)
+        if failed or valid < trials:
+            out.append(f"**{r['scenario']}** ({r.get('profile', '?')}, {r.get('pass', '?')} pass): {failed} lookup(s) "
+                       f"failed (SERVFAIL {int(r.get('servfail') or 0)}, timeouts {int(r.get('timeouts') or 0)}); "
+                       f"{valid} of {trials} passes valid and used for the figures")
+    return out
+
+
 def analytical_by_scenario(rows: list[dict]) -> pd.DataFrame:
     """Formula-derived (draft section 12) signature storage per scenario; never measured.
 
@@ -158,12 +174,12 @@ def load_suite(suite_dir: Path) -> dict | None:
 
 def signing_trial_stats(trials: pd.DataFrame, full: pd.DataFrame) -> pd.DataFrame:
     """Per dataset and scenario: the dataset-wide sign and verify time estimated from the repeated sample trials
-    (median over trials, 95% bootstrap CI), next to the single full signing run that was actually served.
+    (median over trials, distribution-free CI of the median), next to the single full signing run that was actually served.
 
     Each trial signs two sample zones. A straight line through them gives a fixed cost per zone and a cost
     per RRSIG; applying it to every zone of the dataset gives the estimate. It is an extrapolation and is
     labelled as one wherever it is shown."""
-    from cipherops.stats import bootstrap_ci
+    from cipherops.stats import median_ci
 
     cols = ["dataset", "scenario", "trials", "sample_names", "sample_rrsigs", "sign_ms_per_rrsig", "sign_fixed_s",
             "dataset_rrsigs", "est_sign_s", "est_sign_lo", "est_sign_hi", "est_verify_s", "est_verify_lo",
@@ -190,8 +206,8 @@ def signing_trial_stats(trials: pd.DataFrame, full: pd.DataFrame) -> pd.DataFram
             est_ver.append(sum(v_fix + v_per * r for r in zone_rr))
             per_sign.append(s_per * 1000)
             fixed_sign.append(s_fix)
-        s_lo, s_hi = bootstrap_ci(est_sign)
-        v_lo, v_hi = bootstrap_ci(est_ver)
+        s_lo, s_hi = median_ci(est_sign)
+        v_lo, v_hi = median_ci(est_ver)
         big = g[g["names"] == g["names"].max()]
         rows.append({
             "dataset": int(ds), "scenario": sc, "trials": int(g["trial"].nunique()),

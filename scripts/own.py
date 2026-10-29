@@ -946,26 +946,26 @@ def stage5(cfg: dict, root: Path, zones: dict, trials_df):
 def stage6(cfg: dict, root: Path, trials_df, frames: dict) -> dict:
     from cipherops import runner, stats
 
-    stage_banner(6, "Statistics: medians and bootstrap 95% confidence intervals", "runner.summarise, stats.py")
+    stage_banner(6, "Statistics: medians and confidence intervals of the median", "runner.summarise, stats.py")
     ds0, mk0 = cfg["datasets"][0]["name"], "slh-dsa-mtl"
     g = trials_df[(trials_df.dataset == ds0) & (trials_df["mode"] == mk0)]
     vals = g["sign_total_ns"].dropna()
     print(f"example ({ds0}, {mk0}), column sign_total_ns:")
     print(f"  vals = {list(vals)}   (one value per trial)")
     print(f"  stats.summarize(vals) = {stats.summarize(vals)}")
-    print(f"  stats.bootstrap_ci(vals) = {stats.bootstrap_ci(vals)}")
-    print("    = resample the trial values 2000 times with replacement (seed 0), take the median of each,")
-    print("      report the 2.5th and 97.5th percentile of those 2000 medians")
+    print(f"  stats.median_ci(vals) = {stats.median_ci(vals)}   coverage {stats.median_ci_coverage(len(vals)):.3f}")
+    print("    = distribution-free interval from the sorted trial values (order statistics): the widest pair that")
+    print("      still covers the true median with >= 95% probability, or the full range if there are too few trials")
 
     summary = runner.summarise(trials_df, frames)
     (root / "summary.json").write_text(json.dumps(summary, indent=2, default=float))
-    print("\nsummary = summarise(trials, frames); summary['trials'] (median over trials, [95% CI]):")
+    print("\nsummary = summarise(trials, frames); summary['trials'] (median over trials, [CI of the median]):")
     for ds in cfg["datasets"]:
         for mk in cfg["modes"]:
             e = summary["trials"][ds["name"]][mk]
             s, v = e["sign_total_ns"], e["verify_warm_total_ns"]
             print(f"  {ds['name']:<7} {mk:<12} sign {human_ns(s['median']):>11} "
-                  f"[{human_ns(s['median_ci95'][0])}, {human_ns(s['median_ci95'][1])}]   "
+                  f"[{human_ns(s['median_ci'][0])}, {human_ns(s['median_ci'][1])}]   "
                   f"verify {human_ns(v['median']):>10}   checks_passed={e['all_checks_passed']}  limited={e['limited']}")
     first = cfg["datasets"][0]["name"]
     print(f"\nsummary['transmitted'][{first!r}] (per mode, per UDP limit):")

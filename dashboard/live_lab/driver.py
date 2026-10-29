@@ -105,6 +105,56 @@ def active_suite_id() -> str | None:
     return None
 
 
+def _out(cmd: list[str], cwd: Path | None = None) -> str:
+    try:
+        cp = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=30, creationflags=NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return "unavailable"
+    return cp.stdout.strip() if cp.returncode == 0 else "unavailable"
+
+
+def _read_text(path: str) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8").strip()
+    except OSError:
+        return "unavailable"
+
+
+def provenance(stack: str) -> dict:
+    """What a reader needs to repeat or audit a benchmark: code version, host, Docker and the exact images.
+
+    Everything is read from the machine at the time of the run. A value that cannot be read is recorded as
+    ``unavailable`` rather than guessed, so a missing field is visible in the report.
+    """
+    import platform
+
+    cpu = next((ln.split(":", 1)[1].strip() for ln in _read_text("/proc/cpuinfo").splitlines()
+                if ln.startswith("model name")), platform.processor() or "unavailable")
+    mem = next((ln for ln in _read_text("/proc/meminfo").splitlines() if ln.startswith("MemTotal")), "unavailable")
+    images = {}
+    for repo in ECO_IMAGE_REPOS:
+        info = _out(["docker", "image", "inspect", f"{repo}:{stack}", "--format", "{{.Id}} {{.Created}}"])
+        image_id, _, created = info.partition(" ")
+        images[repo] = {"id": image_id, "created": created}
+    return {
+        "git_commit": _out(["git", "rev-parse", "HEAD"], cwd=REPO),
+        "git_dirty": bool(_out(["git", "status", "--porcelain"], cwd=REPO)),
+        "platform": platform.platform(),
+        "kernel": platform.release(),
+        "cpu_model": cpu,
+        "cpus": os.cpu_count(),
+        "mem_total": mem,
+        "cpu_governor": _read_text("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"),
+        "python": platform.python_version(),
+        "docker_server": _out(["docker", "version", "--format", "{{.Server.Version}}"]),
+        "stack": stack,
+        "stack_pins": stack_pins(stack),
+        "images": images,
+        # The live lab is NOT pinned to dedicated cores (the offline harness is): containers share every host CPU.
+        "cpu_isolation": "none (lab containers share all host CPUs)",
+    }
+
+
 def jobs_dir() -> Path:
     """Where background-job state lives. Not under work/ or results/: Docker creates those as root, and a
     folder the dashboard cannot write to would stop Prepare from starting."""

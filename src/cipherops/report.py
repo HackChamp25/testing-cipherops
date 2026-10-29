@@ -14,7 +14,7 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-from . import results
+from . import results, stats
 from .codepoints import EDNS_MTL_MODE_FULL, MODES
 from .results import fmt_bytes, fmt_seconds
 
@@ -144,7 +144,7 @@ def figures(run: results.Run, out: Path) -> dict[str, str]:
         fig, ax = plt.subplots(figsize=(9, 4.8))
         grouped(ax, t, col, col + "_lo", col + "_hi", 1e-9)
         ax.set_ylabel("seconds (log scale)")
-        ax.set_title(f"{title}: median of {run.config['trials']} trials, 95% bootstrap CI")
+        ax.set_title(f"{title}: median of {run.config['trials']} trials, bars = {stats.ci_label(int(run.config['trials']))}")
         hatch = [Patch(facecolor="#d64545", hatch="///", edgecolor="white",
                        label="extrapolated from a measured sample")] if t.limited.any() else []
         save(fig, [ax], key, hatch)
@@ -233,7 +233,7 @@ def _headline(run: results.Run, timing: pd.DataFrame) -> list[str]:
         out += [
             f"- **Signing ({ds} zone, {int(m.dataset_rrsets):,} RRsets, fully measured).** MTL signed the zone in "
             f"{ci(m, 'sign_total_ns')}; direct SLH-DSA took {ci(d, 'sign_total_ns')}. That is "
-            f"{d.sign_total_ns / m.sign_total_ns:,.0f} times faster (median, 95% CI in brackets).",
+            f"{d.sign_total_ns / m.sign_total_ns:,.0f} times faster (median, CI of the median in brackets).",
             f"- **Verification ({ds} zone, warm).** MTL took {fmt_seconds(m.verify_warm_total_ns)} for every RRSIG in "
             f"the zone; direct SLH-DSA took {fmt_seconds(d.verify_warm_total_ns)}.",
         ]
@@ -401,8 +401,9 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
         f"{cfg['full_verify_sample']} RRsets.\n"
         f"- **Correctness.** A trial counts only if every signature verifies and tampered messages, "
         f"signatures and ladders are rejected.\n"
-        f"- **Statistics.** We report the median across trials with a bootstrap 95% confidence interval "
-        f"(2,000 resamples).\n"
+        f"- **Statistics.** We report the median across trials with a distribution-free confidence interval "
+        f"of the median (order statistics). With {cfg['trials']} trials it is the "
+        f"{stats.ci_label(int(cfg['trials']))}.\n"
         f"- **Transmitted bytes.** Measured on real DNS messages encoded by dnspython, using the signatures "
         f"from trial 0.\n")
 
@@ -412,7 +413,7 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
     rows = []
     for _, r in timing.iterrows():
         rows.append({"dataset": r.dataset, "mode": label(r["mode"]), "RRsets signed": f"{r.n_signed:,}/{r.dataset_rrsets:,}",
-                     "sign zone, median [95% CI]": ci(r, "sign_total_ns"),
+                     "sign zone, median [CI]": ci(r, "sign_total_ns"),
                      "per RRset": fmt_seconds(r.sign_per_rrset_ns),
                      "zone total (extrapolated)": fmt_seconds(r.get("sign_total_extrapolated_ns")) if r.limited else "",
                      "keygen": fmt_seconds(r.get("keygen_ns"))})
@@ -433,7 +434,7 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
     rows = []
     for _, r in timing.iterrows():
         rows.append({"dataset": r.dataset, "mode": label(r["mode"]),
-                     "verify zone (warm), median [95% CI]": ci(r, "verify_warm_total_ns"),
+                     "verify zone (warm), median [CI]": ci(r, "verify_warm_total_ns"),
                      "per RRset (warm)": fmt_seconds(r.verify_per_rrset_ns),
                      "one signature, cold": fmt_seconds(r.get("verify_full_median_ns")),
                      "checks passed": "yes" if r.checks_passed else "**NO**"})
