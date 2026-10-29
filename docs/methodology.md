@@ -173,7 +173,7 @@ includes it every time. Both are reported.
 
 ### 6.2 Statistics
 
-Repeated trials are few (the default full run uses 5, the quick run 3). A
+Repeated trials are few (the default full run uses 10, the quick run 3). A
 bootstrap of a median from so few values is not a valid 95% interval, so the
 report uses an exact, distribution-free interval from order statistics
 (`stats.median_ci`): the widest pair of sorted trial values that still
@@ -187,6 +187,7 @@ there are too few trials. Its coverage depends only on the number of trials:
 | 5 | 93.8% |
 | 6 | 96.9% |
 | 7 | 98.4% |
+| 10 | 97.9% (interval from the 2nd to the 9th sorted value) |
 
 With 5 trials the bracketed interval is therefore a 94% interval, not 95%,
 and the report says so (`stats.ci_label`). Use at least 6 trials if a 95%
@@ -361,6 +362,6 @@ Rules the live-lab benchmark follows:
   the same sizes, so byte and cache results carry over but timings are not
   substituted for the offline ones. Each run records its profile. Why the
   defaults differ: `docs/design-decisions.md`.
-- **Few trials.** Intervals are wide with 5 trials (section 6.2). The live
-  benchmark defaults to 5 measurement and 5 signing trials.
+- **Few trials.** The full offline run uses 10 trials; the quick run and the live
+  benchmark use fewer (3 and 5), so their intervals are wide (section 6.2).
 - **No security claims.** None are made or implied.

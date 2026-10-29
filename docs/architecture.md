@@ -163,7 +163,7 @@ Three layers, each with one job:
 ```
 Cipherops/
 ├── configs/
-│   ├── scenarios.yaml      full PS-036 run (50 / 500 / 5000 names, 5 trials)
+│   ├── scenarios.yaml      full PS-036 run (50 / 500 / 5000 names, 10 trials)
 │   └── quick.yaml          fast demo run (20 / 60 / 200 names, 3 trials)
 ├── docker/
 │   ├── Dockerfile          pinned build; OpenSSL, liboqs and MTL come from the stack profile
