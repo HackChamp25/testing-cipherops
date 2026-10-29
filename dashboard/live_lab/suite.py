@@ -12,9 +12,11 @@ browser refresh, and writes ``status.json`` and ``progress.log`` for the dashboa
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import json
 import os
+import shutil
 import platform
 import shutil
 import subprocess
@@ -29,7 +31,7 @@ if __package__ in (None, ""):          # `python dashboard/live_lab/suite.py ...
 
 from live_lab import driver
 
-SUITES = driver.ECO / "results" / "suites"
+SUITES = driver.SUITES_DIR
 BENCH_SIZES = (50, 500, 5000)         # data names in the dataset, as in the main Cipherops benchmark
 SMOKE_SIZE = 20                       # quick check that the pipeline works
 DEFAULT_SIGN_TRIALS = 3
@@ -71,33 +73,23 @@ def estimate_seconds(sizes: list[int], scenarios: list[str], jobs: int = 2, sign
 # ─────────────────────────── status files ───────────────────────────
 
 def _read(path: Path) -> dict:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+    return driver._read_json(path)
+
+
+def _write_status(d: Path, st: dict) -> None:
+    """Atomic: the launcher, the suite process and the dashboard all touch this file."""
+    tmp = d / f"status.json.{os.getpid()}.tmp"
+    tmp.write_text(json.dumps(st), encoding="utf-8")
+    os.replace(tmp, d / "status.json")
 
 
 def _pid_alive(pid: int | None) -> bool:
-    if not pid:
-        return False
-    if os.name == "nt":
-        cp = subprocess.run(["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"], capture_output=True, text=True,
-                            creationflags=driver.NO_WINDOW)
-        return str(int(pid)) in cp.stdout
-    try:
-        os.kill(int(pid), 0)
-    except OSError:
-        return False
-    return True
+    return driver.pid_alive(pid)
 
 
 def status(suite_id: str) -> dict:
     """Current status; a run whose process vanished without finishing is reported as 'stopped'."""
-    st = _read(SUITES / suite_id / "status.json")
-    if st.get("state") == "running" and not _pid_alive(st.get("pid")):
-        st["state"] = "stopped"
-        st["error"] = st.get("error") or "The benchmark process ended before finishing."
-    return st
+    return driver.effective_job_state(_read(SUITES / suite_id / "status.json"))
 
 
 def list_suites() -> list[dict]:
@@ -123,7 +115,34 @@ def list_suites() -> list[dict]:
 
 
 def running_suite() -> dict | None:
-    return next((s for s in list_suites() if s["state"] == "running"), None)
+    """The suite that is starting or running, if any."""
+    return next((s for s in list_suites() if s["state"] in driver.ACTIVE_STATES), None)
+
+
+@contextlib.contextmanager
+def _start_lock(timeout_s: float = 10.0):
+    """Make 'check nothing is running, then launch' atomic across dashboard sessions."""
+    SUITES.mkdir(parents=True, exist_ok=True)
+    lock = SUITES / ".start.lock"
+    deadline = time.time() + timeout_s
+    while True:
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime > 30:  # left behind by a crashed launcher
+                    shutil.rmtree(lock, ignore_errors=True)
+                    continue
+            except OSError:
+                continue
+            if time.time() > deadline:
+                raise driver.LabBusy("Another benchmark is being started. Try again in a moment.")
+            time.sleep(0.1)
+    try:
+        yield
+    finally:
+        shutil.rmtree(lock, ignore_errors=True)
 
 
 def create(params: dict) -> tuple[str, Path]:
@@ -135,20 +154,32 @@ def create(params: dict) -> tuple[str, Path]:
     d.mkdir(parents=True, exist_ok=False)
     params = {**params, "suite_id": suite_id, "stamp": stamp, "label": label}
     (d / "params.json").write_text(json.dumps(params, indent=2), encoding="utf-8")
-    (d / "status.json").write_text(json.dumps({"state": "starting", "step": "starting", "done": 0,
-                                               "total": len(params["sizes"]) * STEPS_PER_SIZE}), encoding="utf-8")
+    # 'started' lets a launch that never produces a process age out instead of blocking everything.
+    _write_status(d, {"state": "starting", "step": "starting", "done": 0, "started": time.time(),
+                      "total": len(params["sizes"]) * STEPS_PER_SIZE})
     return suite_id, d
 
 
 def start(params: dict) -> str:
     """Write the parameters and launch the suite as a detached process. Returns the suite id."""
-    suite_id, d = create(params)
-    log = open(d / "progress.log", "ab")
-    subprocess.Popen([sys.executable, "-m", "live_lab.suite", str(d / "params.json")],
-                     cwd=Path(__file__).resolve().parents[1], stdout=log, stderr=subprocess.STDOUT,
-                     stdin=subprocess.DEVNULL, env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-                     **driver.background_process_kwargs())
-    return suite_id
+    with _start_lock():
+        live = running_suite()
+        if live:
+            raise driver.LabBusy(f"Benchmark {live['id']} is already {live['state']}.")
+        busy = driver.active_prepare_tags()
+        if busy:
+            raise driver.LabBusy(f"Signing is running for lab {', '.join(busy)}. Wait for it to finish or cancel it "
+                                 "first: it would share the CPU and distort the timings.")
+        suite_id, d = create(params)
+        log = open(d / "progress.log", "ab")
+        proc = subprocess.Popen([sys.executable, "-m", "live_lab.suite", str(d / "params.json")],
+                                cwd=Path(__file__).resolve().parents[1], stdout=log, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL, env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                                **driver.background_process_kwargs())
+        st = _read(d / "status.json")
+        if st.get("state") == "starting" and not st.get("pid"):
+            _write_status(d, {**st, "pid": proc.pid})
+        return suite_id
 
 
 def cancel(suite_id: str) -> str:
@@ -161,13 +192,18 @@ def cancel(suite_id: str) -> str:
                            creationflags=driver.NO_WINDOW)
         else:
             os.kill(int(pid), 15)
+        deadline = time.time() + 10
+        while _pid_alive(pid) and time.time() < deadline:
+            time.sleep(0.1)
+    st = _read(SUITES / suite_id / "status.json") or st
+    st.update(state="cancelled", step="cancelled by the user", updated=time.time())
+    _write_status(SUITES / suite_id, st)
     if st.get("config"):
         try:
-            driver.down(driver.LabHandle(config=st["config"], stack=st.get("stack", driver.DEFAULT_STACK)))
+            driver.down(driver.LabHandle(config=st["config"], stack=st.get("stack", driver.DEFAULT_STACK)),
+                        force=True)
         except Exception:  # noqa: BLE001
             pass
-    st.update(state="cancelled", step="cancelled by the user", updated=time.time())
-    (SUITES / suite_id / "status.json").write_text(json.dumps(st), encoding="utf-8")
     return "cancelled"
 
 
@@ -194,7 +230,7 @@ class _Run:
         self.write()
 
     def write(self) -> None:
-        (self.dir / "status.json").write_text(json.dumps(self.st), encoding="utf-8")
+        _write_status(self.dir, self.st)
 
 
 def _signing_rows(h: driver.LabHandle, size: int) -> list[dict]:
@@ -239,6 +275,7 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
 
 
 def run_suite(p: dict) -> None:
+    os.environ[driver.SUITE_OWNER_ENV] = p["suite_id"]  # lets this process use the lab it is guarding
     r = _Run(p)
     sizes, scenarios = [int(n) for n in p["sizes"]], list(p["scenarios"])
     trials, udp = int(p["trials"]), int(p["udp"])

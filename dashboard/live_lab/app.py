@@ -667,6 +667,10 @@ def _finish_prepare_job(h: driver.LabHandle) -> None:
 def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
     _sidebar_brand("setup")
     st.sidebar.markdown("### Setup")
+    bench_busy = suite_mod.running_suite()
+    if bench_busy:
+        st.sidebar.warning(f"Benchmark {bench_busy['id']} is using the lab. Build, Prepare, Start and Stop are "
+                           "paused until it finishes or is cancelled.")
 
     size_keys = list(driver.ZONE_SIZE_PRESETS.keys())
     size = sb(
@@ -753,7 +757,7 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
                     activity("err", "Pull failed", str(e)[:2000], phase="build", source="compose", h=h)
             st.rerun()
     else:
-        if st.sidebar.button("Build images", key="btn_build", width="stretch"):
+        if st.sidebar.button("Build images", key="btn_build", width="stretch", disabled=bool(bench_busy)):
             activity("step", "Build images", "", phase="build", source="compose", h=h)
             with st.spinner("Building…"):
                 try:
@@ -778,7 +782,7 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
     if signing:
         _hint("Signing is running. Watch it live in Setup.")
     if st.sidebar.button("Prepare", key="btn_prep", width="stretch",
-                         disabled=not sc or bool(shape_errors) or signing):
+                         disabled=not sc or bool(shape_errors) or signing or bool(bench_busy)):
         _apply_ui_config(h)
         jobs = int(cfg("jobs", 2))
         scen_txt = ", ".join(sc)
@@ -799,7 +803,7 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
     if not can_start:
         _hint("Start stays off until Prepare has signed this zone size (compose + manifests on disk).")
     b3a, b3b = st.sidebar.columns(2)
-    if b3a.button("Start", key="btn_up", width="stretch", disabled=not can_start):
+    if b3a.button("Start", key="btn_up", width="stretch", disabled=not can_start or bool(bench_busy or signing)):
         if not h.prepared():
             st.sidebar.error("Run Prepare first — there is nothing signed to start for this lab.")
             activity("err", "Start blocked", "Lab is not prepared", phase="compose", source="compose", h=h)
@@ -819,7 +823,7 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
                     st.sidebar.error(msg[:800])
                     activity("err", "Start failed", msg[-3000:], phase="compose", source="compose", h=h)
             st.rerun()
-    if b3b.button("Stop", key="btn_down", width="stretch"):
+    if b3b.button("Stop", key="btn_down", width="stretch", disabled=bool(bench_busy)):
         with st.spinner("Stopping…"):
             try:
                 driver.down(h)
@@ -854,7 +858,7 @@ def sidebar_live(h: driver.LabHandle, stt: dict) -> None:
         scenario = sb(st.sidebar.selectbox, "live_scenario", default, "Active scenario", options=scenarios)
         st.session_state.selected_scenario = scenario
         _hint(SCENARIO_BLURB.get(scenario, ""))
-        if r["running"] and scenario and scenario != active:
+        if r["running"] and scenario and scenario != active and not suite_mod.running_suite():
             udp = int(cfg("udp", 1232))
             activity("step", f"Activate {scenario}", "", phase="activate", source="compose", h=h)
             with st.spinner(f"Switching to {scenario}…"):
@@ -2609,9 +2613,12 @@ def reset_controls(h: driver.LabHandle, stt: dict) -> None:
         confirmed = st.checkbox("I understand this cannot be undone", key="rs_confirm")
     else:
         confirmed = True
+    bench_blocks = bool(suite_mod.running_suite()) and any(k in chosen for k in ("runs", "suites", "work", "flush"))
+    if bench_blocks:
+        st.warning("A benchmark is running. Lab, run and benchmark resets are paused until it finishes or is cancelled.")
     st.button(
         f"Reset {len(chosen)} item(s)" if chosen else "Select something to reset",
-        type="primary", disabled=not chosen or not confirmed,
+        type="primary", disabled=not chosen or not confirmed or bench_blocks,
         on_click=_do_reset, key="rs_go",
     )
 
