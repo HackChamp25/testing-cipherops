@@ -122,8 +122,10 @@ The placeholder code points (algorithm numbers and the EDNS option 65001 for
 ## 6. Timing measurements (directly measured)
 
 - **One process per trial.** Modes run in a seeded random order inside each
-  trial, preceded by warm-up trials. The clock is `CLOCK_MONOTONIC_RAW`
-  around each library call.
+  trial. Before the measured trials, each mode runs once on the smallest
+  dataset (`warmup_trials`) and the result is discarded. The clock is
+  `CLOCK_MONOTONIC_RAW` around each library call; buffer allocation is kept
+  outside the timed region.
 - **MTL signing, whole zone.** The sum of the following, all measured:
   - `mtllib_sign_append` per RRset
   - one `mtllib_sign_get_signed_ladder`, which is the single SLH-DSA signature
@@ -146,9 +148,47 @@ The placeholder code points (algorithm numbers and the EDNS option 65001 for
   - for the byte analysis, the measured 7,856-byte signatures are reused
     across RRsets; SLH-DSA signatures have a fixed length, so this does not
     change any byte count.
-- **Statistics.** Median, mean, standard deviation and min/max across trials,
-  plus a bootstrap 95% confidence interval of the median (2,000 resamples,
-  fixed seed).
+- **Statistics.** Median, mean, standard deviation, 5th/95th percentile and
+  min/max across trials, plus a confidence interval of the median.
+  See section 6.2.
+
+### 6.1 Which verification numbers can be compared
+
+MTL verification can be timed in two situations and the report keeps them apart:
+
+| Quantity | What it includes | Compare it with |
+|---|---|---|
+| MTL verify, **warm** (whole zone) | validating the signed ladder once, plus every condensed signature against that already-validated ladder | direct SLH-DSA verifying every RRset once (also a whole-zone total) |
+| MTL verify, **cold** (per answer) | one full signature: the condensed signature **and** validating the signed ladder, with no cached ladder | direct SLH-DSA verifying one RRset |
+
+A condensed signature is checked against a ladder that the library is told
+has already been validated. The ladder's own signature is therefore never
+re-checked per answer, which is the intended use of MTL, but it also means a
+condensed-verify time must never be compared with a direct verify without the
+ladder cost. The warm whole-zone total adds that cost once; the cold figure
+includes it every time. Both are reported.
+
+### 6.2 Statistics
+
+Repeated trials are few (the default full run uses 5, the quick run 3). A
+bootstrap of a median from so few values is not a valid 95% interval, so the
+report uses an exact, distribution-free interval from order statistics
+(`stats.median_ci`): the widest pair of sorted trial values that still
+covers the true median with at least 95% probability, or the full range if
+there are too few trials. Its coverage depends only on the number of trials:
+
+| Trials | Coverage of the full range |
+|---|---|
+| 3 | 75% |
+| 4 | 87.5% |
+| 5 | 93.8% |
+| 6 | 96.9% |
+| 7 | 98.4% |
+
+With 5 trials the bracketed interval is therefore a 94% interval, not 95%,
+and the report says so (`stats.ci_label`). Use at least 6 trials if a 95%
+interval is required. Ratios such as "N times faster" are ratios of medians;
+read them together with the intervals of both medians.
 
 ## 7. Transmitted bytes (directly measured at the DNS message level)
 
@@ -215,7 +255,48 @@ A trial counts only if:
 Measured MTL sizes are compared against the section 12 maximum formulas in
 `sizes.csv`.
 
-## 10. Limitations
+## 10. Live lab (second measurement path)
+
+`dashboard/live_lab` and `ecosystem/` run a multi-zone hierarchy (root, one
+TLD, leaf zones) with unmodified NSD servers and a validating Unbound, so the
+*resolver* behaviour of MTL can be observed. It is a separate pinned software
+stack from the offline harness (see the table in the README) and is used for
+different questions:
+
+| Question | Offline harness | Live lab |
+|---|---|---|
+| Signing and verification cost per algorithm | measured per call, dedicated core | signing time of a full zone measured once; repeated on sample zones and extrapolated (labelled *estimated*) |
+| Transmitted bytes | computed on real DNS messages | measured from packet captures per hop |
+| Cache use | dnspython cache (measured) and formulas (analytical) | Unbound's own `mem.cache.*` counters (measured), formulas kept separate |
+
+Rules the live-lab benchmark follows:
+
+- **Dataset sizes.** The benchmark suite builds the same hierarchy for each
+  size (one TLD, up to four leaf zones on one server) and changes only the
+  number of names.
+- **Cold and warm passes.** Each trial flushes the resolver, replays the seeded
+  workload once (cold) and again (warm). One whole trial per scenario, UDP
+  limit and network profile is run first and discarded; signing trials also
+  start with a discarded warm-up.
+- **Failed lookups are not data.** Latency is taken over answered lookups
+  (NOERROR and NXDOMAIN) only. A pass with any SERVFAIL, timeout or other
+  failure is marked invalid and left out of every summary figure; its
+  failures stay counted in `summary.csv` and are shown as warnings in the
+  dashboard. A scenario the resolver cannot validate therefore shows no
+  numbers rather than fast-looking ones.
+- **Provenance.** `suite.json` records the git commit (and whether the tree
+  was modified), CPU model, memory, kernel, CPU governor, Docker version,
+  the stack's pinned component versions and the image IDs used.
+- **No CPU isolation.** Unlike the offline harness, lab containers share all
+  host CPUs, and the host governor is recorded but not changed. Treat live-lab
+  timings as indicative; use byte counts and relative comparisons.
+- **Stack limitation.** On the `latest` stack, the lab's Unbound answers
+  SERVFAIL for plain (non-MTL) SLH-DSA while ldns accepts the same zone, and
+  `draft06` validates it. The MTL versus non-MTL live comparison is therefore
+  only valid on `draft06`. The cause inside that Unbound build is not
+  established.
+
+## 11. Limitations
 
 - **Single-machine CPU timing.** It reflects this hardware and these library
   builds. It is not a statement about optimised implementations.
@@ -233,4 +314,10 @@ Measured MTL sizes are compared against the section 12 maximum formulas in
   cover a different scheme than SLH-DSA-SHA2-128s-MTL (see section 3). The
   SLH-DSA check is cross-implementation agreement (OpenSSL), not published
   vectors; SLH-DSA-specific fixtures are unconfirmed.
+- **Implementation status.** The mentor approved choosing the Verisign MTL
+  reference implementation but has not tested a specific version. Version
+  alignment between the offline image and the live-lab stacks is unresolved
+  (see the README).
+- **Few trials.** Intervals are wide with 5 trials (section 6.2). The live
+  benchmark defaults to 5 measurement and 5 signing trials.
 - **No security claims.** None are made or implied.

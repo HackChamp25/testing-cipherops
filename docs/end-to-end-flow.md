@@ -35,7 +35,7 @@ quick.yaml ──► 1 config + environment ──► 2 go/no-go ──► 3 zon
 
 | Output | Value |
 |---|---|
-| `run_id` / folder | `20261007T045213Z-quick-demo` → `results/runs/20261007T045213Z-quick-demo/` |
+| `run_id` / folder | `<timestamp>-quick-demo` → `results/runs/<timestamp>-quick-demo/` |
 | `config.yaml` | the config above, as used |
 | `environment.json` | CPU Intel Core Ultra 7 155U, pinned core `[2]`, kernel WSL2 6.18.33.2, OpenSSL 3.6.0, liboqs 0.16.0, MTL commit `7cef0191…` with `-O2`, git `75e0809…-dirty`, image `sha256:b01f41ed…`, `mtlbench` SHA-256, Python package versions |
 | in memory | `cfg` (dict), `root` (run folder) |
@@ -151,7 +151,7 @@ Bytes on the wire for the 301-lookup stream at a 1232-byte buffer:
 
 ## Stage 6 – Statistics
 
-**Code:** `runner.summarise`, `stats.summarize`, `stats.bootstrap_ci`
+**Code:** `runner.summarise`, `stats.summarize`, `stats.median_ci`
 
 | Input | Value |
 |---|---|
@@ -159,7 +159,7 @@ Bytes on the wire for the 301-lookup stream at a 1232-byte buffer:
 | `frames` | `responses`, `workload` from stage 5 |
 
 What happens: for every dataset × mode and timing column, the 3 trial values become n, mean, median, std,
-p05, p95, min, max and a bootstrap 95% CI of the median (2,000 resamples, seed 0). Checks are combined into one
+p05, p95, min, max and a distribution-free CI of the median with its coverage (see methodology §6.2). Checks are combined into one
 `all_checks_passed`. Workload totals and UDP fit percentages are copied in.
 
 | Output | Example |
