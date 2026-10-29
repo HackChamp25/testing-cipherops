@@ -317,3 +317,8 @@ def test_worker_streams_the_log_and_records_the_result(eco, monkeypatch, code, s
     assert "#2 step two" in build_job.log_text() and build_job.log_text().startswith("$ docker compose")
     if code:
         assert "exited with 1" in st["error"]
+
+
+def test_stacks_that_cannot_validate_a_scenario_are_flagged():
+    assert driver.unvalidated_scenarios("latest", ["ecdsa", "slh-dsa", "mtl"]) == ["slh-dsa"]
+    assert driver.unvalidated_scenarios("draft06", ["ecdsa", "slh-dsa", "mtl"]) == []

@@ -665,6 +665,14 @@ def _finish_prepare_job(h: driver.LabHandle) -> None:
     st.sidebar.success(f"Done · {secs:.0f}s")
 
 
+def _warn_unvalidated(stack: str, scenarios) -> None:
+    bad = driver.unvalidated_scenarios(stack, scenarios)
+    if bad:
+        st.sidebar.warning(
+            f"On **{stack}**, {', '.join(bad)} is not validated by the resolver (SERVFAIL), so it cannot be compared "
+            "with MTL here. Use **draft06** for the MTL vs non-MTL comparison, or untick it.")
+
+
 def _finish_build_job(h: driver.LabHandle) -> None:
     """Take over a build that has just ended: log the result in the Activity log, once (``handled`` is stored)."""
     stt = build_job.status()
@@ -745,6 +753,7 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
         _hint(f"Pins for **{stack}**: MTL `{mtl}…` · liboqs {oqs}. Build this version before Prepare / Benchmark.")
     if not sc:
         st.sidebar.warning("Select at least one scenario")
+    _warn_unvalidated(stack, sc)
 
     r = readiness(stt)
     prepared_session = r["prepared"] and prepare_metrics_visible(h)
@@ -1025,6 +1034,7 @@ def sidebar_benchmark(h: driver.LabHandle, stt: dict) -> None:
         st.sidebar.button("Restore defaults", on_click=_restore_workload, key="btn_restore_wl",
                           width="stretch")
 
+    _warn_unvalidated(cfg("stack", "draft06"), sc)
     ready = bool(sizes and sc and nets) and r["images"] and not live and not build_job.is_running()
     if not r["images"]:
         st.sidebar.warning("Build the images first (Setup, step 1).")
