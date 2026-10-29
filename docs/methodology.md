@@ -58,12 +58,27 @@ Every run writes `environment.json` with:
    - `mtlverify` passes for every condensed signature (with the ladder) and
      every full signature
    - a tampered message is rejected
-4. Every harness mode signs and verifies a small zone, and rejects tampered
-   messages, signatures and ladders.
+4. Every harness mode signs and verifies a small zone, and rejects each
+   negative case: a changed message, a damaged or truncated signature, a
+   signature checked against a different message, a different public key, and
+   (MTL) a damaged ladder, a changed series id and a full signature with a
+   damaged ladder. ECDSA is also verified in the r||s form that goes on the wire.
+5. The bytes the harness wrote are verified by a different program: MTL
+   signatures by the reference tool `mtlverify`, and the non-MTL SLH-DSA
+   signatures by OpenSSL's SLH-DSA provider (a different implementation from
+   liboqs). A changed message must be rejected by both.
 
 The bundled known-answer vectors cover the scheme named in
-`mtltest_test_vectors.h`. SLH-DSA-SHA2-128s-MTL is validated by check 3 and
-by the harness correctness gates.
+`mtltest_test_vectors.h` (ML-DSA), not SLH-DSA. Check 5 is an interoperability
+check between two implementations. It is not a known-answer test against
+published SLH-DSA vectors, and none are claimed.
+
+Observed library behaviour: the reference library does not authenticate the
+first two bytes of a condensed signature (the type byte and the byte after it);
+flipping either is accepted. Everything from the series id onward is
+authenticated. Condensed verification also trusts a ladder passed in as
+pre-verified, so a wrong-key test must use the signed ladder or a full
+signature. The harness records the first point as an observation.
 
 ## 4. Workloads
 
@@ -215,5 +230,7 @@ Measured MTL sizes are compared against the section 12 maximum formulas in
 - **Placeholder code points.** The DNSSEC algorithm numbers for MTL and
   SLH-DSA are not assigned.
 - **Fixture coverage.** The reference library's bundled known-answer vectors
-  cover a different scheme than SLH-DSA-SHA2-128s-MTL (see section 3).
+  cover a different scheme than SLH-DSA-SHA2-128s-MTL (see section 3). The
+  SLH-DSA check is cross-implementation agreement (OpenSSL), not published
+  vectors; SLH-DSA-specific fixtures are unconfirmed.
 - **No security claims.** None are made or implied.

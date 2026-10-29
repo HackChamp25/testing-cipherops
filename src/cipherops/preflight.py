@@ -113,6 +113,38 @@ def harness_smoke(harness: str) -> list[dict]:
     return out
 
 
+def mtl_reference_tool_check() -> dict:
+    from . import crossverify
+
+    try:
+        r = crossverify.mtl_with_reference_tool()
+    except Exception as exc:  # noqa: BLE001 - a tool that cannot run is a NO-GO
+        return _check("mtl_artifacts_verified_by_reference_tool", False, repr(exc))
+    ok = r["harness_exit"] == 0 and not r["failed"] and r["tampered_rejected"] and r["checked"] > 0
+    detail = (f"mtlverify accepted {r['checked'] - len(r['failed'])}/{r['checked']} harness signatures, "
+              f"tampered message rejected={r['tampered_rejected']}")
+    if r.get("unauthenticated_header_bytes"):
+        detail += (f"; note: the reference library does not authenticate the first "
+                   f"{r['unauthenticated_header_bytes']} byte(s) of a condensed signature")
+    return _check("mtl_artifacts_verified_by_reference_tool", ok, detail)
+
+
+def slh_dsa_openssl_check() -> dict:
+    from . import crossverify
+
+    if not crossverify.openssl_supports_slh_dsa():
+        return _check("slh_dsa_artifacts_verified_by_openssl", False,
+                      "openssl with SLH-DSA-SHA2-128s not available; independent verification skipped", critical=False)
+    try:
+        r = crossverify.slh_dsa_with_openssl()
+    except Exception as exc:  # noqa: BLE001
+        return _check("slh_dsa_artifacts_verified_by_openssl", False, repr(exc))
+    ok = r["harness_exit"] == 0 and not r["failed"] and r["tampered_rejected"] and r["checked"] > 0
+    return _check("slh_dsa_artifacts_verified_by_openssl", ok,
+                  f"OpenSSL accepted {r['checked'] - len(r['failed'])}/{r['checked']} liboqs SLH-DSA-SHA2-128s "
+                  f"signatures, tampered message rejected={r['tampered_rejected']} (interop check, not a NIST KAT)")
+
+
 def _report(check: dict) -> dict:
     mark = "ok  " if check["ok"] else ("FAIL" if check["critical"] else "warn")
     log(f"  [{mark}] {check['check']}: {check['detail'].splitlines()[0] if check['detail'] else ''}")
@@ -130,6 +162,9 @@ def run(results_dir: Path, harness: str) -> dict:
         checks.append(_report(reference_tools_roundtrip()))
         log("  harness smoke test: mtlbench signs/verifies a 6-name zone in every mode ...")
         checks += [_report(c) for c in harness_smoke(harness)]
+        log("  independent verification of the harness output (mtlverify, OpenSSL) ...")
+        checks.append(_report(mtl_reference_tool_check()))
+        checks.append(_report(slh_dsa_openssl_check()))
     go = all(c["ok"] for c in checks if c["critical"])
     verdict = {"verdict": "GO" if go else "NO-GO (defer per PS-036)", "algorithm": MTL_ALGO, "checks": checks}
     results_dir.mkdir(parents=True, exist_ok=True)

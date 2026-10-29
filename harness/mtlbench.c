@@ -166,6 +166,66 @@ static size_t total_bytes(const msgset *ms)
 }
 
 /* ------------------------------------------------------------------ */
+/* Negative checks: every one of these must be rejected by a verifier.  */
+/* ------------------------------------------------------------------ */
+
+typedef struct
+{
+    const char *key;
+    int v; /* 1 rejected (good), 0 accepted (bad), -1 not applicable to this message set */
+} neg_check;
+
+static bool negs_ok(const neg_check *c, size_t n)
+{
+    for (size_t i = 0; i < n; i++)
+        if (c[i].v == 0)
+            return false;
+    return true;
+}
+
+/* Not-applicable checks are left out of the JSON, so every key present must be true. */
+static void print_tamper(const neg_check *c, size_t n)
+{
+    printf("\"tamper\":{");
+    bool first = true;
+    for (size_t i = 0; i < n; i++)
+    {
+        if (c[i].v < 0)
+            continue;
+        printf("%s\"%s\":%s", first ? "" : ",", c[i].key, c[i].v ? "true" : "false");
+        first = false;
+    }
+    printf("},");
+}
+
+/* Copy of a message with one bit flipped; an empty message becomes the single byte 0x01. */
+static uint8_t *tampered_message(const uint8_t *m, size_t len, size_t *out_len)
+{
+    *out_len = len ? len : 1;
+    uint8_t *t = malloc(*out_len);
+    if (len)
+    {
+        memcpy(t, m, len);
+        t[len / 2] ^= 0x01;
+    }
+    else
+        t[0] = 0x01;
+    return t;
+}
+
+/* A message whose bytes differ from message i: a signature for i must not verify it. */
+static bool find_other(const msgset *ms, size_t i, size_t *j)
+{
+    for (size_t k = 0; k < ms->n; k++)
+        if (k != i && (ms->len[k] != ms->len[i] || memcmp(ms->data[k], ms->data[i], ms->len[i]) != 0))
+        {
+            *j = k;
+            return true;
+        }
+    return false;
+}
+
+/* ------------------------------------------------------------------ */
 /* MTL mode (reference library)                                        */
 /* ------------------------------------------------------------------ */
 
@@ -296,17 +356,18 @@ static int run_mtl(const char *algo, msgset *ms, const char *outdir, size_t full
         free(full);
     }
 
-    /* Tamper checks: each must be rejected. */
-    uint8_t *tm = malloc(ms->len[0]);
-    memcpy(tm, ms->data[0], ms->len[0]);
-    tm[ms->len[0] / 2] ^= 0x01;
-    bool msg_rejected = !mtl_ok(mtl_verify_bytes(vctx, tm, ms->len[0], cond[0], cond_len[0], ladder));
+    /* Negative checks: each must be rejected. Message 0 is the subject; the checks run after all timing. */
+    neg_check neg[8];
+    size_t nn = 0;
+    size_t tm_len;
+    uint8_t *tm = tampered_message(ms->data[0], ms->len[0], &tm_len);
+    neg[nn++] = (neg_check){"message_rejected", !mtl_ok(mtl_verify_bytes(vctx, tm, tm_len, cond[0], cond_len[0], ladder))};
     free(tm);
 
     uint8_t *ts = malloc(cond_len[0]);
     memcpy(ts, cond[0], cond_len[0]);
     ts[cond_len[0] - 1] ^= 0x01;
-    bool sig_rejected = !mtl_ok(mtl_verify_bytes(vctx, ms->data[0], ms->len[0], ts, cond_len[0], ladder));
+    neg[nn++] = (neg_check){"signature_rejected", !mtl_ok(mtl_verify_bytes(vctx, ms->data[0], ms->len[0], ts, cond_len[0], ladder))};
     free(ts);
 
     uint8_t *tl = malloc(ladder_len);
@@ -314,9 +375,74 @@ static int run_mtl(const char *algo, msgset *ms, const char *outdir, size_t full
     tl[ladder_len - 1] ^= 0x01;
     MTLLIB_BUFFER *tlb = NULL;
     mtllib_buffer_initialize(&tlb, ladder_len, tl);
-    bool ladder_rejected = mtllib_verify_signed_ladder(vctx, tlb) != MTLLIB_OK;
+    neg[nn++] = (neg_check){"ladder_rejected", mtllib_verify_signed_ladder(vctx, tlb) != MTLLIB_OK};
     mtllib_buffer_free(tlb);
     free(tl);
+
+    /* A condensed signature binds one leaf: it must not verify a different message. */
+    size_t other;
+    if (find_other(ms, 0, &other))
+        neg[nn++] = (neg_check){"cross_message_rejected",
+                                !mtl_ok(mtl_verify_bytes(vctx, ms->data[other], ms->len[other], cond[0], cond_len[0], ladder))};
+    else
+        neg[nn++] = (neg_check){"cross_message_rejected", -1};
+
+    neg[nn++] = (neg_check){"truncated_signature_rejected",
+                            !mtl_ok(mtl_verify_bytes(vctx, ms->data[0], ms->len[0], cond[0], cond_len[0] - 1, ladder))};
+
+    /* The reference library authenticates everything from the series id onward, but not the first two
+     * bytes (type, byte 1): flipping them is accepted. Recorded as an observation, not a failure. */
+    size_t ignored_header = 0;
+    for (size_t b = 0; b < 2; b++)
+    {
+        uint8_t *th = malloc(cond_len[0]);
+        memcpy(th, cond[0], cond_len[0]);
+        th[b] ^= 0x01;
+        if (mtl_ok(mtl_verify_bytes(vctx, ms->data[0], ms->len[0], th, cond_len[0], ladder)))
+            ignored_header++;
+        free(th);
+    }
+    uint8_t *tb = malloc(cond_len[0]);
+    memcpy(tb, cond[0], cond_len[0]);
+    tb[2] ^= 0x01;
+    neg[nn++] = (neg_check){"series_id_rejected", !mtl_ok(mtl_verify_bytes(vctx, ms->data[0], ms->len[0], tb, cond_len[0], ladder))};
+    free(tb);
+
+    /* A verifier holding a different public key (same series id) must reject the signed ladder and a full
+     * signature. A condensed signature checked against a ladder passed in as pre-verified is accepted by
+     * design (the library trusts that ladder), so it is not a wrong-key test. */
+    MTLLIB_CTX *other_key = NULL, *wrong_ctx = NULL;
+    if (mtllib_key_new((char *)algo, &other_key) != MTLLIB_OK)
+        die("mtllib_key_new (second key) failed");
+    MTLLIB_BUFFER *pk2 = NULL;
+    mtllib_buffer_initialize(&pk2, mtllib_pubkey_to_buffer_length(other_key), NULL);
+    if (mtllib_pubkey_to_buffer(other_key, pk2) != MTLLIB_OK ||
+        mtllib_pubkey_from_buffer((char *)algo, &wrong_ctx, pk2, cond[0] + 2) != MTLLIB_OK)
+        die("cannot build the wrong-key verifier");
+    size_t flen_w = cond_len[0] + ladder_len;
+    uint8_t *fw = malloc(flen_w);
+    memcpy(fw, cond[0], cond_len[0]);
+    memcpy(fw + cond_len[0], mtllib_buffer_data_ptr(ladder), ladder_len);
+    neg[nn++] = (neg_check){"wrong_key_rejected",
+                            mtllib_verify_signed_ladder(wrong_ctx, ladder) != MTLLIB_OK &&
+                                !mtl_ok(mtl_verify_bytes(wrong_ctx, ms->data[0], ms->len[0], fw, flen_w, NULL))};
+    free(fw);
+    mtllib_buffer_free(pk2);
+    mtllib_key_free(wrong_ctx);
+    mtllib_key_free(other_key);
+
+    /* Full signature with a damaged ladder, on a fresh verifier so no validated-ladder cache can help. */
+    size_t flen0 = cond_len[0] + ladder_len;
+    uint8_t *tf = malloc(flen0);
+    memcpy(tf, cond[0], cond_len[0]);
+    memcpy(tf + cond_len[0], mtllib_buffer_data_ptr(ladder), ladder_len);
+    tf[flen0 - 1] ^= 0x01;
+    MTLLIB_CTX *fresh = NULL;
+    if (mtllib_pubkey_from_buffer((char *)algo, &fresh, pk, cond[0] + 2) != MTLLIB_OK)
+        die("cannot build a fresh verifier");
+    neg[nn++] = (neg_check){"full_signature_rejected", !mtl_ok(mtl_verify_bytes(fresh, ms->data[0], ms->len[0], tf, flen0, NULL))};
+    mtllib_key_free(fresh);
+    free(tf);
 
     if (outdir != NULL)
     {
@@ -335,9 +461,9 @@ static int run_mtl(const char *algo, msgset *ms, const char *outdir, size_t full
     json_u64_array("verify_full_ns", vfull_ns, full_n, true);
     printf("\"public_key_bytes\":%zu,\"signed_ladder_bytes\":%zu,", pk_len, ladder_len);
     json_size_array("condensed_bytes", cond_len, n, true);
+    printf("\"observations\":{\"condensed_header_bytes_unauthenticated\":%zu},", ignored_header);
     printf("\"failures\":{\"ladder\":%zu,\"verify_condensed\":%zu,\"verify_full\":%zu},", fail_ladder, fail_cond, fail_full);
-    printf("\"tamper\":{\"message_rejected\":%s,\"signature_rejected\":%s,\"ladder_rejected\":%s},",
-           msg_rejected ? "true" : "false", sig_rejected ? "true" : "false", ladder_rejected ? "true" : "false");
+    print_tamper(neg, nn);
     printf("\"memory\":{\"rss_start\":%ld,\"rss_after_keygen\":%ld,\"rss_after_append\":%ld,\"maxrss\":%ld}}\n",
            rss_start, rss_after_keygen, rss_after_append, maxrss_bytes());
 
@@ -349,7 +475,7 @@ static int run_mtl(const char *algo, msgset *ms, const char *outdir, size_t full
     mtllib_buffer_free(pk);
     mtllib_key_free(vctx);
     mtllib_key_free(ctx);
-    return (fail_ladder || fail_cond || fail_full || !msg_rejected || !sig_rejected || !ladder_rejected) ? 1 : 0;
+    return (fail_ladder || fail_cond || fail_full || !negs_ok(neg, nn)) ? 1 : 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -396,16 +522,35 @@ static int run_direct(const char *oqs_alg, msgset *ms, const char *outdir)
             fail++;
     }
 
-    uint8_t *tm = malloc(ms->len[0]);
-    memcpy(tm, ms->data[0], ms->len[0]);
-    tm[ms->len[0] / 2] ^= 0x01;
-    bool msg_rejected = OQS_SIG_verify(sig, tm, ms->len[0], sigs[0], sig_len[0], pk) != OQS_SUCCESS;
+    neg_check neg[5];
+    size_t nn = 0;
+    size_t tm_len;
+    uint8_t *tm = tampered_message(ms->data[0], ms->len[0], &tm_len);
+    neg[nn++] = (neg_check){"message_rejected", OQS_SIG_verify(sig, tm, tm_len, sigs[0], sig_len[0], pk) != OQS_SUCCESS};
     free(tm);
     uint8_t *ts = malloc(sig_len[0]);
     memcpy(ts, sigs[0], sig_len[0]);
     ts[sig_len[0] - 1] ^= 0x01;
-    bool sig_rejected = OQS_SIG_verify(sig, ms->data[0], ms->len[0], ts, sig_len[0], pk) != OQS_SUCCESS;
+    neg[nn++] = (neg_check){"signature_rejected", OQS_SIG_verify(sig, ms->data[0], ms->len[0], ts, sig_len[0], pk) != OQS_SUCCESS};
     free(ts);
+
+    size_t other;
+    if (find_other(ms, 0, &other))
+        neg[nn++] = (neg_check){"cross_message_rejected",
+                                OQS_SIG_verify(sig, ms->data[other], ms->len[other], sigs[0], sig_len[0], pk) != OQS_SUCCESS};
+    else
+        neg[nn++] = (neg_check){"cross_message_rejected", -1};
+    neg[nn++] = (neg_check){"truncated_signature_rejected",
+                            OQS_SIG_verify(sig, ms->data[0], ms->len[0], sigs[0], sig_len[0] - 1, pk) != OQS_SUCCESS};
+
+    uint8_t *pk2 = malloc(sig->length_public_key);
+    uint8_t *sk2 = malloc(sig->length_secret_key);
+    if (OQS_SIG_keypair(sig, pk2, sk2) != OQS_SUCCESS)
+        die("OQS_SIG_keypair (second key) failed");
+    neg[nn++] = (neg_check){"wrong_key_rejected",
+                            OQS_SIG_verify(sig, ms->data[0], ms->len[0], sigs[0], sig_len[0], pk2) != OQS_SUCCESS};
+    OQS_MEM_secure_free(sk2, sig->length_secret_key);
+    free(pk2);
 
     if (outdir != NULL)
     {
@@ -420,8 +565,7 @@ static int run_direct(const char *oqs_alg, msgset *ms, const char *outdir)
     printf("\"public_key_bytes\":%zu,", sig->length_public_key);
     json_size_array("signature_bytes", sig_len, n, true);
     printf("\"failures\":{\"verify\":%zu},", fail);
-    printf("\"tamper\":{\"message_rejected\":%s,\"signature_rejected\":%s},",
-           msg_rejected ? "true" : "false", sig_rejected ? "true" : "false");
+    print_tamper(neg, nn);
     printf("\"memory\":{\"rss_start\":%ld,\"maxrss\":%ld}}\n", rss_start, maxrss_bytes());
 
     for (size_t i = 0; i < n; i++)
@@ -430,7 +574,7 @@ static int run_direct(const char *oqs_alg, msgset *ms, const char *outdir)
     OQS_MEM_secure_free(sk, sig->length_secret_key);
     free(pk);
     OQS_SIG_free(sig);
-    return (fail || !msg_rejected || !sig_rejected) ? 1 : 0;
+    return (fail || !negs_ok(neg, nn)) ? 1 : 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -471,6 +615,32 @@ static size_t ecdsa_der_to_raw(const uint8_t *der, size_t der_len, uint8_t *raw6
 
 /* Length of the DNSKEY public key field: raw key (RFC 8080), x||y (RFC 6605),
  * or exponent-length || exponent || modulus (RFC 3110). */
+static bool classical_verify(EVP_PKEY *key, const EVP_MD *md, const uint8_t *sig, size_t sig_len,
+                             const uint8_t *m, size_t mlen)
+{
+    EVP_MD_CTX *mctx = EVP_MD_CTX_new();
+    bool ok = EVP_DigestVerifyInit(mctx, NULL, md, NULL, key) == 1 &&
+              EVP_DigestVerify(mctx, sig, sig_len, m, mlen) == 1;
+    EVP_MD_CTX_free(mctx);
+    ERR_clear_error();
+    return ok;
+}
+
+/* Inverse of ecdsa_der_to_raw: what a validator does with the r||s bytes it receives. */
+static size_t ecdsa_raw_to_der(const uint8_t *raw64, uint8_t **der)
+{
+    ECDSA_SIG *es = ECDSA_SIG_new();
+    BIGNUM *r = BN_bin2bn(raw64, 32, NULL), *s = BN_bin2bn(raw64 + 32, 32, NULL);
+    if (es == NULL || r == NULL || s == NULL || ECDSA_SIG_set0(es, r, s) != 1)
+        die("ECDSA_SIG_set0 failed");
+    *der = NULL;
+    int len = i2d_ECDSA_SIG(es, der);
+    ECDSA_SIG_free(es);
+    if (len <= 0)
+        die("i2d_ECDSA_SIG failed");
+    return (size_t)len;
+}
+
 static size_t dnskey_pubkey_len(EVP_PKEY *key, const char *alg)
 {
     if (strcmp(alg, "ed25519") == 0)
@@ -548,15 +718,45 @@ static int run_classical(const char *alg, msgset *ms, const char *outdir)
             fail++;
     }
 
-    uint8_t *tm = malloc(ms->len[0]);
-    memcpy(tm, ms->data[0], ms->len[0]);
-    tm[ms->len[0] / 2] ^= 0x01;
-    EVP_MD_CTX *mctx = EVP_MD_CTX_new();
-    bool msg_rejected = !(EVP_DigestVerifyInit(mctx, NULL, md, NULL, key) == 1 &&
-                          EVP_DigestVerify(mctx, sigs[0], sig_len[0], tm, ms->len[0]) == 1);
-    EVP_MD_CTX_free(mctx);
+    /* What goes on the wire must verify too: ECDSA is sent as r||s, so convert it back and verify that. */
+    size_t fail_wire = 0;
+    if (is_ecdsa)
+        for (size_t i = 0; i < n; i++)
+        {
+            uint8_t *der = NULL;
+            size_t dlen = wire_len[i] == 64 ? ecdsa_raw_to_der(wire[i], &der) : 0;
+            if (dlen == 0 || !classical_verify(key, md, der, dlen, ms->data[i], ms->len[i]))
+                fail_wire++;
+            OPENSSL_free(der);
+        }
+
+    neg_check neg[5];
+    size_t nn = 0;
+    size_t tm_len;
+    uint8_t *tm = tampered_message(ms->data[0], ms->len[0], &tm_len);
+    neg[nn++] = (neg_check){"message_rejected", !classical_verify(key, md, sigs[0], sig_len[0], tm, tm_len)};
     free(tm);
-    ERR_clear_error();
+
+    uint8_t *ts = malloc(sig_len[0]);
+    memcpy(ts, sigs[0], sig_len[0]);
+    ts[sig_len[0] - 1] ^= 0x01;
+    neg[nn++] = (neg_check){"signature_rejected", !classical_verify(key, md, ts, sig_len[0], ms->data[0], ms->len[0])};
+    free(ts);
+
+    size_t other;
+    if (find_other(ms, 0, &other))
+        neg[nn++] = (neg_check){"cross_message_rejected",
+                                !classical_verify(key, md, sigs[0], sig_len[0], ms->data[other], ms->len[other])};
+    else
+        neg[nn++] = (neg_check){"cross_message_rejected", -1};
+    neg[nn++] = (neg_check){"truncated_signature_rejected",
+                            !classical_verify(key, md, sigs[0], sig_len[0] - 1, ms->data[0], ms->len[0])};
+
+    EVP_PKEY *other_key = classical_keygen(alg);
+    if (other_key == NULL)
+        die("classical keygen (second key) failed");
+    neg[nn++] = (neg_check){"wrong_key_rejected", !classical_verify(other_key, md, sigs[0], sig_len[0], ms->data[0], ms->len[0])};
+    EVP_PKEY_free(other_key);
 
     size_t pk_len = dnskey_pubkey_len(key, alg);
 
@@ -569,8 +769,8 @@ static int run_classical(const char *alg, msgset *ms, const char *outdir)
     json_u64_array("verify_ns", verify_ns, n, true);
     printf("\"public_key_bytes\":%zu,", pk_len);
     json_size_array("signature_bytes", wire_len, n, true);
-    printf("\"failures\":{\"verify\":%zu},", fail);
-    printf("\"tamper\":{\"message_rejected\":%s},", msg_rejected ? "true" : "false");
+    printf("\"failures\":{\"verify\":%zu,\"verify_wire\":%zu},", fail, fail_wire);
+    print_tamper(neg, nn);
     printf("\"memory\":{\"maxrss\":%ld}}\n", maxrss_bytes());
 
     for (size_t i = 0; i < n; i++)
@@ -581,7 +781,7 @@ static int run_classical(const char *alg, msgset *ms, const char *outdir)
     }
     free(sigs); free(sig_len); free(wire); free(wire_len); free(sign_ns); free(verify_ns);
     EVP_PKEY_free(key);
-    return (fail || !msg_rejected) ? 1 : 0;
+    return (fail || fail_wire || !negs_ok(neg, nn)) ? 1 : 0;
 }
 
 static void usage(void)
