@@ -98,6 +98,7 @@ rejected alternatives are in [docs/design-decisions.md](docs/design-decisions.md
 | With and without MTL | `slh-dsa-mtl` vs `slh-dsa`, plus classical references | done |
 | Repeated trials, pinned environment | pinned image, dedicated core, seeded order, discarded warm-up | done offline; live lab not core-pinned |
 | Signing time, verification time, transmitted bytes | `trials.csv`, `responses.csv`, `workload.csv`; live-lab captures | done |
+| MTL on a changing zone (beyond the minimum) | `evolution.csv`: k changed RRsets per round, cost per update, cached-ladder coverage, growth | done offline; synthetic same-size updates |
 | Record configuration and workload parameters | `config.yaml`, `environment.json`, `suite.json` in each run | done |
 | Cache: measured vs analytical, kept apart | `cache.csv` has a `kind` column; the report never mixes them | done |
 | Defer if implementation or fixtures are missing | go/no-go gate (`preflight`) blocks the run | done; SLH-DSA is checked by interoperability, not published vectors |
@@ -121,7 +122,7 @@ cd A3-PS036-TC161
 bash scripts/run_benchmark.sh preflight               # build the image and run the go/no-go gate
 # CIPHEROPS_STACK=draft06 bash scripts/run_benchmark.sh preflight   # reports NO-GO by design (see above)
 bash scripts/run_benchmark.sh configs/quick.yaml      # short demonstration run
-bash scripts/run_benchmark.sh                         # full run (configs/scenarios.yaml): 10 trials, about 3.5 hours (direct SLH-DSA signs 2,000 RRsets per trial)
+bash scripts/run_benchmark.sh                         # full run (configs/scenarios.yaml): 10 trials, about 5 hours (plain SLH-DSA signs about 2,700 RRsets per trial at 0.6 s each)
 ```
 
 The first build compiles OpenSSL, liboqs and MTL from source (several minutes); later runs reuse the cache. A run
@@ -147,7 +148,7 @@ streamlit run dashboard/live_lab/app.py
 | **Setup** | step 1 build or pull the images; step 2 choose zone size and scenarios, then **Prepare** (signs the hierarchy); step 3 **Start** the lab |
 | **Live** | send queries or `dig`, switch scenario, capture packets, view the packet sequence |
 | **Benchmark** | one press runs the PS-036 benchmark: three dataset sizes, repeated signing and measurement trials; needs only the built images |
-| **Compare** | two views. *Algorithms side by side*: every algorithm of an offline-harness run or a live-lab benchmark, with the ratio to a baseline (paired per-trial intervals for the offline timings). *Run against run*: two saved runs (stack profiles, repeats, machines) with what differs between them spelled out. Offline and live-lab data are never drawn together |
+| **Compare** | two views. *Algorithms side by side*: every algorithm of an offline-harness run or a live-lab benchmark, with the ratio to a baseline (paired per-trial intervals for the offline timings). *Run against run*: two saved runs (stack profiles, repeats, machines) with what differs between them spelled out. *Evolving zone*: the offline evolving-zone experiment, with a round slider that draws the ladder's rungs, the cached-ladder coverage, cost per update, bytes per answer and growth. Offline and live-lab data are never drawn together |
 | **Reset** | remove sessions, captures, runs or signed zones |
 
 The benchmark can also run without the browser (same guards and the same saved results, which then appear in the
@@ -169,7 +170,8 @@ Each offline run writes `results/runs/<id>/`:
 | --- | --- |
 | `report.html`, `report.md`, `figures/` | the report: method, results, limitations, traceability to PS-036, demonstration pseudocode |
 | `config.yaml`, `environment.json`, `preflight.json` | the exact settings, software and hardware, and go/no-go checks |
-| `trials.csv`, `ops.parquet` | one row per trial; one row per timed library call |
+| `trials.csv`, `control.csv`, `ops.parquet` | one row per trial; the A/A control copy; one row per timed library call |
+| `evolution.csv`, `evolution_direct.csv` | the evolving-zone experiment: rounds of changed RRsets, one new ladder per round, and how long a resolver's cached ladder keeps working |
 | `responses.csv`, `workload.csv`, `sizes.csv` | DNS message sizes and workload byte accounting; measured MTL sizes against the draft's formulas |
 | `cache.csv` | cache rows, each marked `measured` or `analytical` |
 | `summary.json`, `raw/`, `artifacts/` | statistics with confidence intervals; raw harness output; the signatures used for the byte analysis |

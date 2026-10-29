@@ -34,6 +34,23 @@ def run_trial(mode: Mode, messages: Path, out_dir: Path | None, full_verify: int
     return result
 
 
+def run_evolve(mode: Mode, messages: Path, ks: list[int], rounds: list[int], ages: list[int], seed: int) -> dict:
+    """One evolving-zone series set: MTL (``evolve``) or plain SLH-DSA (``evolve-direct``). Never raises on a failed
+    check: the exit code and the failure counts are in the result, as for ``run_trial``."""
+    sub = "evolve" if mode.family == "mtl" else "evolve-direct"
+    cmd = [HARNESS, sub, "--messages", str(messages), "--algo", mode.harness_algo, "--k", ",".join(map(str, ks)),
+           "--rounds", ",".join(map(str, rounds)), "--seed", str(seed)]
+    if sub == "evolve":
+        cmd += ["--ages", ",".join(map(str, ages))]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if not proc.stdout.strip():
+        raise HarnessError(f"{' '.join(cmd)} produced no result (exit {proc.returncode}): {proc.stderr[-2000:]}")
+    result = json.loads(proc.stdout)
+    result["exit_code"] = proc.returncode
+    result["command"] = cmd
+    return result
+
+
 def run_calibrate(mtl_algo: str) -> dict:
     cmd = [HARNESS, "calibrate", "--algo", mtl_algo]
     proc = subprocess.run(cmd, capture_output=True, text=True)

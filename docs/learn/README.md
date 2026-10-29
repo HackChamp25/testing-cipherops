@@ -24,12 +24,15 @@ page in its **Learn** tile.
 
 ## What MTL does not solve
 
-MTL moves the cost; it does not remove it. This is what the benchmark measures rather than assumes:
+MTL moves the cost; it does not remove it. This is what the benchmark measures rather than assumes (the
+*evolving zone* experiment, section 5.7 of a run's report and a view in the dashboard's Compare tile):
 
 - A resolver without the ladder pays more than plain SLH-DSA, once.
 - New or changed records verify only after a new ladder is signed, so a zone that changes often signs more ladders
   and resolvers fetch full signatures more often.
 - Every record ever added stays in the tree, so the series only grows.
+- Condensed signatures published earlier can stop verifying against the newest ladder when rungs merge, and must be
+  reissued.
 - The draft's size figures are maxima. Real values are measured, not taken from the formulas.
 
 ## Where each question is answered in this repository

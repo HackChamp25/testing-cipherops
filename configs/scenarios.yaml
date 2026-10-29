@@ -49,6 +49,16 @@ direct_sign_limit:
   medium: null
   large: 1000
 
+# Evolving zone (MTL's real use: an authenticated series that keeps growing). Each series starts from the full
+# dataset, then runs rounds in which k RRsets change; every change appends a leaf, and each round signs one new
+# ladder. `k` and `rounds` are paired lists. `ages` are how many rounds old the ladder a resolver holds is (0 = the
+# newest). The direct SLH-DSA baseline signs every changed RRset one by one: sum(k * rounds) signatures per trial,
+# about 0.6 s each. Remove the block to skip the experiment.
+evolution:
+  k: [1, 10, 100]
+  rounds: [10, 10, 5]
+  ages: [0, 1, 2, 4, 8]
+
 wire:
   nx_sample: 200
   workload:

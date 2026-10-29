@@ -9,6 +9,9 @@
  *   direct     the same SLH-DSA parameter set signing every message (liboqs)
  *   classical  ed25519 | ecdsa-p256 | rsa-2048 baseline (OpenSSL EVP)
  *   calibrate  timer overhead and resolution, per-call versus batch timing of fast operations
+ *   evolve     an evolving zone: rounds of k changed RRsets, one new signed ladder per round, and whether a
+ *              resolver holding an older ladder can still verify the current answers (MTL)
+ *   evolve-direct  the same updates signed and verified one by one (plain SLH-DSA)
  *
  * Message file: u32be count, then count x (u32be length, bytes).
  * Result: one JSON object on stdout. Signature artifacts go to --out-dir.
@@ -953,6 +956,355 @@ static int run_calibrate(const char *algo)
     return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* Evolving zone: the series grows, and resolvers hold older ladders     */
+/* ------------------------------------------------------------------ */
+
+#define EVO_MAX_LIST 16
+
+typedef struct
+{
+    size_t v[EVO_MAX_LIST];
+    size_t n;
+} szlist;
+
+static void parse_list(const char *s, szlist *l)
+{
+    l->n = 0;
+    char *copy = strdup(s), *save = NULL;
+    for (char *t = strtok_r(copy, ",", &save); t != NULL; t = strtok_r(NULL, ",", &save))
+    {
+        if (l->n == EVO_MAX_LIST)
+            die("list too long");
+        l->v[l->n++] = strtoull(t, NULL, 10);
+    }
+    free(copy);
+}
+
+static uint64_t rng_next(uint64_t *s)
+{
+    uint64_t x = *s;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    *s = x;
+    return x * 2685821657736338717ull;
+}
+
+/* A changed RRset is modelled as the same-size message with its last 8 bytes replaced by (round, index): new bytes
+ * to authenticate, identical length. The real RDATA of an update is not reproduced. */
+static uint8_t *updated_message(const uint8_t *m, size_t len, uint32_t round, uint32_t idx)
+{
+    uint8_t *u = malloc(len);
+    memcpy(u, m, len);
+    for (int b = 0; b < 4; b++)
+    {
+        u[len - 1 - b] = (uint8_t)((round + 1) >> (8 * b));
+        u[len - 5 - b] = (uint8_t)(idx >> (8 * b));
+    }
+    return u;
+}
+
+static int cmp_size(const void *a, const void *b)
+{
+    size_t x = *(const size_t *)a, y = *(const size_t *)b;
+    return x < y ? -1 : (x > y);
+}
+
+static void need_lists(const szlist *ks, const szlist *rounds)
+{
+    if (ks->n == 0 || ks->n != rounds->n)
+        die("--k and --rounds need the same, non-zero number of values");
+}
+
+/* One series per k: sign the whole zone, then `rounds` rounds of k changed RRsets, one new signed ladder per round.
+ * After every round each RRset of the current zone gets a condensed signature from the signer, and the library
+ * verifies it against the ladder from `age` rounds earlier. A leaf appended after that ladder was signed has no rung
+ * in it and must fail; an older leaf must pass. Both are checked against the leaf index, not assumed. */
+static int run_evolve(const char *algo, msgset *ms, const szlist *ks, const szlist *rounds, const szlist *ages,
+                      uint64_t seed)
+{
+    size_t n = ms->n;
+    need_lists(ks, rounds);
+    for (size_t i = 0; i < n; i++)
+        if (ms->len[i] < 8)
+            die("message too short for the update model");
+    size_t fail = 0, mismatches = 0, neg_ok = 0, neg_total = 0;
+
+    printf("{\"mode\":\"evolve\",\"algorithm\":\"%s\",\"n_messages\":%zu,\"message_bytes\":%zu,\"ages\":[", algo, n,
+           total_bytes(ms));
+    for (size_t a = 0; a < ages->n; a++)
+        printf(a ? ",%zu" : "%zu", ages->v[a]);
+    printf("],\"series\":[");
+
+    for (size_t s = 0; s < ks->n; s++)
+    {
+        size_t k = ks->v[s] > n ? n : ks->v[s], R = rounds->v[s];
+        MTLLIB_CTX *ctx = NULL, *vctx = NULL;
+        if (mtllib_key_new((char *)algo, &ctx) != MTLLIB_OK)
+            die("mtllib_key_new failed");
+        uint8_t **cur_msg = calloc(n, sizeof(uint8_t *));
+        bool *owned = calloc(n, sizeof(bool));
+        MTL_INDEX *cur_leaf = calloc(n, sizeof(MTL_INDEX));
+        size_t *cl = calloc(n, sizeof(size_t));
+        size_t *born = calloc(n, sizeof(size_t));
+        uint8_t **issued = calloc(n, sizeof(uint8_t *));
+        size_t *issued_len = calloc(n, sizeof(size_t));
+        MTLLIB_BUFFER **hist = calloc(R + 1, sizeof(MTLLIB_BUFFER *));
+        size_t *hist_leaves = calloc(R + 1, sizeof(size_t));
+        for (size_t i = 0; i < n; i++)
+            cur_msg[i] = ms->data[i];
+
+        printf("%s{\"k\":%zu,\"rounds\":%zu,\"rows\":[", s ? "," : "", k, R);
+        for (size_t r = 0; r <= R; r++)
+        {
+            uint64_t append_ns = 0, t0;
+            size_t changed = 0;
+            if (r == 0)
+            {
+                for (size_t i = 0; i < n; i++)
+                {
+                    MTLLIB_BUFFER *mb = NULL;
+                    MTL_HANDLE *h = NULL;
+                    mtllib_buffer_initialize(&mb, ms->len[i], cur_msg[i]);
+                    t0 = now_ns();
+                    if (mtllib_sign_append(ctx, mb, &h) != MTLLIB_OK)
+                        die("mtllib_sign_append failed");
+                    append_ns += now_ns() - t0;
+                    cur_leaf[i] = h->leaf_index;
+                    mtllib_sign_free_handle(&h);
+                    mtllib_buffer_free(mb);
+                    born[i] = 0;
+                }
+                changed = n;
+            }
+            else
+            {
+                uint64_t st = seed ^ ((uint64_t)k * 0x9E3779B97F4A7C15ull) ^ ((uint64_t)r * 0xBF58476D1CE4E5B9ull);
+                if (st == 0)
+                    st = 1;
+                bool *picked = calloc(n, sizeof(bool));
+                while (changed < k)
+                {
+                    size_t i = rng_next(&st) % n;
+                    if (picked[i])
+                        continue;
+                    picked[i] = true;
+                    changed++;
+                    uint8_t *um = updated_message(cur_msg[i], ms->len[i], (uint32_t)r, (uint32_t)i);
+                    MTLLIB_BUFFER *mb = NULL;
+                    MTL_HANDLE *h = NULL;
+                    mtllib_buffer_initialize(&mb, ms->len[i], um);
+                    t0 = now_ns();
+                    if (mtllib_sign_append(ctx, mb, &h) != MTLLIB_OK)
+                        die("mtllib_sign_append failed");
+                    append_ns += now_ns() - t0;
+                    cur_leaf[i] = h->leaf_index;
+                    mtllib_sign_free_handle(&h);
+                    mtllib_buffer_free(mb);
+                    born[i] = r;
+                    if (owned[i])
+                        free(cur_msg[i]);
+                    cur_msg[i] = um;
+                    owned[i] = true;
+                }
+                free(picked);
+            }
+
+            size_t leaves = n + r * k;
+            MTLLIB_BUFFER *ladder = NULL;
+            mtllib_buffer_initialize(&ladder, mtllib_sign_get_signed_ladder_length(ctx), NULL);
+            t0 = now_ns();
+            if (mtllib_sign_get_signed_ladder(ctx, ladder) != MTLLIB_OK)
+                die("mtllib_sign_get_signed_ladder failed");
+            uint64_t ladder_sign_ns = now_ns() - t0;
+            hist[r] = ladder;
+            hist_leaves[r] = leaves;
+
+            if (vctx == NULL)
+            {
+                MTL_HANDLE first;
+                memset(&first, 0, sizeof first);
+                first.leaf_index = cur_leaf[0];
+                MTLLIB_BUFFER *c0 = NULL, *pk = NULL;
+                mtllib_buffer_initialize(&c0, mtllib_sign_get_condensed_sig_length(ctx, &first), NULL);
+                mtllib_buffer_initialize(&pk, mtllib_pubkey_to_buffer_length(ctx), NULL);
+                if (mtllib_sign_get_condensed_sig(ctx, &first, c0) != MTLLIB_OK ||
+                    mtllib_pubkey_to_buffer(ctx, pk) != MTLLIB_OK ||
+                    mtllib_pubkey_from_buffer((char *)algo, &vctx, pk, mtllib_buffer_data_ptr(c0) + 2) != MTLLIB_OK)
+                    die("cannot build the verifier");
+                mtllib_buffer_free(c0);
+                mtllib_buffer_free(pk);
+            }
+            t0 = now_ns();
+            if (mtllib_verify_signed_ladder(vctx, ladder) != MTLLIB_OK)
+                fail++;
+            uint64_t ladder_verify_ns = now_ns() - t0;
+
+            size_t ok[EVO_MAX_LIST] = {0}, mism[EVO_MAX_LIST] = {0}, tested[EVO_MAX_LIST] = {0};
+            uint64_t cond_ns = 0;
+            size_t stale_tested = 0, stale_ok = 0;
+            for (size_t i = 0; i < n; i++)
+            {
+                MTL_HANDLE handle;
+                memset(&handle, 0, sizeof handle);
+                handle.leaf_index = cur_leaf[i];
+                MTLLIB_BUFFER *cb = NULL, *mb = NULL;
+                mtllib_buffer_initialize(&cb, mtllib_sign_get_condensed_sig_length(ctx, &handle), NULL);
+                t0 = now_ns();
+                if (mtllib_sign_get_condensed_sig(ctx, &handle, cb) != MTLLIB_OK)
+                    die("mtllib_sign_get_condensed_sig failed");
+                cond_ns += now_ns() - t0;
+                cl[i] = mtllib_buffer_in_use(cb);
+                mtllib_buffer_initialize(&mb, ms->len[i], cur_msg[i]);
+                if (born[i] == r)
+                {
+                    free(issued[i]);
+                    issued[i] = malloc(cl[i]);
+                    memcpy(issued[i], mtllib_buffer_data_ptr(cb), cl[i]);
+                    issued_len[i] = cl[i];
+                }
+                else
+                {
+                    /* the signature published when this leaf was created, against the newest ladder */
+                    MTLLIB_BUFFER *sb = NULL;
+                    mtllib_buffer_initialize(&sb, issued_len[i], issued[i]);
+                    stale_tested++;
+                    stale_ok += mtl_ok(mtllib_verify(vctx, mb, sb, ladder, NULL));
+                    mtllib_buffer_free(sb);
+                }
+                for (size_t a = 0; a < ages->n; a++)
+                {
+                    if (ages->v[a] > r)
+                        continue;
+                    size_t ri = r - ages->v[a];
+                    bool expect = (size_t)cur_leaf[i] < hist_leaves[ri];
+                    bool got = mtl_ok(mtllib_verify(vctx, mb, cb, hist[ri], NULL));
+                    tested[a]++;
+                    ok[a] += got;
+                    mism[a] += (got != expect);
+                }
+                if (r == R && i == 0)
+                {
+                    size_t tm_len;
+                    uint8_t *tm = tampered_message(cur_msg[0], ms->len[0], &tm_len);
+                    MTLLIB_BUFFER *tb = NULL;
+                    mtllib_buffer_initialize(&tb, tm_len, tm);
+                    neg_total++;
+                    neg_ok += !mtl_ok(mtllib_verify(vctx, tb, cb, hist[R], NULL));
+                    mtllib_buffer_free(tb);
+                    free(tm);
+                }
+                mtllib_buffer_free(mb);
+                mtllib_buffer_free(cb);
+            }
+            size_t *sorted = malloc(n * sizeof(size_t));
+            memcpy(sorted, cl, n * sizeof(size_t));
+            qsort(sorted, n, sizeof(size_t), cmp_size);
+            double mean = 0;
+            for (size_t i = 0; i < n; i++)
+                mean += (double)cl[i];
+            mean /= (double)n;
+
+            printf("%s{\"round\":%zu,\"changed\":%zu,\"leaf_count\":%zu,\"rung_count\":%d,\"ladder_bytes\":%zu,"
+                   "\"append_ns\":%llu,\"ladder_sign_ns\":%llu,\"ladder_verify_ns\":%llu,"
+                   "\"condensed_extract_ns\":%llu,\"condensed_bytes_median\":%zu,\"condensed_bytes_max\":%zu,"
+                   "\"condensed_bytes_mean\":%.2f,\"stale_tested\":%zu,\"stale_ok\":%zu,\"rss\":%ld,\"ages\":[",
+                   r ? "," : "", r, changed, leaves, __builtin_popcountll((unsigned long long)leaves),
+                   mtllib_buffer_in_use(ladder), (unsigned long long)append_ns, (unsigned long long)ladder_sign_ns,
+                   (unsigned long long)ladder_verify_ns, (unsigned long long)cond_ns, sorted[n / 2], sorted[n - 1],
+                   mean, stale_tested, stale_ok, rss_bytes());
+            bool first_age = true;
+            for (size_t a = 0; a < ages->n; a++)
+            {
+                if (tested[a] == 0)
+                    continue;
+                printf("%s{\"age\":%zu,\"tested\":%zu,\"ok\":%zu,\"mismatch\":%zu}", first_age ? "" : ",", ages->v[a],
+                       tested[a], ok[a], mism[a]);
+                first_age = false;
+                mismatches += mism[a];
+            }
+            printf("]}");
+            free(sorted);
+        }
+        printf("]}");
+        for (size_t r = 0; r <= R; r++)
+            mtllib_buffer_free(hist[r]);
+        for (size_t i = 0; i < n; i++)
+        {
+            if (owned[i])
+                free(cur_msg[i]);
+            free(issued[i]);
+        }
+        free(born); free(issued); free(issued_len);
+        free(hist); free(hist_leaves); free(cur_msg); free(owned); free(cur_leaf); free(cl);
+        mtllib_key_free(vctx);
+        mtllib_key_free(ctx);
+        fflush(stdout);
+    }
+    printf("],\"failures\":{\"ladder\":%zu,\"leaf_index_mismatch\":%zu},\"tamper\":{\"message_rejected\":%s},"
+           "\"memory\":{\"maxrss\":%ld}}\n",
+           fail, mismatches, (neg_total && neg_ok == neg_total) ? "true" : "false", maxrss_bytes());
+    return (fail || mismatches || neg_ok != neg_total) ? 1 : 0;
+}
+
+/* The baseline for the same updates: plain SLH-DSA signs and verifies each changed RRset on its own. */
+static int run_evolve_direct(const char *oqs_alg, msgset *ms, const szlist *ks, const szlist *rounds, uint64_t seed)
+{
+    size_t n = ms->n;
+    need_lists(ks, rounds);
+    for (size_t i = 0; i < n; i++)
+        if (ms->len[i] < 8)
+            die("message too short for the update model");
+    OQS_SIG *sig = OQS_SIG_new(oqs_alg);
+    if (sig == NULL)
+        die("OQS_SIG_new failed (algorithm not enabled?)");
+    uint8_t *pk = malloc(sig->length_public_key), *sk = malloc(sig->length_secret_key);
+    uint8_t *sg = malloc(sig->length_signature);
+    if (OQS_SIG_keypair(sig, pk, sk) != OQS_SUCCESS)
+        die("OQS_SIG_keypair failed");
+    size_t fail = 0;
+
+    printf("{\"mode\":\"evolve-direct\",\"algorithm\":\"%s\",\"n_messages\":%zu,\"signature_bytes\":%zu,\"series\":[",
+           oqs_alg, n, sig->length_signature);
+    for (size_t s = 0; s < ks->n; s++)
+    {
+        size_t k = ks->v[s] > n ? n : ks->v[s], R = rounds->v[s];
+        printf("%s{\"k\":%zu,\"rounds\":%zu,\"rows\":[", s ? "," : "", k, R);
+        for (size_t r = 1; r <= R; r++)
+        {
+            uint64_t st = seed ^ ((uint64_t)k * 0x9E3779B97F4A7C15ull) ^ ((uint64_t)r * 0xBF58476D1CE4E5B9ull);
+            if (st == 0)
+                st = 1;
+            uint64_t sign_ns = 0, verify_ns = 0;
+            for (size_t j = 0; j < k; j++)
+            {
+                size_t i = rng_next(&st) % n, slen = 0;
+                uint8_t *um = updated_message(ms->data[i], ms->len[i], (uint32_t)r, (uint32_t)i);
+                uint64_t t0 = now_ns();
+                if (OQS_SIG_sign(sig, sg, &slen, um, ms->len[i], sk) != OQS_SUCCESS)
+                    die("OQS_SIG_sign failed");
+                sign_ns += now_ns() - t0;
+                t0 = now_ns();
+                OQS_STATUS vs = OQS_SIG_verify(sig, um, ms->len[i], sg, slen, pk);
+                verify_ns += now_ns() - t0;
+                fail += (vs != OQS_SUCCESS);
+                free(um);
+            }
+            printf("%s{\"round\":%zu,\"signed\":%zu,\"sign_ns\":%llu,\"verify_ns\":%llu}", r > 1 ? "," : "", r, k,
+                   (unsigned long long)sign_ns, (unsigned long long)verify_ns);
+        }
+        printf("]}");
+        fflush(stdout);
+    }
+    printf("],\"failures\":{\"verify\":%zu},\"memory\":{\"maxrss\":%ld}}\n", fail, maxrss_bytes());
+    free(sg);
+    OQS_MEM_secure_free(sk, sig->length_secret_key);
+    free(pk);
+    OQS_SIG_free(sig);
+    return fail ? 1 : 0;
+}
+
 static void usage(void)
 {
     fprintf(stderr,
@@ -960,7 +1312,9 @@ static void usage(void)
             "  MODE mtl        --algo SLH-DSA-SHA2-128s-MTL-SHA2-128\n"
             "  MODE direct     --algo SLH-DSA-PURE-SHA2-128s (liboqs name)\n"
             "  MODE classical  --algo ed25519|ecdsa-p256|rsa-2048\n"
-            "  MODE calibrate  [--algo MTL-NAME]  timer overhead and resolution; per-call vs batch timing\n");
+            "  MODE calibrate  [--algo MTL-NAME]  timer overhead and resolution; per-call vs batch timing\n"
+            "  MODE evolve         --k 1,10 --rounds 10,10 --ages 0,1,2 [--seed N]  evolving zone, MTL\n"
+            "  MODE evolve-direct  --k 1,10 --rounds 10,10 [--seed N]  the same updates signed one by one\n");
     exit(2);
 }
 
@@ -971,6 +1325,8 @@ int main(int argc, char **argv)
     const char *mode = argv[1];
     const char *messages = NULL, *algo = NULL, *outdir = NULL;
     size_t limit = 0, full_n = 64;
+    const char *k_arg = "1", *rounds_arg = "1", *ages_arg = "0,1";
+    uint64_t seed = 1;
 
     static struct option opts[] = {
         {"messages", required_argument, 0, 'm'},
@@ -978,10 +1334,14 @@ int main(int argc, char **argv)
         {"out-dir", required_argument, 0, 'o'},
         {"limit", required_argument, 0, 'l'},
         {"full-verify", required_argument, 0, 'f'},
+        {"k", required_argument, 0, 'k'},
+        {"rounds", required_argument, 0, 'r'},
+        {"ages", required_argument, 0, 'g'},
+        {"seed", required_argument, 0, 's'},
         {0, 0, 0, 0}};
     optind = 2;
     int c;
-    while ((c = getopt_long(argc, argv, "m:a:o:l:f:", opts, NULL)) != -1)
+    while ((c = getopt_long(argc, argv, "m:a:o:l:f:k:r:g:s:", opts, NULL)) != -1)
     {
         switch (c)
         {
@@ -990,6 +1350,10 @@ int main(int argc, char **argv)
         case 'o': outdir = optarg; break;
         case 'l': limit = strtoull(optarg, NULL, 10); break;
         case 'f': full_n = strtoull(optarg, NULL, 10); break;
+        case 'k': k_arg = optarg; break;
+        case 'r': rounds_arg = optarg; break;
+        case 'g': ages_arg = optarg; break;
+        case 's': seed = strtoull(optarg, NULL, 10); break;
         default: usage();
         }
     }
@@ -1009,6 +1373,15 @@ int main(int argc, char **argv)
         return run_direct(algo, &ms, outdir);
     if (strcmp(mode, "classical") == 0)
         return run_classical(algo, &ms, outdir);
+    if (strcmp(mode, "evolve") == 0 || strcmp(mode, "evolve-direct") == 0)
+    {
+        szlist ks, rounds, ages;
+        parse_list(k_arg, &ks);
+        parse_list(rounds_arg, &rounds);
+        parse_list(ages_arg, &ages);
+        return strcmp(mode, "evolve") == 0 ? run_evolve(algo, &ms, &ks, &rounds, &ages, seed)
+                                           : run_evolve_direct(algo, &ms, &ks, &rounds, seed);
+    }
     usage();
     return 2;
 }

@@ -31,7 +31,7 @@ To watch these values being produced one by one, run `scripts/own.py` (see its h
 | File | Stage | Written by |
 |---|---|---|
 | `config.yaml` | 1 | `runner.cmd_run` (the loaded config) |
-| `environment.json` | 1 | `envinfo.collect` |
+| `environment.json` | 1 | `envinfo.collect`, `timer.calibrate` |
 | `preflight.json` | 2 | `preflight.run` |
 | `datasets/<ds>/zone.txt` | 3 | `workload.zone_text` |
 | `datasets/<ds>/<mode>/messages.bin`, `messages_sample.bin`, `manifest.csv` | 3 | `workload.signing_messages`, `write_messages` |
@@ -39,6 +39,8 @@ To watch these values being produced one by one, run `scripts/own.py` (see its h
 | `raw/<ds>__<mode>__t<n>.json.gz` | 4 | `runner.run_trials` (the JSON `mtlbench` printed) |
 | `artifacts/<ds>/<mode>/*.bin` | 4 | `mtlbench` (trial 0 only) |
 | `trials.csv` / `.parquet` | 4 | `runner.trial_metrics` |
+| `control.csv` / `.parquet` | 4 | `runner.cmd_run` (the A/A copy's rows, split from `trials`) |
+| `evolution.csv`, `evolution_direct.csv` (+ `.parquet`) | 4 | `evolution.run` (`mtlbench evolve`, `evolve-direct`) |
 | `ops.parquet` | 4 | `runner.op_rows` |
 | `responses.csv`, `workload.csv`, `cache.csv`, `sizes.csv` (+ `.parquet`) | 5 | `runner.analyse` |
 | `summary.json` | 6 | `runner.summarise` |
@@ -58,6 +60,8 @@ The configuration actually used, after command-line overrides (`--trials`, `--mo
 | `seed` | 20261005 | seeds zone content (`seed + dataset index`), trial order and the query workload |
 | `trials` / `warmup_trials` | 3 / 1 | measured trials per (dataset, mode); unmeasured warm-up runs per mode |
 | `modes` | all 5 | |
+| `control` | ed25519 | the mode that also runs as an A/A copy inside every trial; `null` = none |
+| `evolution` | k 1 and 10, 4 rounds each | evolving-zone experiment: `k` (changed RRsets per round), `rounds`, cached-ladder `ages`; absent = skipped |
 | `datasets` | small 20, medium 60, large 200 | names per zone |
 | `full_verify_sample` | 16 | MTL cold verifications per trial (`--full-verify`) |
 | `direct_sign_limit` | small none, medium 60, large 100 | SLH-DSA direct signs this many evenly spaced RRsets |
@@ -227,6 +231,25 @@ One row per individual timed library call, for distribution plots.
 | `index` | message index inside the trial |
 | `ns` | the time of that one call |
 
+### `evolution.csv` and `evolution_direct.csv` (the evolving zone, section 6.4 of the methodology)
+Written when the config has an `evolution:` block. Every row is `kind = measured`.
+
+`evolution.csv`: one row per trial, dataset, k and round (round 0 is the initial full-zone ladder).
+
+| Column | Meaning |
+|---|---|
+| `trial`, `dataset`, `k`, `round` | identifiers; `changed` is k (the whole zone in round 0) |
+| `leaf_count`, `rung_count`, `ladder_bytes` | the series after the round: leaves, rungs (the 1 bits of the leaf count) and the signed ladder's size |
+| `append_ns`, `ladder_sign_ns`, `ladder_verify_ns` | total time to append the changed leaves; the one SLH-DSA ladder signature; one ladder verification (what a resolver pays to take in the update) |
+| `condensed_extract_ns` | time to extract a fresh condensed signature for every RRset of the zone (a serving cost, not part of the update) |
+| `condensed_bytes_median`, `_max`, `_mean` | condensed signature size over the zone |
+| `tested_age_<a>`, `ok_age_<a>` | RRsets tested and RRsets whose fresh condensed signature verifies against the ladder `a` rounds old; empty when no ladder that old exists yet |
+| `stale_tested`, `stale_ok` | signatures issued when each leaf was created, and how many still verify against the newest ladder |
+| `rss_bytes`, `leaf_index_mismatch`, `exit_code` | signer memory; times the library disagreed with the leaf-index expectation (must be 0); harness exit code |
+
+`evolution_direct.csv`: one row per trial, k and round: `signed` (= k), `sign_ns` and `verify_ns` for signing and
+verifying the k changed RRsets with plain SLH-DSA.
+
 ---
 
 ## Stage 5 files
@@ -339,6 +362,7 @@ trials[dataset][mode].limited               signing sample used
 transmitted[dataset][mode][udp_limit]       dns_bytes, response_bytes, rrsig_signature_bytes, truncations,
                                             tcp_exchanges, mtl_full_fetches, transmitted_responses
 response_fit[dataset][mode][record_class]   fit_1232_pct, median_bytes   (default answers at 1232)
+evolution                                   checks_passed, update_cost[], coverage[], stale_min_share{}
 paired_ratios[]                             one row per dataset and metric: direct SLH-DSA / MTL taken per trial
                                             (ratio = median, ratio_lo, ratio_hi, coverage, extrapolated)
 ```
