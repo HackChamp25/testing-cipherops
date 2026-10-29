@@ -28,7 +28,7 @@ from pathlib import Path
 if __package__ in (None, ""):          # `python dashboard/live_lab/suite.py ...` from any folder
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from live_lab import driver
+from live_lab import benchmark_lock, driver
 
 SUITES = driver.SUITES_DIR
 BENCH_SIZES = (50, 500, 5000)         # data names in the dataset, as in the main Cipherops benchmark
@@ -150,7 +150,8 @@ def create(params: dict) -> tuple[str, Path]:
     Used by the dashboard (via ``start``) and by the command line. Refuses, under a lock, if anything else already
     owns the lab, so two launches can never run at once.
     """
-    with _start_lock():
+    with benchmark_lock.start_lock(), _start_lock():
+        benchmark_lock.require_free("live")  # one benchmark at a time, across both benchmark tiles
         live = running_suite()
         if live:
             raise driver.LabBusy(f"Benchmark {live['id']} is already {live['state']}.")

@@ -23,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-from live_lab import driver
+from live_lab import benchmark_lock, driver
 from live_lab import suite as _suite
 
 EVENT_PREFIX = "@@EVENT "
@@ -105,6 +105,7 @@ def start(h: driver.LabHandle, *, jobs: int, scenarios: list[str]) -> None:
     if is_running(h):
         raise RuntimeError("Signing is already running for this lab.")
     driver.require_no_suite()
+    benchmark_lock.require_free("sign")  # signing would share the CPU with an offline benchmark
     driver.require_no_build(h.stack)
     d = job_dir(h)
     d.mkdir(parents=True, exist_ok=True)

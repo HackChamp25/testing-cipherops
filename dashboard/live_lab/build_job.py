@@ -21,7 +21,7 @@ import sys
 import time
 from pathlib import Path
 
-from live_lab import driver
+from live_lab import benchmark_lock, driver
 
 ACTIVE_STATES = driver.ACTIVE_STATES
 
@@ -62,6 +62,7 @@ def mark_handled() -> None:
 def start(stack: str) -> None:
     """Launch the build as a detached worker. Returns at once."""
     driver.require_no_suite()
+    benchmark_lock.require_free("build")  # an offline benchmark must not share the CPU with a compile
     live = driver.active_build_stack()
     if live:
         raise driver.LabBusy(f"Images for {live} are already being built. Wait for them to finish or cancel first.")
