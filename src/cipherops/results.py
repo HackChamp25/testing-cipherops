@@ -80,6 +80,41 @@ def timing_table(trials: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+PAIRED_METRICS = {"sign_total_ns": "signing", "verify_warm_total_ns": "verification (warm)"}
+
+
+def paired_ratio_table(trials: pd.DataFrame, baseline: str, candidate: str,
+                       metrics: dict[str, str] | None = None) -> pd.DataFrame:
+    """Per-trial ratio baseline/candidate ("N times faster") with an interval, one row per dataset and metric.
+
+    Both modes ran inside the same trial, so the trials are paired. A capped direct SLH-DSA run is compared through
+    its extrapolated whole-zone total, and the row says so.
+    """
+    rows = []
+    for ds, g in trials.groupby("dataset", sort=False):
+        b, c = g[g["mode"] == baseline].set_index("trial"), g[g["mode"] == candidate].set_index("trial")
+        common = b.index.intersection(c.index)
+        if len(common) == 0:
+            continue
+        b, c = b.loc[common], c.loc[common]
+        for col, name in (metrics or PAIRED_METRICS).items():
+            def effective(frame: pd.DataFrame) -> tuple[pd.Series, bool]:
+                ext = col.replace("_ns", "_extrapolated_ns")
+                if ext in frame and frame[ext].notna().any():
+                    return frame[ext], True
+                return frame[col], False
+            bv, b_ext = effective(b)
+            cv, c_ext = effective(c)
+            r = stats.paired_ratio(bv, cv)
+            if r["n"] == 0:
+                continue
+            rows.append({"dataset": ds, "metric": name, "baseline": baseline, "candidate": candidate,
+                         "trials": r["n"], "ratio": r["median"], "ratio_lo": r["lo"], "ratio_hi": r["hi"],
+                         "coverage": r["coverage"], "extrapolated": b_ext or c_ext,
+                         "ratio_of_medians": float(bv.median() / cv.median())})
+    return pd.DataFrame(rows)
+
+
 def fit_table(responses: pd.DataFrame, udp_limit: int = 1232) -> pd.DataFrame:
     d = responses[(responses.variant == "default") & (responses.udp_limit == udp_limit)]
     return (d.groupby(["dataset", "mode", "record_class"])

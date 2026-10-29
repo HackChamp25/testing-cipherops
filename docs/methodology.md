@@ -190,8 +190,17 @@ there are too few trials. Its coverage depends only on the number of trials:
 
 With 5 trials the bracketed interval is therefore a 94% interval, not 95%,
 and the report says so (`stats.ci_label`). Use at least 6 trials if a 95%
-interval is required. Ratios such as "N times faster" are ratios of medians;
-read them together with the intervals of both medians.
+interval is required.
+
+**Paired ratios.** Modes are interleaved inside each trial, so the trials are
+paired: trial 3 of direct SLH-DSA and trial 3 of MTL saw the same machine
+state. A statement such as "N times faster" is therefore taken from the ratio
+computed **per trial** (`stats.paired_ratio`, `results.paired_ratio_table`).
+The report gives the median of those ratios with the same order-statistic
+interval. A slow trial that slows both modes alike leaves the ratio unchanged,
+so this interval is tighter and more honest than dividing two medians. When
+direct SLH-DSA signing is capped, the ratio uses its extrapolated whole-zone
+total and the table says so.
 
 ## 7. Transmitted bytes (directly measured at the DNS message level)
 

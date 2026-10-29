@@ -1,4 +1,4 @@
-"""Summary statistics and bootstrap confidence intervals."""
+"""Summary statistics and distribution-free confidence intervals for a few repeated trials."""
 
 from __future__ import annotations
 
@@ -66,3 +66,21 @@ def ci_label(n: int, confidence: float = 0.95) -> str:
     cov = median_ci_coverage(n, confidence)
     return f"{cov * 100:.0f}% CI of the median over {n} trials" + (
         "" if cov >= confidence else f" (below the {confidence * 100:.0f}% target: too few trials)")
+
+
+def paired_ratio(numerator, denominator, confidence: float = 0.95) -> dict:
+    """Median of the per-trial ratio numerator/denominator, with its order-statistic interval.
+
+    The two series come from the same trials (modes are interleaved inside each trial), so each trial gives one
+    ratio and the interval describes the ratio itself. This is tighter and more honest than dividing two medians,
+    whose separate intervals say nothing about how the ratio varies.
+    """
+    a = np.asarray(numerator, dtype=float)
+    b = np.asarray(denominator, dtype=float)
+    ok = ~np.isnan(a) & ~np.isnan(b) & (b > 0)
+    ratios = a[ok] / b[ok]
+    if ratios.size == 0:
+        return {"n": 0, "median": float("nan"), "lo": float("nan"), "hi": float("nan"), "coverage": 0.0}
+    lo, hi = median_ci(ratios, confidence)
+    return {"n": int(ratios.size), "median": float(np.median(ratios)), "lo": lo, "hi": hi,
+            "coverage": median_ci_coverage(int(ratios.size), confidence)}

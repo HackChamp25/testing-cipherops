@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from . import analytical, cache, dnswire, envinfo, preflight, stats
+from . import analytical, cache, dnswire, envinfo, preflight, results, stats
 from .codepoints import MODES, MTL_SECURITY_PARAMETER_N, SLH_DSA_SHA2_128S_SIG_BYTES
 from .harness import HARNESS, load_signatures, run_trial
 from .progress import log, stage
@@ -267,6 +267,8 @@ def summarise(trials: pd.DataFrame, frames: dict[str, pd.DataFrame]) -> dict:
                                           and g.tamper_all_rejected.all())
         entry["limited"] = bool(g.limited.any())
         out["trials"].setdefault(ds, {})[mk] = entry
+    if {"slh-dsa", "slh-dsa-mtl"} <= set(trials["mode"]):
+        out["paired_ratios"] = results.paired_ratio_table(trials, "slh-dsa", "slh-dsa-mtl").to_dict("records")
     wl = frames["workload"]
     for _, r in wl.iterrows():
         out["transmitted"].setdefault(r.dataset, {}).setdefault(r["mode"], {})[int(r.udp_limit)] = {

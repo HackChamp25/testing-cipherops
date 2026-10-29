@@ -221,6 +221,21 @@ def _fit_by_mode(run: results.Run, ds: str) -> pd.Series:
     return (f.fit_pct * f.responses).groupby(f["mode"]).sum() / f.responses.groupby(f["mode"]).sum()
 
 
+def fmt_ratio(r: pd.Series) -> str:
+    """'123× [118×, 130×]': median of the per-trial ratios and its interval."""
+    if r is None or pd.isna(r.ratio):
+        return "–"
+    digits = 0 if r.ratio >= 100 else (1 if r.ratio >= 10 else 2)
+    f = lambda v: f"{v:,.{digits}f}×"  # noqa: E731
+    return f"{f(r.ratio)} [{f(r.ratio_lo)}, {f(r.ratio_hi)}]"
+
+
+def _paired(run: results.Run, ds: str, metric: str) -> pd.Series | None:
+    t = results.paired_ratio_table(run.frames["trials"], "slh-dsa", "slh-dsa-mtl")
+    t = t[(t.dataset == ds) & (t.metric == metric)] if len(t) else t
+    return t.iloc[0] if len(t) else None
+
+
 def _headline(run: results.Run, timing: pd.DataFrame) -> list[str]:
     big = run.dataset_order[-1]
     if _pair(timing, big) is None:
@@ -230,10 +245,11 @@ def _headline(run: results.Run, timing: pd.DataFrame) -> list[str]:
     if measured:
         ds = measured[-1]
         d, m = _pair(timing, ds)
+        sp = _paired(run, ds, "signing")
         out += [
             f"- **Signing ({ds} zone, {int(m.dataset_rrsets):,} RRsets, fully measured).** MTL signed the zone in "
-            f"{ci(m, 'sign_total_ns')}; direct SLH-DSA took {ci(d, 'sign_total_ns')}. That is "
-            f"{d.sign_total_ns / m.sign_total_ns:,.0f} times faster (median, CI of the median in brackets).",
+            f"{ci(m, 'sign_total_ns')}; direct SLH-DSA took {ci(d, 'sign_total_ns')}. MTL was "
+            f"{fmt_ratio(sp)} faster (median of the per-trial ratios, interval in brackets).",
             f"- **Verification ({ds} zone, warm).** MTL took {fmt_seconds(m.verify_warm_total_ns)} for every RRSIG in "
             f"the zone; direct SLH-DSA took {fmt_seconds(d.verify_warm_total_ns)}.",
         ]
@@ -445,6 +461,19 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
     add("\n*Table 4: verification time. For MTL, \"cold\" means a full signature verified without a cached "
         "ladder; for other modes it is the median single-signature verification.*\n")
 
+    pr = results.paired_ratio_table(F["trials"], "slh-dsa", "slh-dsa-mtl")
+    if len(pr):
+        add("#### Paired ratios: direct SLH-DSA divided by MTL\n")
+        add("Every mode runs inside each trial, so each trial gives one ratio. The table shows the median of those "
+            "per-trial ratios and its distribution-free interval; it is what supports a statement such as "
+            "\"N times faster\".\n")
+        pr = pr.assign(order=pr.dataset.map({d: i for i, d in enumerate(run.dataset_order)})).sort_values(["metric", "order"])
+        add(md_table(pd.DataFrame({
+            "dataset": pr.dataset, "metric": pr.metric, "trials": pr.trials,
+            "ratio, median [interval]": [fmt_ratio(r) for _, r in pr.iterrows()],
+            "interval covers": [f"{c * 100:.0f}%" for c in pr.coverage],
+            "basis": ["extrapolated direct total" if e else "measured" for e in pr.extrapolated]})))
+        add("\n*Table 4b: paired per-trial ratios.*\n")
     add("### 5.3 Transmitted bytes\n")
     sz = F["trials"].groupby(["dataset", "mode"]).agg(sig_median=("signature_bytes_median", "median"),
                                                       sig_max=("signature_bytes_max", "max"),
