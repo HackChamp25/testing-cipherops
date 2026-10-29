@@ -110,6 +110,23 @@ def active_prepare_tags() -> list[str]:
             if effective_job_state(_read_json(d)).get("state") in ACTIVE_STATES]
 
 
+def build_status() -> dict:
+    """Status of the background image build ({} if none ever ran); a vanished worker reads as 'stopped'."""
+    return effective_job_state(_read_json(jobs_dir() / "_build" / "status.json"))
+
+
+def active_build_stack() -> str | None:
+    st = build_status()
+    return (st.get("stack") or "?") if st.get("state") in ACTIVE_STATES else None
+
+
+def require_no_build(stack: str | None = None) -> None:
+    """Refuse to start containers or sign with images that are still being built."""
+    live = active_build_stack()
+    if live and (stack is None or stack == live):
+        raise LabBusy(f"Images for {live} are still being built. Wait for the build to finish or cancel it first.")
+
+
 def remove_tree(path: Path, stack: str = "draft06") -> bool:
     """Delete a folder under ecosystem/, including files Docker created as root.
 
@@ -541,23 +558,19 @@ def status(h: LabHandle) -> dict:
 ECO_IMAGE_REPOS = ("cipherops-eco-nsd", "cipherops-eco-unbound", "cipherops-eco-tools")
 
 
-def build_images(h: LabHandle) -> str:
-    """Build cipherops-eco-{nsd,unbound,tools}:<stack> (same as eco.ps1 build).
+def build_command(stack: str) -> list[str]:
+    """``docker compose build`` for cipherops-eco-{nsd,unbound,tools}:<stack> (same as eco.ps1 build).
 
-    First build can take a long time (OpenSSL / liboqs / MTL from source).
+    A first build compiles OpenSSL, liboqs and MTL from source and takes a long time, so the dashboard runs
+    it as a background job (``build_job``).
     """
-    require_no_suite()
-    env_file = ECO / "stacks" / f"{h.stack}.env"
+    env_file = ECO / "stacks" / f"{stack}.env"
     compose = ECO / "docker" / "build.yml"
     if not env_file.is_file():
         raise RuntimeError(f"missing stack env {env_file}")
     if not compose.is_file():
         raise RuntimeError(f"missing {compose}")
-    cp = _run(
-        ["docker", "compose", "-f", str(compose), "--env-file", str(env_file), "build"],
-        timeout=None,
-    )
-    return (cp.stdout or "") + (cp.stderr or "")
+    return ["docker", "compose", "-f", str(compose), "--env-file", str(env_file), "build"]
 
 
 def pull_images(h: LabHandle, registry: str) -> str:
@@ -566,6 +579,7 @@ def pull_images(h: LabHandle, registry: str) -> str:
     Expects remote tags like ``{registry}/cipherops-eco-nsd:{stack}`` (and unbound, tools).
     """
     require_no_suite()
+    require_no_build()
     registry = (registry or "").strip().rstrip("/")
     if not registry:
         raise RuntimeError("registry is empty — set a host like ghcr.io/org/cipherops")
@@ -887,6 +901,7 @@ def _reclaim_fixed_lab_names() -> str:
 
 def up(h: LabHandle) -> str:
     require_no_suite()
+    require_no_build(h.stack)
     require_not_signing(h)
     stopped = stop_other_labs(h)
     # Own project may also have exited containers holding names after a failed up

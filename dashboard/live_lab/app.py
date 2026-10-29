@@ -27,12 +27,13 @@ SUITES_DIR = ECO_DIR / "results" / "suites"
 sys.path.insert(0, str(ROOT / "dashboard"))
 
 from live_lab import compare, decode, driver  # noqa: E402
-from live_lab import prepare_job, prepare_story  # noqa: E402
+from live_lab import build_job, prepare_job, prepare_story  # noqa: E402
 from live_lab import suite as suite_mod  # noqa: E402
 
 compare = importlib.reload(compare)
 decode = importlib.reload(decode)
 driver = importlib.reload(driver)
+build_job = importlib.reload(build_job)
 prepare_story = importlib.reload(prepare_story)
 suite_mod = importlib.reload(suite_mod)
 prepare_job = importlib.reload(prepare_job)  # after suite_mod: it uses the suite's process helpers
@@ -664,6 +665,26 @@ def _finish_prepare_job(h: driver.LabHandle) -> None:
     st.sidebar.success(f"Done · {secs:.0f}s")
 
 
+def _finish_build_job(h: driver.LabHandle) -> None:
+    """Take over a build that has just ended: log the result in the Activity log, once (``handled`` is stored)."""
+    stt = build_job.status()
+    state = stt.get("state")
+    if state not in ("done", "failed", "stopped") or stt.get("handled"):
+        return
+    build_job.mark_handled()
+    log = build_job.log_text(8000)
+    st.session_state.last_log = log
+    _log_chunks(log, phase="build", source="compose", title="build")
+    secs = float(stt.get("finished") or time.time()) - float(stt.get("started") or time.time())
+    if state == "done":
+        activity("ok", f"Build done ({secs:.0f}s)", f"Image set {stt.get('stack')}", phase="build", source="compose", h=h)
+        st.sidebar.success(f"Images built · {secs:.0f}s")
+    else:
+        msg = str(stt.get("error") or "The build did not finish.")[-2000:]
+        st.sidebar.error(msg[:600])
+        activity("err", "Build failed", msg, phase="build", source="compose", h=h)
+
+
 def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
     _sidebar_brand("setup")
     st.sidebar.markdown("### Setup")
@@ -732,6 +753,8 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
     _hint("Green means ready. Yellow means found on disk from an earlier session.")
 
     # —— Step 1: images ——
+    _finish_build_job(h)
+    building = build_job.is_running()
     st.sidebar.markdown(_step_label(1, "Images", "done" if r["images"] else "none"))
     _hint("Get the DNS server and tooling containers.")
     img_mode = sb(st.sidebar.radio, "image_mode", "Build locally", "Image source",
@@ -741,7 +764,7 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
             st.sidebar.text_input, "registry", "", "Registry", placeholder="ghcr.io/your-org/cipherops",
             help="Pre-built images named cipherops-eco-nsd / unbound / tools.",
         )
-        if st.sidebar.button("Pull images", key="btn_pull", width="stretch"):
+        if st.sidebar.button("Pull images", key="btn_pull", width="stretch", disabled=bool(bench_busy or building)):
             activity("step", "Pull images", reg, phase="build", source="compose", h=h)
             with st.spinner("Pulling…"):
                 try:
@@ -757,20 +780,16 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
                     activity("err", "Pull failed", str(e)[:2000], phase="build", source="compose", h=h)
             st.rerun()
     else:
-        if st.sidebar.button("Build images", key="btn_build", width="stretch", disabled=bool(bench_busy)):
-            activity("step", "Build images", "", phase="build", source="compose", h=h)
-            with st.spinner("Building…"):
-                try:
-                    t0 = time.perf_counter()
-                    log = driver.build_images(h)
-                    secs = time.perf_counter() - t0
-                    st.session_state.last_log = log[-8000:]
-                    _log_chunks(log, phase="build", source="compose", title="build")
-                    activity("ok", f"Build done ({secs:.0f}s)", "", phase="build", source="compose", h=h)
-                    st.sidebar.success(f"Done · {secs:.0f}s")
-                except Exception as e:  # noqa: BLE001
-                    st.sidebar.error(str(e)[:600])
-                    activity("err", "Build failed", str(e)[:2000], phase="build", source="compose", h=h)
+        if building:
+            _hint("Building in the background. The log is on the Setup page; you can keep using the dashboard.")
+        if st.sidebar.button("Build images" if not building else "Building…", key="btn_build", width="stretch",
+                             disabled=bool(bench_busy or building)):
+            activity("step", "Build images", f"Image set {h.stack}", phase="build", source="compose", h=h)
+            try:
+                build_job.start(h.stack)  # returns at once; Setup shows the log live
+            except Exception as e:  # noqa: BLE001
+                st.sidebar.error(str(e)[:600])
+                activity("err", "Build failed to start", str(e)[:2000], phase="build", source="compose", h=h)
             st.rerun()
 
     # —— Step 2: prepare ——
@@ -782,7 +801,7 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
     if signing:
         _hint("Signing is running. Watch it live in Setup.")
     if st.sidebar.button("Prepare", key="btn_prep", width="stretch",
-                         disabled=not sc or bool(shape_errors) or signing or bool(bench_busy)):
+                         disabled=not sc or bool(shape_errors) or signing or bool(bench_busy) or building):
         _apply_ui_config(h)
         jobs = int(cfg("jobs", 2))
         scen_txt = ", ".join(sc)
@@ -803,7 +822,7 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
     if not can_start:
         _hint("Start stays off until Prepare has signed this zone size (compose + manifests on disk).")
     b3a, b3b = st.sidebar.columns(2)
-    if b3a.button("Start", key="btn_up", width="stretch", disabled=not can_start or bool(bench_busy or signing)):
+    if b3a.button("Start", key="btn_up", width="stretch", disabled=not can_start or bool(bench_busy or signing or building)):
         if not h.prepared():
             st.sidebar.error("Run Prepare first — there is nothing signed to start for this lab.")
             activity("err", "Start blocked", "Lab is not prepared", phase="compose", source="compose", h=h)
@@ -1006,7 +1025,7 @@ def sidebar_benchmark(h: driver.LabHandle, stt: dict) -> None:
         st.sidebar.button("Restore defaults", on_click=_restore_workload, key="btn_restore_wl",
                           width="stretch")
 
-    ready = bool(sizes and sc and nets) and r["images"] and not live
+    ready = bool(sizes and sc and nets) and r["images"] and not live and not build_job.is_running()
     if not r["images"]:
         st.sidebar.warning("Build the images first (Setup, step 1).")
     if r["running"] and not live:
@@ -1268,6 +1287,29 @@ def _prepare_live_body(h: driver.LabHandle) -> None:
         st.rerun()
 
 
+@st.fragment(run_every=2.0)
+def _build_live_body() -> None:
+    """Polls the image build every two seconds and shows its log. Hands over when it ends."""
+    job = build_job.status()
+    if job.get("state") not in build_job.ACTIVE_STATES:
+        st.rerun()  # whole page: the sidebar logs the result
+        return
+    elapsed = time.time() - float(job.get("started") or time.time())
+    st.progress(0.0, text=f"Building images for {job.get('stack')} · {_clock(elapsed)} elapsed")
+    st.caption("A first build compiles OpenSSL, liboqs, MTL, NSD and Unbound from source and can take tens of "
+               "minutes. Later builds reuse Docker's cache and take seconds. You can leave this page.")
+    st.code(build_job.log_text(5000) or "(starting…)", language="text")
+    if st.button("Cancel build", key="btn_build_cancel"):
+        build_job.cancel()
+        activity("info", "Build cancelled", "", phase="build", source="compose")
+        st.rerun()
+
+
+def build_live_panel() -> None:
+    st.markdown("### Building images")
+    _build_live_body()
+
+
 def prepare_live_panel(h: driver.LabHandle) -> None:
     st.markdown("### Signing live")
     _prepare_live_body(h)
@@ -1401,6 +1443,9 @@ def setup_results(h: driver.LabHandle) -> None:
 
 def setup_page(h: driver.LabHandle, stt: dict) -> None:
     _page_header("setup", h, stt)
+    if build_job.is_running():
+        build_live_panel()
+        return
     if prepare_job.is_running(h):
         # Signing is in progress: show it live. The other tabs describe the previous Prepare, so they
         # wait until it ends (the page reruns by itself and opens the replay).

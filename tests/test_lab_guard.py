@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "dashboard"))
 sys.path.insert(0, str(ROOT / "ecosystem" / "src"))
 
-from live_lab import driver, prepare_job as pj, suite  # noqa: E402
+from live_lab import build_job, driver, prepare_job as pj, suite  # noqa: E402
 
 
 @pytest.fixture
@@ -123,7 +123,7 @@ def test_stale_start_lock_is_reclaimed(eco):
     lambda h: driver.activate(h, "mtl"),
     lambda h: driver.probe(h, "a.test"),
     lambda h: driver.dig(h, "dig a.test"),
-    lambda h: driver.build_images(h),
+    lambda h: build_job.start("draft06"),
     lambda h: driver.pull_images(h, "reg.example"),
     lambda h: driver.clear_demo_data(h, work=True),
     lambda h: driver.clear_demo_data(h, suites=True),
@@ -235,3 +235,85 @@ def test_remove_tree_refuses_paths_outside_ecosystem(eco, tmp_path_factory, monk
     monkeypatch.setattr(shutil, "rmtree", lambda *a, **k: None)
     assert driver.remove_tree(outside) is False
     assert calls == []
+
+
+# ───────────── image build runs as a background job ─────────────
+
+def _build_status(root, **st):
+    d = root / "jobs" / "_build"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "status.json").write_text(json.dumps(st), encoding="utf-8")
+
+
+def test_a_second_build_cannot_start_while_one_runs(eco):
+    root, _ = eco
+    _build_status(root, state="starting", stack="latest", started=time.time())
+    assert build_job.is_running()
+    with pytest.raises(driver.LabBusy):
+        build_job.start("draft06")
+
+
+def test_a_build_that_vanished_is_not_running(eco, monkeypatch):
+    root, _ = eco
+    _build_status(root, state="running", stack="latest", pid=4242, started=time.time())
+    monkeypatch.setattr(driver, "pid_alive", lambda pid: False)
+    assert not build_job.is_running()
+    assert build_job.status()["state"] == "stopped"
+
+
+def test_start_launches_a_detached_worker_and_returns(eco, monkeypatch):
+    root, _ = eco
+    (root / "stacks").mkdir()
+    (root / "stacks" / "draft06.env").write_text("STACK=draft06\n", encoding="utf-8")
+    launched = []
+    monkeypatch.setattr(build_job.subprocess, "Popen", lambda *a, **k: launched.append(a))
+    build_job.start("draft06")
+    assert launched and build_job.status()["state"] == "starting" and build_job.is_running()
+
+
+def test_up_and_signing_wait_for_a_build_of_the_same_stack(eco):
+    root, calls = eco
+    h = _handle(root)
+    _build_status(root, state="starting", stack=h.stack, started=time.time())
+    with pytest.raises(driver.LabBusy):
+        driver.up(h)
+    with pytest.raises(driver.LabBusy):
+        pj.start(h, jobs=1, scenarios=["mtl"])
+    assert calls == []
+    _build_status(root, state="starting", stack="some-other-stack", started=time.time())
+    driver.require_no_build(h.stack)  # a build of another stack does not block this one
+
+
+def test_suite_cannot_start_while_images_build(eco):
+    root, _ = eco
+    _build_status(root, state="starting", stack="latest", started=time.time())
+    with pytest.raises(driver.LabBusy):
+        suite.start({"sizes": [20], "label": "x"})
+
+
+class _FakeProc:
+    def __init__(self, lines, code):
+        self.stdout, self._code = iter(lines), code
+
+    def poll(self):
+        return self._code
+
+    def wait(self):
+        return self._code
+
+
+@pytest.mark.parametrize("code,state", [(0, "done"), (1, "failed")])
+def test_worker_streams_the_log_and_records_the_result(eco, monkeypatch, code, state):
+    root, _ = eco
+    (root / "stacks").mkdir()
+    (root / "docker").mkdir()
+    (root / "stacks" / "draft06.env").write_text("STACK=draft06\n", encoding="utf-8")
+    (root / "docker" / "build.yml").write_text("services: {}\n", encoding="utf-8")
+    (root / "jobs" / "_build").mkdir(parents=True)
+    rc = build_job.run({"stack": "draft06", "started": time.time()},
+                       popen=lambda *a, **k: _FakeProc(["#1 step one\n", "#2 step two\n"], code))
+    st = build_job.status()
+    assert st["state"] == state and st["returncode"] == code and rc == (0 if code == 0 else 1)
+    assert "#2 step two" in build_job.log_text() and build_job.log_text().startswith("$ docker compose")
+    if code:
+        assert "exited with 1" in st["error"]
