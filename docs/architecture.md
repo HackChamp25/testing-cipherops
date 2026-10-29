@@ -247,7 +247,8 @@ before any numbers are produced we check:
 | Verisign's own tests | `reference_unit_tests()` | their `mtltest` suite passes (89 tests) |
 | Fixture scheme | `reference_vector_scheme()` | which algorithm the bundled test vectors cover (informational) |
 | Verisign's tools | `reference_tools_roundtrip()` | `mtlkeygen` → `mtlsign` → `mtlverify` works, tampered message rejected |
-| Our harness | `harness_smoke()` | every mode signs/verifies a tiny 6-name zone, tampering rejected |
+| Our harness | `harness_smoke()` | every mode signs/verifies a tiny 6-name zone; every negative case rejected |
+| Independent verifiers | `mtl_reference_tool_check()`, `slh_dsa_openssl_check()` | `mtlverify` and OpenSSL accept the harness's signature bytes and reject a changed message |
 
 Result goes to `preflight.json`. If the verdict is not `GO`, the run stops
 (exit code 3).
@@ -640,7 +641,7 @@ helpers (`NSD`, `_udp`, `_tcp`, `signed_zone_text`, `load_run_zone`) that
 | `test_dnswire.py` | Positive answers carry an RRSIG; MTL full adds the type byte and ladder; NXDOMAIN has SOA + NSEC3 proof with exactly one full signature; UDP/TC/TCP byte accounting; MTL fetches the ladder once per workload. |
 | `test_analytical.py` | Formula values. |
 | `test_cache.py` | Measured cache counts exact signature bytes; MTL counts the ladder once; analytical rows per family. |
-| `test_harness.py` | (Docker only) Real signing in every mode: all signatures verify, tampering rejected, SLH-DSA signature is 7,856 B, MTL sizes within draft bounds, public key lengths match the DNSKEY field, artifacts round-trip. |
+| `test_harness.py` | (Docker only) Real signing in every mode: all signatures verify, every negative check rejected (including cross-message, wrong key, truncation), ECDSA wire form verifies, `mtlverify` and OpenSSL accept the artifacts, SLH-DSA signature is 7,856 B, MTL sizes within draft bounds, public key lengths match the DNSKEY field, artifacts round-trip. |
 | `test_crosscheck.py` | Signed zone file parses, every RRset signed; (Docker) NSD serves it. |
 | `test_dashboard.py` | Dashboard renders for real runs. |
 

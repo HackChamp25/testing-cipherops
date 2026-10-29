@@ -362,7 +362,10 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
         "2. Its own unit tests and test vectors pass.\n"
         "3. Its key-generation, signing and verification tools round-trip with SLH-DSA-SHA2-128s-MTL, and a "
         "tampered message is rejected.\n"
-        "4. Every harness mode verifies its own output and rejects tampering.\n\n"
+        "4. Every harness mode verifies its own output and rejects tampering, wrong keys, truncated signatures "
+        "and signatures presented for another message.\n"
+        "5. The harness output is verified by a different program: `mtlverify` for MTL and OpenSSL for the "
+        "non-MTL SLH-DSA signatures (an interoperability check, not a known-answer test).\n\n"
         "The run aborts with `NO-GO` otherwise. The outcome of each check is listed in Appendix C.\n")
     add("### 4.3 Workloads\n")
     add("Each dataset is a deterministic synthetic zone `bench.example.`:\n\n"
