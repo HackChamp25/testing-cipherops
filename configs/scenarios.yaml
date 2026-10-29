@@ -17,6 +17,11 @@ modes:
   - ecdsa-p256
   - rsa-2048
 
+# A/A control: this mode also runs as a second, identical copy inside every trial. The true ratio between the two
+# is 1, so any difference measured is the noise floor; a difference between two modes smaller than that band is
+# not reported. Use the fastest mode (ed25519), where the clock matters most. null = no control.
+control: ed25519
+
 # Three dataset sizes. Each data name holds one RRset (60% small A/AAAA,
 # 30% medium MX/AAAA sets, 10% large 1-2 KB TXT); the zone also has
 # SOA, NS, DNSKEY, NSEC3PARAM and one NSEC3 per name. RRsets = 2 * n_names + 5.

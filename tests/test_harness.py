@@ -109,3 +109,15 @@ def test_slh_dsa_signatures_verify_with_openssl():
     r = crossverify.slh_dsa_with_openssl()
     assert r["harness_exit"] == 0 and r["checked"] > 0
     assert r["failed"] == [] and r["tampered_rejected"]
+
+
+def test_calibration_reports_a_plausible_clock_and_both_timings():
+    from cipherops import timer
+    from cipherops.harness import run_calibrate
+
+    s = timer.summarise(run_calibrate(MODES["slh-dsa-mtl"].harness_algo))
+    er = s["empty_region"]
+    assert 0 < er["median_ns"] < 5_000 and er["min_ns"] <= er["median_ns"] <= er["p99_ns"]
+    assert set(s["operations"]) == {"ed25519_verify", "mtl_condensed_verify"}
+    for op in s["operations"].values():
+        assert op["calls"] == 1000 and op["per_call_median_ns"] > 0 and op["batch_per_call_median_ns"] > 0

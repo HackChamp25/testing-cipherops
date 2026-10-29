@@ -8,6 +8,7 @@
  *   mtl        SLH-DSA-SHA2-128s in MTL mode via the reference library
  *   direct     the same SLH-DSA parameter set signing every message (liboqs)
  *   classical  ed25519 | ecdsa-p256 | rsa-2048 baseline (OpenSSL EVP)
+ *   calibrate  timer overhead and resolution, per-call versus batch timing of fast operations
  *
  * Message file: u32be count, then count x (u32be length, bytes).
  * Result: one JSON object on stdout. Signature artifacts go to --out-dir.
@@ -784,13 +785,182 @@ static int run_classical(const char *alg, msgset *ms, const char *outdir)
     return (fail || fail_wire || !negs_ok(neg, nn)) ? 1 : 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* Timer calibration: what the clock itself costs and resolves          */
+/* ------------------------------------------------------------------ */
+
+static int cmp_u64(const void *a, const void *b)
+{
+    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+    return x < y ? -1 : (x > y);
+}
+
+typedef bool (*op_fn)(void *arg);
+
+/* Times one fast operation two ways: every call alone, and all calls in one region. */
+static void calibrate_op(const char *name, op_fn fn, void *arg, size_t calls, size_t batches, bool comma)
+{
+    for (size_t i = 0; i < 200; i++)
+        if (!fn(arg))
+            die("calibration operation failed");
+    uint64_t *each = calloc(calls, sizeof(uint64_t));
+    uint64_t *batch = calloc(batches, sizeof(uint64_t));
+    for (size_t i = 0; i < calls; i++)
+    {
+        uint64_t t0 = now_ns();
+        bool ok = fn(arg);
+        each[i] = now_ns() - t0;
+        if (!ok)
+            die("calibration operation failed");
+    }
+    for (size_t b = 0; b < batches; b++)
+    {
+        bool ok = true;
+        uint64_t t0 = now_ns();
+        for (size_t i = 0; i < calls; i++)
+            ok &= fn(arg);
+        batch[b] = now_ns() - t0;
+        if (!ok)
+            die("calibration operation failed");
+    }
+    printf("\"%s\":{\"calls\":%zu,", name, calls);
+    json_u64_array("per_call_ns", each, calls, true);
+    json_u64_array("batch_total_ns", batch, batches, false);
+    printf("}%s", comma ? "," : "");
+    free(each);
+    free(batch);
+}
+
+typedef struct
+{
+    EVP_PKEY *key;
+    uint8_t sig[128];
+    size_t sig_len;
+    uint8_t msg[200];
+} ed_op;
+
+static bool ed_verify_op(void *p)
+{
+    ed_op *o = p;
+    return classical_verify(o->key, NULL, o->sig, o->sig_len, o->msg, sizeof o->msg);
+}
+
+typedef struct
+{
+    MTLLIB_CTX *vctx;
+    MTLLIB_BUFFER *msg, *sig, *ladder;
+} mtl_op;
+
+static bool mtl_cond_verify_op(void *p)
+{
+    mtl_op *o = p;
+    return mtllib_verify(o->vctx, o->msg, o->sig, o->ladder, NULL) == MTLLIB_OK;
+}
+
+static int run_calibrate(const char *algo)
+{
+    const size_t samples = 200000, calls = 1000, batches = 30;
+    uint64_t *d = calloc(samples, sizeof(uint64_t));
+    uint64_t *step = calloc(samples, sizeof(uint64_t));
+    now_ns();
+    uint64_t prev = now_ns();
+    size_t zero = 0;
+    for (size_t i = 0; i < samples; i++)
+    {
+        uint64_t a = now_ns();
+        uint64_t b = now_ns();
+        d[i] = b - a;
+        step[i] = a - prev;
+        prev = b;
+        zero += (d[i] == 0);
+    }
+    qsort(d, samples, sizeof(uint64_t), cmp_u64);
+    qsort(step, samples, sizeof(uint64_t), cmp_u64);
+    double mean = 0;
+    for (size_t i = 0; i < samples; i++)
+        mean += (double)d[i];
+    mean /= (double)samples;
+    uint64_t resolution = 0;
+    for (size_t i = 0; i < samples && resolution == 0; i++)
+        resolution = step[i];
+    struct timespec res;
+    clock_getres(CLOCK_MONOTONIC_RAW, &res);
+
+    printf("{\"mode\":\"calibrate\",\"clock\":\"CLOCK_MONOTONIC_RAW\",\"clock_getres_ns\":%llu,"
+           "\"smallest_observed_step_ns\":%llu,",
+           (unsigned long long)((uint64_t)res.tv_sec * 1000000000ull + (uint64_t)res.tv_nsec),
+           (unsigned long long)resolution);
+    printf("\"empty_region\":{\"samples\":%zu,\"min_ns\":%llu,\"median_ns\":%llu,\"p99_ns\":%llu,\"max_ns\":%llu,"
+           "\"mean_ns\":%.2f,\"zero_fraction\":%.6f},",
+           samples, (unsigned long long)d[0], (unsigned long long)d[samples / 2],
+           (unsigned long long)d[(size_t)(0.99 * (double)(samples - 1))], (unsigned long long)d[samples - 1],
+           mean, (double)zero / (double)samples);
+    free(d);
+    free(step);
+
+    printf("\"operations\":{");
+
+    ed_op ed;
+    memset(&ed, 0, sizeof ed);
+    for (size_t i = 0; i < sizeof ed.msg; i++)
+        ed.msg[i] = (uint8_t)(i * 7 + 1);
+    ed.key = classical_keygen("ed25519");
+    if (ed.key == NULL)
+        die("ed25519 keygen failed");
+    ed.sig_len = sizeof ed.sig;
+    EVP_MD_CTX *mctx = EVP_MD_CTX_new();
+    if (EVP_DigestSignInit(mctx, NULL, NULL, NULL, ed.key) != 1 ||
+        EVP_DigestSign(mctx, ed.sig, &ed.sig_len, ed.msg, sizeof ed.msg) != 1)
+        die("ed25519 sign failed");
+    EVP_MD_CTX_free(mctx);
+    calibrate_op("ed25519_verify", ed_verify_op, &ed, calls, batches, true);
+    EVP_PKEY_free(ed.key);
+
+    MTLLIB_CTX *ctx = NULL, *vctx = NULL;
+    if (mtllib_key_new((char *)algo, &ctx) != MTLLIB_OK)
+        die("mtllib_key_new failed");
+    uint8_t msg[200];
+    for (size_t i = 0; i < sizeof msg; i++)
+        msg[i] = (uint8_t)(i * 5 + 3);
+    MTLLIB_BUFFER *mb = NULL, *ladder = NULL, *cb = NULL, *pk = NULL;
+    MTL_HANDLE *h = NULL;
+    mtllib_buffer_initialize(&mb, sizeof msg, msg);
+    if (mtllib_sign_append(ctx, mb, &h) != MTLLIB_OK)
+        die("mtllib_sign_append failed");
+    mtllib_buffer_initialize(&ladder, mtllib_sign_get_signed_ladder_length(ctx), NULL);
+    if (mtllib_sign_get_signed_ladder(ctx, ladder) != MTLLIB_OK)
+        die("mtllib_sign_get_signed_ladder failed");
+    mtllib_buffer_initialize(&cb, mtllib_sign_get_condensed_sig_length(ctx, h), NULL);
+    if (mtllib_sign_get_condensed_sig(ctx, h, cb) != MTLLIB_OK)
+        die("mtllib_sign_get_condensed_sig failed");
+    mtllib_buffer_initialize(&pk, mtllib_pubkey_to_buffer_length(ctx), NULL);
+    if (mtllib_pubkey_to_buffer(ctx, pk) != MTLLIB_OK ||
+        mtllib_pubkey_from_buffer((char *)algo, &vctx, pk, mtllib_buffer_data_ptr(cb) + 2) != MTLLIB_OK)
+        die("cannot build the verifier");
+    if (mtllib_verify_signed_ladder(vctx, ladder) != MTLLIB_OK)
+        die("ladder does not verify");
+    mtl_op mo = {vctx, mb, cb, ladder};
+    calibrate_op("mtl_condensed_verify", mtl_cond_verify_op, &mo, calls, batches, false);
+    printf("}}\n");
+
+    mtllib_sign_free_handle(&h);
+    mtllib_buffer_free(mb);
+    mtllib_buffer_free(ladder);
+    mtllib_buffer_free(cb);
+    mtllib_buffer_free(pk);
+    mtllib_key_free(vctx);
+    mtllib_key_free(ctx);
+    return 0;
+}
+
 static void usage(void)
 {
     fprintf(stderr,
             "usage: mtlbench MODE --messages FILE [--algo NAME] [--out-dir DIR] [--limit N] [--full-verify N]\n"
             "  MODE mtl        --algo SLH-DSA-SHA2-128s-MTL-SHA2-128\n"
             "  MODE direct     --algo SLH-DSA-PURE-SHA2-128s (liboqs name)\n"
-            "  MODE classical  --algo ed25519|ecdsa-p256|rsa-2048\n");
+            "  MODE classical  --algo ed25519|ecdsa-p256|rsa-2048\n"
+            "  MODE calibrate  [--algo MTL-NAME]  timer overhead and resolution; per-call vs batch timing\n");
     exit(2);
 }
 
@@ -823,6 +993,8 @@ int main(int argc, char **argv)
         default: usage();
         }
     }
+    if (strcmp(mode, "calibrate") == 0)
+        return run_calibrate(algo != NULL ? algo : "SLH-DSA-SHA2-128s-MTL-SHA2-128");
     if (messages == NULL || algo == NULL)
         usage();
 

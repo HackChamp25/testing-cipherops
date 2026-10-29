@@ -230,6 +230,13 @@ def fmt_ratio(r: pd.Series) -> str:
     return f"{f(r.ratio)} [{f(r.ratio_lo)}, {f(r.ratio_hi)}]"
 
 
+def _floor(run: results.Run) -> pd.DataFrame:
+    mode = run.config.get("control")
+    if not mode or "control" not in run.frames:
+        return pd.DataFrame()
+    return results.noise_floor_table(run.frames["trials"], run.frames["control"], mode)
+
+
 def _paired(run: results.Run, ds: str, metric: str) -> pd.Series | None:
     t = results.paired_ratio_table(run.frames["trials"], "slh-dsa", "slh-dsa-mtl")
     t = t[(t.dataset == ds) & (t.metric == metric)] if len(t) else t
@@ -272,6 +279,41 @@ def _headline(run: results.Run, timing: pd.DataFrame) -> list[str]:
         f"full-signature fetch.",
     ]
     return out
+
+
+def _noise_section(run: results.Run, floor: pd.DataFrame) -> str:
+    out: list[str] = []
+    if not floor.empty:
+        mode = run.config["control"]
+        out.append(f"#### Measurement noise: the A/A control\n\n"
+                   f"`{mode}` ran twice inside every trial, on the same input, as if it were two different modes. "
+                   "The true ratio is 1, so the table below is the measurement's own noise. A difference between "
+                   "two modes that is smaller than this band must not be reported as a difference.\n")
+        fl = floor.assign(order=floor.dataset.map({d: i for i, d in enumerate(run.dataset_order)})).sort_values(["metric", "order"])
+        out.append(md_table(pd.DataFrame({
+            "dataset": fl.dataset, "metric": fl.metric, "trials": fl.trials,
+            "A/A ratio, median [interval]": [f"{r.ratio:.3f} [{r.ratio_lo:.3f}, {r.ratio_hi:.3f}]" for _, r in fl.iterrows()],
+            "noise band": [f"±{b * 100:.1f}%" for b in fl.band]})))
+        out.append("\n*Table 4c: A/A control (one mode against its own copy).*\n")
+    tm = run.environment.get("timer") or {}
+    if tm.get("operations"):
+        er = tm["empty_region"]
+        out.append("#### Measurement noise: the timer\n\n"
+                   f"Every library call is timed with `{tm['clock']}`. An empty timed region cost "
+                   f"{er['median_ns']} ns (median; p99 {er['p99_ns']} ns), and the smallest step the clock was seen "
+                   f"to take is {tm['smallest_observed_step_ns']} ns. The two fastest operations were timed both "
+                   "one call at a time (as in the benchmark) and as 1,000 calls in one region divided by 1,000:\n")
+        rows = [{"operation": name.replace("_", " "), "per call, median": fmt_seconds(o["per_call_median_ns"]),
+                 "batch of 1,000, per call": fmt_seconds(o["batch_per_call_median_ns"]),
+                 "difference": f"{o['per_call_vs_batch_pct']:+.1f}%",
+                 "timer cost as share of the operation": f"{o['timer_share_of_operation'] * 100:.1f}%"}
+                for name, o in tm["operations"].items()]
+        out.append(md_table(pd.DataFrame(rows)))
+        verdict = ("Per-call timing is reliable for these operations (timer cost at most "
+                   f"{tm['max_timer_share'] * 100:.0f}% of the operation)." if tm["per_call_timing_reliable"]
+                   else "**The timer cost is a large share of the fastest operation; read their per-call times with care.**")
+        out.append(f"\n*Table 4d: timer calibration.* {verdict}\n")
+    return "\n".join(out)
 
 
 def _discussion(run: results.Run) -> str:
@@ -418,6 +460,9 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
         f"verifier is built from the exported public key only.\n"
         f"- **MTL cold verification** = full signature without a cached ladder, on "
         f"{cfg['full_verify_sample']} RRsets.\n"
+        f"- **Noise.** The clock's own cost and resolution are measured at the start of the run (Table 4d)"
+        + (f", and `{cfg['control']}` runs twice inside every trial as an A/A control (Table 4c)."
+           if cfg.get("control") else ".") + "\n"
         f"- **Correctness.** A trial counts only if every signature verifies and tampered messages, "
         f"signatures and ladders are rejected.\n"
         f"- **Statistics.** We report the median across trials with a distribution-free confidence interval "
@@ -461,7 +506,8 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
     add("\n*Table 4: verification time. For MTL, \"cold\" means a full signature verified without a cached "
         "ladder; for other modes it is the median single-signature verification.*\n")
 
-    pr = results.paired_ratio_table(F["trials"], "slh-dsa", "slh-dsa-mtl")
+    floor = _floor(run)
+    pr = results.paired_ratio_table(F["trials"], "slh-dsa", "slh-dsa-mtl", floor=floor)
     if len(pr):
         add("#### Paired ratios: direct SLH-DSA divided by MTL\n")
         add("Every mode runs inside each trial, so each trial gives one ratio. The table shows the median of those "
@@ -472,8 +518,12 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
             "dataset": pr.dataset, "metric": pr.metric, "trials": pr.trials,
             "ratio, median [interval]": [fmt_ratio(r) for _, r in pr.iterrows()],
             "interval covers": [f"{c * 100:.0f}%" for c in pr.coverage],
-            "basis": ["extrapolated direct total" if e else "measured" for e in pr.extrapolated]})))
+            "basis": ["extrapolated direct total" if e else "measured" for e in pr.extrapolated],
+            **({"against the A/A noise floor": [
+                ("clearly outside" if a else "**not distinguishable from noise**") + f" (±{b * 100:.1f}%)"
+                for a, b in zip(pr.above_noise, pr.noise_band)]} if "above_noise" in pr else {})})))
         add("\n*Table 4b: paired per-trial ratios.*\n")
+    add(_noise_section(run, floor))
     add("### 5.3 Transmitted bytes\n")
     sz = F["trials"].groupby(["dataset", "mode"]).agg(sig_median=("signature_bytes_median", "median"),
                                                       sig_max=("signature_bytes_max", "max"),

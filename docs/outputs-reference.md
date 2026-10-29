@@ -79,6 +79,7 @@ Proof of what the numbers were measured on.
 | `software.mtl_reference_commit`, `mtl_reference_cflags` | `7cef0191…` (profile `latest`), `-fPIC -Wall -Wextra -O2` |
 | `software.harness_sha256` | hash of the compiled `mtlbench`, so a changed harness is visible |
 | `software.python_packages` | dnspython, numpy, pandas, … versions |
+| `timer` | timer calibration written at the start of the run (`timer.calibrate`, from `mtlbench calibrate`): the cost of an empty timed region, the smallest clock step, and per-call versus 1,000-call batch timing of Ed25519 verification and one condensed MTL verification. `per_call_timing_reliable` is true when an empty timed region costs at most 5% of the fastest operation. Absent or `error` if the calibration could not run. |
 
 ### `preflight.json`
 `verdict` (`GO` or `NO-GO (defer per PS-036)`), `algorithm`, and `checks`: a list of
@@ -207,6 +208,14 @@ the extrapolated columns.
 | `verify_warm_total_extrapolated_ns` | ns | only when limited: `verify_per_rrset_ns × dataset_rrsets` | large direct: 238.1 ms |
 
 Columns that do not apply to a mode are empty (NaN).
+
+### `control.csv` (the A/A control)
+Same columns as `trials.csv`, for the control copy of one mode (`control:` in `config.yaml`, e.g. `ed25519-aa`). The
+copy runs the same harness call on the same input as its mode, in a random position inside every trial, so the true
+ratio between the two is 1. `results.noise_floor_table` takes the per-trial ratio of the two and reports the widest
+deviation from 1 inside its interval as the noise `band`. The report uses it to mark a paired ratio as clearly
+outside the noise, or not distinguishable from it. The control never enters `responses`, `workload`, `cache` or
+`sizes`, and not `ops.parquet`.
 
 ### `ops.parquet` (16,899 rows)
 One row per individual timed library call, for distribution plots.
