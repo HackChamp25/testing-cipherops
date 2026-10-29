@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from . import analytical, cache, dnswire, envinfo, preflight, results, stats, timer
+from . import analytical, cache, dnswire, envinfo, evolution, preflight, results, stats, timer
 from .codepoints import (MODES, MTL_SECURITY_PARAMETER_N, SLH_DSA_SHA2_128S_SIG_BYTES, base_key, control_key,
                          is_control, mode_for)
 from .harness import HARNESS, load_signatures, run_trial
@@ -386,6 +386,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         write_frame(control, root, "control")
     write_frame(trials, root, "trials")
     write_frame(ops, root, "ops")
+    ev_cfg = evolution.settings(cfg)
+    evo_mtl, evo_direct = pd.DataFrame(), pd.DataFrame()
+    if ev_cfg:
+        evo_mtl, evo_direct = evolution.run(cfg, paths, ev_cfg)
+        write_frame(evo_mtl, root, "evolution")
+        write_frame(evo_direct, root, "evolution_direct")
+        log(f"saved evolution.csv ({len(evo_mtl)} rounds), evolution_direct.csv ({len(evo_direct)} rounds)")
     log(f"saved trials.csv ({len(trials)} rows), ops.parquet ({len(ops):,} individual operations), "
         "raw/*.json.gz, artifacts/ (real signatures)")
 
@@ -398,6 +405,8 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     stage(6, STEPS, "Statistics: medians and confidence intervals of the median", "stats.py, runner.py (summarise)")
     summary = summarise(trials, frames, control, cfg.get("control"))
+    if ev_cfg:
+        summary["evolution"] = evolution.summary(evo_mtl, evo_direct)
     (root / "summary.json").write_text(json.dumps(summary, indent=2, default=float))
     for ds in cfg["datasets"]:
         for mk in cfg["modes"]:
@@ -415,8 +424,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     log(f"report: {root / 'report.md'} and report.html, figures/")
     every = pd.concat([trials, control], ignore_index=True)
     failed = every[(every.exit_code != 0) | (every.failures_total != 0) | (~every.tamper_all_rejected)]
-    log(f"DONE. {len(every)} trials, {len(failed)} with failed checks. Results in {root}")
-    return 1 if len(failed) else 0
+    evo_failed = bool(ev_cfg) and not evolution.checks_passed(evo_mtl, evo_direct)
+    log(f"DONE. {len(every)} trials, {len(failed)} with failed checks"
+        + (", the evolving-zone checks FAILED" if evo_failed else "") + f". Results in {root}")
+    return 1 if len(failed) or evo_failed else 0
 
 
 def cmd_preflight(args: argparse.Namespace) -> int:

@@ -13,7 +13,8 @@ from . import codepoints, stats
 from .codepoints import MODES
 
 MODE_ORDER = ["rsa-2048", "ecdsa-p256", "ed25519", "slh-dsa", "slh-dsa-mtl"]
-FRAMES = ("datasets", "trials", "control", "responses", "workload", "cache", "sizes")
+FRAMES = ("datasets", "trials", "control", "responses", "workload", "cache", "sizes", "evolution",
+          "evolution_direct")
 
 
 @dataclass

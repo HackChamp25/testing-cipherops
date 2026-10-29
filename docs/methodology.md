@@ -232,6 +232,39 @@ Two controls say how much of a difference is the measurement itself:
 The band describes the noise of one machine under the conditions of that run.
 With few trials it is itself uncertain (see the coverage table above).
 
+### 6.4 Evolving zone: MTL on a series that keeps growing
+
+Signing a whole zone once is MTL's best case. A real zone changes, so the experiment in `src/cipherops/evolution.py`
+(`mtlbench evolve` and `evolve-direct`) starts from each dataset, then runs rounds in which **k** RRsets change
+(`evolution:` in the config: `k`, `rounds`, `ages`). All of it is measured with the reference library and written
+to `evolution.csv` and `evolution_direct.csv` with `kind = measured`.
+
+- **Update model.** A changed RRset is the same-size signing input with its last 8 bytes replaced by (round, index),
+  chosen uniformly at random from the zone with a seeded generator (the same RRsets in every trial). The cost of the
+  update is real; its content is synthetic.
+- **MTL round.** Append the k changed leaves (timed per call), then sign **one** new ladder (the single SLH-DSA
+  signature). Nothing is re-signed for unchanged RRsets. Old leaves never leave the series.
+- **Direct round.** The baseline signs and verifies each of the k changed RRsets on its own. It does not depend on the
+  dataset size, so it runs once per trial; it is the expensive part of the run (sum of `k × rounds` signatures at
+  about 0.6 s each, per trial).
+- **Cached ladders.** After every round, every RRset of the current zone gets a fresh condensed signature from the
+  signer, and the library verifies it against the signed ladder from `age` rounds earlier (`mtllib_verify` with that
+  ladder). An RRset whose leaf is older than that ladder must pass; a leaf appended after it has no rung in it and
+  must fail. Both are compared with the leaf index, so a mismatch fails the run (`leaf_index_mismatch`), and a
+  tampered message is rejected. This is the library's own answer, not a model.
+- **Published signatures.** Separately, the condensed signature issued when a leaf was created is verified against
+  the **newest** ladder. When rungs merge as the series grows, the earlier path no longer ends at a rung of the
+  new ladder, so the signature must be reissued. This measures how much of a published zone that is.
+- **What is derived.** Effective bytes per answer (measured condensed size plus the measured uncovered share times a
+  full signature) are labelled *derived*: it is an upper bound, because a real resolver refreshes its ladder once and
+  then covers the rest.
+- **Expected mixed result.** At k = 1 MTL still signs one ladder per round, the same SLH-DSA signature direct signing
+  needs for one changed RRset, so it does not win on signing time there; its advantage is bytes and verification. The
+  advantage in signing grows with k.
+- **Limits.** One resolver and one signer; uniform random changes, not a real update trace; changes assumed independent
+  of lookup popularity, so the share of lookups affected equals the share of RRsets changed in expectation; one ladder
+  signed per round. Real change patterns (bursts, re-signing before RRSIG expiry) are not replayed.
+
 ## 7. Transmitted bytes (directly measured at the DNS message level)
 
 For every positive answer, the DNSKEY answer and a sample of NXDOMAIN names,
@@ -362,6 +395,7 @@ Rules the live-lab benchmark follows:
   the same sizes, so byte and cache results carry over but timings are not
   substituted for the offline ones. Each run records its profile. Why the
   defaults differ: `docs/design-decisions.md`.
+- **Evolving zone.** Synthetic same-size updates, uniform random, one signer and one resolver (section 6.4).
 - **Few trials.** The full offline run uses 10 trials; the quick run and the live
   benchmark use fewer (3 and 5), so their intervals are wide (section 6.2).
 - **No security claims.** None are made or implied.

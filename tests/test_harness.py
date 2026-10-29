@@ -121,3 +121,40 @@ def test_calibration_reports_a_plausible_clock_and_both_timings():
     assert set(s["operations"]) == {"ed25519_verify", "mtl_condensed_verify"}
     for op in s["operations"].values():
         assert op["calls"] == 1000 and op["per_call_median_ns"] > 0 and op["batch_per_call_median_ns"] > 0
+
+
+def test_evolving_zone_gate_and_growth(zone, tmp_path):
+    from cipherops.harness import run_evolve
+
+    msgs, _ = signing_messages(zone, MODES["slh-dsa-mtl"])
+    path = tmp_path / "evo.bin"
+    write_messages(path, msgs)
+    n = len(msgs)
+    res = run_evolve(MODES["slh-dsa-mtl"], path, [1, 5], [3, 3], [0, 1, 2], seed=3)
+    assert res["exit_code"] == 0 and res["failures"] == {"ladder": 0, "leaf_index_mismatch": 0}
+    assert res["tamper"]["message_rejected"]
+    for series in res["series"]:
+        k = series["k"]
+        for row in series["rows"]:
+            r = row["round"]
+            assert row["leaf_count"] == n + r * k and row["rung_count"] == bin(row["leaf_count"]).count("1")
+            for a in row["ages"]:
+                # an unchanged RRset verifies against an older ladder, a leaf appended since then does not
+                assert a["mismatch"] == 0 and a["tested"] == n
+                if a["age"] == 0:
+                    assert a["ok"] == n
+                else:  # at most age * k distinct RRsets changed since that ladder (a round may re-pick one)
+                    assert n - min(a["age"] * k, n) <= a["ok"] < n
+        assert series["rows"][-1]["condensed_bytes_max"] >= series["rows"][0]["condensed_bytes_max"]
+
+
+def test_evolving_zone_direct_baseline_signs_every_changed_rrset(zone, tmp_path):
+    from cipherops.harness import run_evolve
+
+    msgs, _ = signing_messages(zone, MODES["slh-dsa"])
+    path = tmp_path / "evo-direct.bin"
+    write_messages(path, msgs)
+    res = run_evolve(MODES["slh-dsa"], path, [2], [2], [0], seed=3)
+    assert res["exit_code"] == 0 and res["failures"]["verify"] == 0
+    assert [r["signed"] for r in res["series"][0]["rows"]] == [2, 2]
+    assert res["signature_bytes"] == SLH_DSA_SHA2_128S_SIG_BYTES
