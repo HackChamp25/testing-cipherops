@@ -143,23 +143,29 @@ pip install -r requirements-dashboard.txt
 streamlit run dashboard/live_lab/app.py
 ```
 
+The home page opens on the question the project answers, offers a path for four kinds of visitor (check the PS-036
+deliverables, watch the demonstration, reproduce the benchmark, understand MTL first), shows headline results from the
+newest offline run with their run id and provenance, and lists the ten PS-036 deliverables with the evidence found on
+this machine. Details: [dashboard/live_lab/README.md](dashboard/live_lab/README.md).
+
 | Tile | Use |
 | --- | --- |
-| **Setup** | step 1 build or pull the images; step 2 choose zone size and scenarios, then **Prepare** (signs the hierarchy); step 3 **Start** the lab |
-| **Live** | send queries or `dig`, switch scenario, capture packets, view the packet sequence |
-| **Benchmark** | one press runs the PS-036 benchmark: three dataset sizes, repeated signing and measurement trials; needs only the built images |
-| **Compare** | two views. *Algorithms side by side*: every algorithm of an offline-harness run or a live-lab benchmark, with the ratio to a baseline (paired per-trial intervals for the offline timings). *Run against run*: two saved runs (stack profiles, repeats, machines) with what differs between them spelled out. *Evolving zone*: the offline evolving-zone experiment, with a round slider that draws the ladder's rungs, the cached-ladder coverage, cost per update, bytes per answer and growth. Offline and live-lab data are never drawn together |
-| **Reset** | remove sessions, captures, runs or signed zones |
+| **Setup** | step 1 build or pull the images; step 2 choose dataset size and algorithms, then **Sign zones**; step 3 **Start** the lab |
+| **Demonstrate** | send queries or `dig`, switch algorithm, capture packets, view the packet sequence; a **Presenting** toggle for live demonstrations |
+| **Live-lab benchmark** | one press runs the benchmark through a real resolver: three dataset sizes, repeated signing and measurement trials; needs only the built images |
+| **Results** | three views. *Algorithms side by side*: every algorithm of an offline-harness run or a live-lab benchmark, with the ratio to a baseline (paired per-trial intervals for the offline timings). *Run against run*: two saved runs (stack profiles, repeats, machines) with what differs between them spelled out. *Evolving zone*: the offline evolving-zone experiment, with a round slider that draws the ladder's rungs, the cached-ladder coverage, cost per update, bytes per answer and growth. Offline and live-lab data are never drawn together |
+| **Learn** | why DNSSEC needs MTL, in six animated scenes |
+| **Clean up** | remove sessions, captures, runs or signed zones |
 
 The benchmark can also run without the browser (same guards and the same saved results, which then appear in the
-Benchmark tile):
+Live-lab benchmark tile):
 
 ```bash
 python3 dashboard/live_lab/suite.py --sizes 50,500,5000 --name full --plan   # preview the plan and time estimate
 python3 dashboard/live_lab/suite.py --sizes 50,500,5000 --name full          # run it; keep the terminal open
 ```
 
-Use the **`draft06`** image version (the live lab default) for the MTL-versus-non-MTL comparison. A first image build takes tens of minutes;
+Use the **draft-06** software stack (`draft06`, the live lab default) for the MTL-versus-non-MTL comparison. A first image build takes tens of minutes;
 it runs in the background with a live log. Details: [`dashboard/live_lab/README.md`](dashboard/live_lab/README.md).
 
 ## What a run produces
@@ -202,9 +208,9 @@ demo safety, `dig` input checks and harness negative cases.
 
 | Symptom | Cause and fix |
 | --- | --- |
-| `Permission denied` under `ecosystem/work` or `results` | Docker creates files as root on Linux. The dashboard's Reset removes them; by hand use `sudo rm -rf`. |
-| Prepare or Start disabled in Setup | the images for the chosen version are not built yet (step 1) |
-| Every query to `slh-dsa` returns SERVFAIL on `latest` | known limitation of that stack; use `draft06` |
+| `Permission denied` under `ecosystem/work` or `results` | Docker creates files as root on Linux. The dashboard's Clean up tile removes them; by hand use `sudo rm -rf`. |
+| Sign zones or Start disabled in Setup | the images for the chosen software stack are not built yet (step 1) |
+| Every query to plain SLH-DSA returns SERVFAIL on the `latest` stack | known limitation of that stack; use `draft06` |
 | Docker refuses to start the benchmark container with a `cpuset` error | the host has fewer than 3 cores; pass another core number as the second script argument |
 | Lab buttons greyed out | a benchmark is running and owns the lab; wait or cancel it |
 | Image build seems idle | it runs in the background; open Setup to see the log, or Cancel build |

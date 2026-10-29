@@ -119,8 +119,13 @@ part of the signed data by definition.
 | `ecdsa-p256` | OpenSSL EVP (r‖s wire form, RFC 6605) | 13 |
 | `rsa-2048` | OpenSSL EVP (RSA/SHA-256) | 8 |
 
-The placeholder code points (algorithm numbers and the EDNS option 65001 for
-`mtl-mode-full`) are not IANA-assigned. They affect only a few bytes.
+The placeholder code points (algorithm numbers and the EDNS option for
+`mtl-mode-full`) are not IANA-assigned. They affect only a few bytes. The option
+number is a lab value and **differs by path**: the offline byte model uses 65001
+(`codepoints.EDNS_MTL_MODE_FULL`), and the live lab's draft-06 stack uses 65050
+(`driver.MTL_FULL`, the value in the Verisign draft-06 build). Neither is
+assigned by IANA, and the two paths never exchange messages, so the difference
+changes no result; the dashboard's home page and Terms list both.
 
 ## 6. Timing measurements (directly measured)
 

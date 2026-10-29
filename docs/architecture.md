@@ -113,7 +113,7 @@ How the DNS draft (draft-fregly) carries this:
 - The RRSIG signature field starts with an **MTL-Type byte**: `0` =
   condensed, `1` = full.
 - A resolver that needs the ladder sends an EDNS option **`mtl-mode-full`**
-  (we use lab code 65001) over TCP and gets the full signature.
+  (the offline byte model uses lab code 65001; the live lab's draft-06 stack uses 65050) over TCP and gets the full signature.
 
 ---
 
