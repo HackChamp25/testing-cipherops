@@ -76,7 +76,8 @@ def _pid_alive(pid: int | None) -> bool:
     if not pid:
         return False
     if os.name == "nt":
-        cp = subprocess.run(["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"], capture_output=True, text=True)
+        cp = subprocess.run(["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"], capture_output=True, text=True,
+                            creationflags=driver.NO_WINDOW)
         return str(int(pid)) in cp.stdout
     try:
         os.kill(int(pid), 0)
@@ -132,14 +133,10 @@ def start(params: dict) -> str:
     (d / "status.json").write_text(json.dumps({"state": "starting", "step": "starting", "done": 0,
                                                "total": len(params["sizes"]) * STEPS_PER_SIZE}), encoding="utf-8")
     log = open(d / "progress.log", "ab")
-    kwargs: dict = {}
-    if os.name == "nt":
-        kwargs["creationflags"] = 0x00000008 | 0x00000200 | 0x08000000   # detached, new group, no window
-    else:
-        kwargs["start_new_session"] = True
     subprocess.Popen([sys.executable, "-m", "live_lab.suite", str(d / "params.json")],
                      cwd=Path(__file__).resolve().parents[1], stdout=log, stderr=subprocess.STDOUT,
-                     stdin=subprocess.DEVNULL, env={**os.environ, "PYTHONIOENCODING": "utf-8"}, **kwargs)
+                     stdin=subprocess.DEVNULL, env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                     **driver.background_process_kwargs())
     return suite_id
 
 
@@ -149,7 +146,8 @@ def cancel(suite_id: str) -> str:
     pid = st.get("pid")
     if _pid_alive(pid):
         if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"], capture_output=True)
+            subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"], capture_output=True,
+                           creationflags=driver.NO_WINDOW)
         else:
             os.kill(int(pid), 15)
     if st.get("config"):

@@ -115,12 +115,15 @@ MAX_TLDS = 9
 MAX_SLD_SERVERS = 9
 _TLD_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,14}$")
 
-# Rough sign-time model, calibrated on the Medium lab (≈520 RRSIGs across root, TLD and leaf zones).
+# Exact RRSIG model (checked against real signed zones). Every name has its record plus an NSEC3 proof, so
+# 2 per name, and a zone adds 7 of its own (SOA, NS, DNSKEY, NSEC3PARAM, apex NSEC3 and so on).
+# A TLD signs one name per child, the root one per TLD, and the root has one extra record: see exact_rrsigs.
+RRSIG_PER_NAME = 2
+RRSIG_PER_ZONE = 7
+# Rough sign-time model, calibrated on the Medium lab (353 RRSIGs across root, TLD and leaf zones).
 # Only meant to warn about long Prepares, not to predict them.
-RRSIG_PER_NAME = 3.2
-RRSIG_PER_ZONE = 5
 SIGN_SECONDS_PER_RRSIG = {
-    "rsa": 0.004, "ecdsa": 0.0005, "ed25519": 0.0005, "slh-dsa": 0.23, "mtl": 0.006, "mixed-mtl": 0.006,
+    "rsa": 0.0058, "ecdsa": 0.0007, "ed25519": 0.0007, "slh-dsa": 0.33, "mtl": 0.0087, "mixed-mtl": 0.0087,
 }
 PREPARE_OVERHEAD_S = 1.5          # key generation and checks per zone and scenario
 
@@ -226,11 +229,20 @@ def shape_for(zone_size: str, custom: dict | None = None) -> tuple[dict | None, 
     return ZONE_SIZE_PRESETS[zone_size], [], []
 
 
+def exact_rrsigs(names: int, zones: int) -> int:
+    """RRSIGs for a whole hierarchy of ``zones`` zones whose leaf zones hold ``names`` names in total.
+
+    Leaf zone = 2*names + 7, TLD = 2*children + 7, root = 2*TLDs + 8. Every zone except the root is a child
+    of exactly one other, so the "children" terms add 2 per non-root zone, and the root has one extra.
+    """
+    return RRSIG_PER_NAME * names + RRSIG_PER_ZONE * zones + RRSIG_PER_NAME * (zones - 1) + 1
+
+
 def shape_stats(shape: dict, scenarios: list[str], jobs: int = 2) -> dict:
     """Plain numbers describing a zone shape, plus a rough Prepare-time estimate."""
     zones = 1 + len(shape["tlds"]) + int(shape["sld_count"])
     names = _total_names(shape)
-    rrsigs = RRSIG_PER_NAME * names + RRSIG_PER_ZONE * zones
+    rrsigs = exact_rrsigs(names, zones)
     cpu = sum(SIGN_SECONDS_PER_RRSIG.get(s, 0.01) for s in scenarios) * rrsigs
     wall = cpu / max(1, int(jobs)) + PREPARE_OVERHEAD_S * zones * max(1, len(scenarios)) / max(1, int(jobs))
     return {
@@ -342,10 +354,27 @@ class LabHandle:
         return yaml.safe_load((ECO / self.config).read_text(encoding="utf-8"))
 
 
+# Windows: a console program started by a process that has no console (every background worker) gets a
+# new console window of its own. CREATE_NO_WINDOW stops that; it is 0 (a no-op) on other systems.
+NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+
+def background_process_kwargs() -> dict:
+    """``Popen`` arguments for a worker that must outlive the page and show no window.
+
+    On Windows the worker gets its own hidden console (not "detached", which has none), so the
+    ``docker`` calls it makes inherit that console instead of each opening a visible one.
+    """
+    if os.name == "nt":
+        return {"creationflags": NO_WINDOW | 0x00000200}   # hidden console + its own process group
+    return {"start_new_session": True}
+
+
 def _run(cmd: list[str], timeout: int | None = 120, check: bool = True) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env.setdefault("CIPHEROPS_GIT_SHA", "live-dashboard")
-    cp = subprocess.run(cmd, cwd=ECO, capture_output=True, text=True, timeout=timeout, env=env)
+    cp = subprocess.run(cmd, cwd=ECO, capture_output=True, text=True, timeout=timeout, env=env,
+                        creationflags=NO_WINDOW)
     if check and cp.returncode != 0:
         raise RuntimeError(
             f"$ {' '.join(cmd)}\nexit {cp.returncode}\n{cp.stdout[-4000:]}\n{cp.stderr[-4000:]}"
@@ -549,16 +578,34 @@ def write_ui_config(
     return out_config
 
 
-def prepare(h: LabHandle, jobs: int = 2, scenarios: list[str] | None = None) -> str:
-    img = f"cipherops-eco-tools:{h.stack}"
+def prepare_container_name(h: LabHandle) -> str:
+    """Fixed name for the live-view Prepare container, so a stuck one can be removed."""
+    return f"cipherops-prepare-{h.tag}"
+
+
+def prepare_command(h: LabHandle, jobs: int = 2, scenarios: list[str] | None = None, *,
+                    events: bool = False) -> list[str]:
+    """The ``docker run`` command line for Prepare.
+
+    ``events=True`` is for the dashboard's live view: the signer prints ``@@EVENT {json}`` lines (see
+    ``ecolab.sign.emit``) as each zone starts and finishes, Python output is unbuffered, and the container
+    gets a fixed name. The signing itself is identical either way.
+    """
     extra = f" --scenarios {','.join(scenarios)}" if scenarios else ""
-    cp = _run([
-        "docker", "run", "--rm", "--network", "none",
+    cmd = ["docker", "run", "--rm", "--network", "none"]
+    if events:
+        cmd += ["--name", prepare_container_name(h), "-e", "ECOLAB_EVENTS=1", "-e", "PYTHONUNBUFFERED=1"]
+    cmd += [
         "-v", f"{ECO}:/eco:z",
         "-v", f"{REPO / 'src'}:/work/src:ro,z",
-        img,
+        f"cipherops-eco-tools:{h.stack}",
         f"python3 -m ecolab prepare {h.config} --jobs {jobs}{extra}",
-    ], timeout=None)
+    ]
+    return cmd
+
+
+def prepare(h: LabHandle, jobs: int = 2, scenarios: list[str] | None = None) -> str:
+    cp = _run(prepare_command(h, jobs, scenarios), timeout=None)
     return cp.stdout + cp.stderr
 
 
@@ -889,11 +936,30 @@ def unbound_stats_delta(before: dict[str, float], after: dict[str, float]) -> di
     return {k: delta[k] for k in STAT_KEYS if k in delta}
 
 
+def _read_manifest(path: Path) -> dict:
+    """Load a Prepare manifest, with every zone's ``rrsig_count`` corrected to the real RRSIG count.
+
+    Before the fix in ``ecolab.sign._rrsig_count`` the manifest also counted NSEC3 records (their type
+    bitmap lists RRSIG), about 1.5x too many. Older manifests stay on disk untouched; here the count is
+    taken again from the signed file (cached by mtime) and the stored figure is kept as
+    ``rrsig_count_manifest``. Manifests written by the fixed signer already match and are left as they are.
+    """
+    from live_lab import prepare_story
+
+    man = json.loads(path.read_text(encoding="utf-8"))
+    for z in man.get("zones") or []:
+        prof = prepare_story.rrsig_profile(path.parent / str(z.get("signed_file") or ""))
+        if prof is not None and prof["total"] != z.get("rrsig_count"):
+            z["rrsig_count_manifest"] = z.get("rrsig_count")
+            z["rrsig_count"] = prof["total"]
+    return man
+
+
 def load_manifest(h: LabHandle, scenario: str) -> dict | None:
     path = h.work / "zones" / scenario / "manifest.json"
     if not path.is_file():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    return _read_manifest(path)
 
 
 def list_manifests(h: LabHandle, tag: str | None = None) -> dict[str, dict]:
@@ -904,7 +970,7 @@ def list_manifests(h: LabHandle, tag: str | None = None) -> dict[str, dict]:
     for d in sorted(zones.iterdir()):
         m = d / "manifest.json"
         if d.is_dir() and m.is_file():
-            out[d.name] = json.loads(m.read_text(encoding="utf-8"))
+            out[d.name] = _read_manifest(m)
     return out
 
 

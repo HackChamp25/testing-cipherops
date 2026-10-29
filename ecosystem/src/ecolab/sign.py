@@ -11,14 +11,30 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .config import Lab, ZoneSpec
 from .zones import unsigned_text
+
+_EVENT_LOCK = threading.Lock()
+
+
+def emit(event: str, **fields) -> None:
+    """One machine-readable line (``@@EVENT {json}``) for the dashboard's live view.
+
+    Silent unless ``ECOLAB_EVENTS=1``, so the command line and the benchmark suite print exactly what
+    they always did. Zones sign in a thread pool, so the lock keeps each line whole.
+    """
+    if os.environ.get("ECOLAB_EVENTS") != "1":
+        return
+    with _EVENT_LOCK:
+        print("@@EVENT " + json.dumps({"event": event, "t": round(time.time(), 3), **fields}), flush=True)
 
 
 def _run(args: list[str], cwd: Path) -> str:
@@ -55,7 +71,18 @@ def _sha256(path: Path) -> str:
 
 
 def _rrsig_count(path: Path) -> int:
-    return sum(1 for line in path.read_text().splitlines() if "\tRRSIG\t" in line or " RRSIG " in line)
+    """Number of RRSIG records in a signed zone file.
+
+    Only real RRSIG records count: an NSEC3 line lists RRSIG in its type bitmap, and matching on the
+    bare word used to count every NSEC3 record as well (about 1.5x too many).
+    """
+    n = 0
+    with path.open(encoding="utf-8", errors="replace") as f:
+        for line in f:
+            parts = line.split(None, 5)  # the base64 signature tail is never needed
+            if any(parts[i] == "IN" and parts[i + 1] == "RRSIG" for i in range(min(4, len(parts) - 1))):
+                n += 1
+    return n
 
 
 def sign_zone(lab: Lab, scenario: str, z: ZoneSpec, child_ds: dict[str, list[str]], out: Path) -> dict:
@@ -92,14 +119,20 @@ def sign_scenario(lab: Lab, scenario: str, jobs: int = 1, log=print) -> dict:
         shutil.rmtree(out)
     out.mkdir(parents=True)
     done: dict[str, dict] = {}
+    emit("scenario_start", scenario=scenario, algorithms=lab.cfg["scenarios"][scenario], jobs=jobs,
+         zones=[{"origin": z.origin, "tier": z.tier, "parent": z.parent, "n_names": z.n_names} for z in lab.zones])
     for tier in ("sld", "tld", "root"):
         todo = [z for z in lab.zones if z.tier == tier]
         child_ds = {o: r["ds"] for o, r in done.items()}
 
         def one(z: ZoneSpec) -> dict:
+            emit("zone_start", scenario=scenario, origin=z.origin, tier=z.tier)
             r = sign_zone(lab, scenario, z, child_ds, out)
             log(f"  [{scenario}] {z.origin:<14} {r['algorithm']:<32} {r['rrsig_count']:>5} RRSIGs  "
                 f"{r['signed_bytes'] / 1e6:7.2f} MB  signed in {r['sign_seconds']:.1f} s")
+            emit("zone_done", scenario=scenario, origin=r["origin"], tier=r["tier"], algorithm=r["algorithm"],
+                 n_names=r["n_names"], rrsigs=r["rrsig_count"], sign_s=r["sign_seconds"],
+                 verify_s=r["verify_seconds"], signed_bytes=r["signed_bytes"])
             return r
 
         with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
@@ -109,6 +142,7 @@ def sign_scenario(lab: Lab, scenario: str, jobs: int = 1, log=print) -> dict:
                 "trust_anchor": done["."]["ds"], "signing": lab.cfg["signing"], "jobs": jobs,
                 "zones": [done[z.origin] for z in lab.zones]}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    emit("scenario_done", scenario=scenario)
     return manifest
 
 

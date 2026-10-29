@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signing replay</title>
+<style>
+  :root { --bg:#0f172a; --panel:#111c33; --line:#2a3957; --txt:#e6edf7; --dim:#8da0bf; --amber:#f5b942; --ok:#2e9e6f; }
+  * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: #3a4a6b transparent; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #3a4a6b; border-radius: 8px; }
+  ::-webkit-scrollbar-thumb:hover { background: #5b78b0; }
+  /* The page is sized to the player by Streamlit, so it never needs its own (white) scrollbar. */
+  html, body { overflow: hidden; }
+  html, body { margin:0; background:transparent; font:14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color:var(--txt); }
+  #app { max-width:1100px; margin:0 auto; background:var(--bg); border:1px solid var(--line); border-radius:14px; padding:14px 16px 12px; position:relative; }
+  #head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; }
+  #title { font-size:15px; font-weight:650; letter-spacing:.2px; }
+  #sub { color:var(--dim); font-size:12px; margin-top:2px; }
+  #legend { color:var(--dim); font-size:11px; text-align:right; max-width:420px; }
+  #legend b { color:var(--txt); font-weight:600; }
+  #plan { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  .chip { flex:1 1 190px; background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--dim); border-radius:8px; padding:6px 10px; min-width:0; }
+  .chip .pk { font-size:13px; font-weight:650; }
+  .chip .pw { font-size:11.5px; color:var(--dim); margin-top:1px; }
+  .chip.size { border-left-color:var(--amber); flex-basis:150px; }
+  #stage { display:grid; grid-template-columns:minmax(190px,27%) minmax(0,1fr); gap:12px; margin-top:10px; position:relative; }
+  #hier { max-height:380px; }
+  @media (max-width:520px) { #stage { grid-template-columns:1fr; } #hier { max-height:230px; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; position:relative; overflow:hidden; }
+  svg { display:block; width:100%; height:auto; }
+  svg text { font-family:inherit; fill:var(--txt); }
+  .dim { fill:var(--dim) !important; font-size:10px; letter-spacing:.8px; }
+  .zt { font-size:15px; font-weight:650; }
+  .zs { font-size:11px; fill:var(--dim) !important; }
+  .big { font-size:12px; font-weight:600; text-anchor:middle; }
+  .small { font-size:11px; fill:var(--dim) !important; }
+  .leaf { fill:#3a4a6b; stroke:#5b6f99; stroke-width:1; }
+  .node { fill:#1c2a47; stroke:#6d82ad; stroke-width:1.3; }
+  .edge { stroke:#4a5d86; stroke-width:1.3; fill:none; }
+  .tri { fill:rgba(141,160,191,.14); stroke:#6d82ad; stroke-width:1.3; }
+  .trit { font-size:11px; text-anchor:middle; fill:var(--dim) !important; }
+  .seg { fill:#16284a; stroke:#6d82ad; stroke-width:1.2; }
+  .segt { font-size:10px; text-anchor:middle; fill:var(--dim) !important; }
+  .conn { stroke:#6d82ad; stroke-width:1.2; stroke-dasharray:3 3; fill:none; }
+  .path { fill:none; stroke-width:2.4; stroke-linecap:round; stroke-linejoin:round; }
+  #outro { position:absolute; inset:0; background:rgba(11,18,34,.985); border-radius:10px; padding:22px 26px; opacity:0; pointer-events:none; overflow:auto; }
+  #outro h3 { margin:0 0 10px; font-size:17px; }
+  #outro ul { margin:0; padding-left:18px; } #outro li { margin:7px 0; font-size:13.5px; }
+  #caption { margin-top:10px; min-height:44px; }
+  #step { font-size:12px; color:var(--amber); font-weight:600; }
+  #cap { font-size:14px; margin-top:2px; }
+  #stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin-top:8px; }
+  @media (max-width:640px) { #stats { grid-template-columns:repeat(2,1fr); } }
+  .stat { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:6px 10px; }
+  .stat .k { font-size:10.5px; color:var(--dim); text-transform:uppercase; letter-spacing:.6px; }
+  .stat .v { font-size:17px; font-weight:650; font-variant-numeric:tabular-nums; }
+  #controls { display:flex; align-items:center; gap:8px; margin-top:10px; }
+  button, select { background:#1a2a4a; color:var(--txt); border:1px solid var(--line); border-radius:8px; padding:5px 11px; font:inherit; cursor:pointer; }
+  button:hover, select:hover { border-color:#5b78b0; }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline:2px solid var(--amber); outline-offset:2px; }
+  /* timeline slider: dark track, amber fill up to the current time, round thumb */
+  #scrub { flex:1; -webkit-appearance:none; appearance:none; height:6px; border-radius:6px; cursor:pointer; outline-offset:6px;
+           background:linear-gradient(to right, var(--amber) var(--p,0%), #2a3957 var(--p,0%)); }
+  #scrub::-webkit-slider-runnable-track { height:6px; background:transparent; border-radius:6px; }
+  #scrub::-webkit-slider-thumb { -webkit-appearance:none; width:16px; height:16px; margin-top:-5px; border-radius:50%;
+           background:var(--amber); border:3px solid var(--bg); box-shadow:0 0 0 1px var(--amber); transition:transform .1s; }
+  #scrub:hover::-webkit-slider-thumb { transform:scale(1.2); }
+  #scrub::-moz-range-track { height:6px; background:transparent; border-radius:6px; }
+  #scrub::-moz-range-thumb { width:10px; height:10px; border-radius:50%; background:var(--amber); border:3px solid var(--bg); box-shadow:0 0 0 1px var(--amber); }
+  #time { font-variant-numeric:tabular-nums; color:var(--dim); font-size:12px; min-width:84px; text-align:right; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="head">
+    <div>
+      <div id="title"></div>
+      <div id="sub"></div>
+    </div>
+    <div id="legend"><b>Measured:</b> timings, counts, bytes &nbsp;·&nbsp; <b>Analytical:</b> signature sizes &nbsp;·&nbsp;
+      <b>Illustrative:</b> tree shape (drawn from each zone's real RRSIG count)</div>
+  </div>
+  <div id="plan" aria-label="How many signed records go in each tier, and why"></div>
+  <div id="stage">
+    <div class="card"><svg id="hier" viewBox="0 0 300 340" role="img" aria-label="Zone hierarchy being signed bottom-up"></svg></div>
+    <div class="card">
+      <svg id="spot" viewBox="0 0 640 380" role="img" aria-label="Signing of the zone in the spotlight"></svg>
+      <div id="outro"></div>
+    </div>
+  </div>
+  <div id="caption"><div id="step"></div><div id="cap"></div></div>
+  <div id="stats">
+    <div class="stat"><div class="k">Zones signed</div><div class="v" id="s_zones">0</div></div>
+    <div class="stat"><div class="k">RRSIGs written</div><div class="v" id="s_rr">0</div></div>
+    <div class="stat"><div class="k">Signed zone files</div><div class="v" id="s_bytes">0 B</div></div>
+    <div class="stat"><div class="k">Real signing time</div><div class="v" id="s_time">0.00 s</div></div>
+  </div>
+  <div id="controls">
+    <button id="play" aria-label="Play or pause">Play</button>
+    <button id="restart" aria-label="Restart">Restart</button>
+    <button id="end" aria-label="Skip to the end">Skip to end</button>
+    <select id="speed" aria-label="Playback speed">
+      <option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
+    </select>
+    <input id="scrub" type="range" min="0" max="1" step="0.01" value="0" aria-label="Timeline">
+    <div id="time">0:00 / 0:00</div>
+  </div>
+</div>
+<script id="scene" type="application/json">__SCENE_JSON__</script>
+<script>
+(function () {
+  "use strict";
+  const sc = JSON.parse(document.getElementById("scene").textContent);
+  const NS = "http://www.w3.org/2000/svg";
+  const PAL = { "mtl": "#2e9e6f", "slh-dsa": "#e4572e", "ecdsa": "#4c78a8", "ed25519": "#9aa9c4", "rsa": "#7f8fa9", "classical": "#7f8fa9" };
+  const TIER = { sld: "Leaf zone", tld: "TLD", root: "Root" };
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const ramp = (v, a, b) => (v <= a ? 0 : v >= b ? 1 : (v - a) / (b - a));
+  const col = (fam) => PAL[fam] || PAL.classical;
+  const chipH = (bytes) => Math.max(3, Math.sqrt(bytes) / 2.4);   // same scale everywhere, so scenarios compare
+  const nf = (n) => Math.round(n).toLocaleString("en-US");
+  function fmtB(n) { n = +n; return n < 10240 ? nf(n) + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB"; }
+  function fmtS(s) { return s < 1 ? (s * 1000).toFixed(0) + " ms" : s.toFixed(2) + " s"; }
+  function mmss(s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+  function S(tag, attrs, parent) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+  function T(text, attrs, parent) { const e = S("text", attrs, parent); e.textContent = text; return e; }
+  const $ = (id) => document.getElementById(id);
+
+  $("title").textContent = "Prepare · signing replay · " + (sc.lab || "lab");
+  $("sub").textContent = "Scenario " + sc.scenario + " · " + (Object.values(sc.algorithms)[0] || "") + " · " + sc.totals.zones + " zones";
+
+  // ────────────── plan strip: how many records go where, and why ──────────────
+  (function () {
+    const box = $("plan"), plan = sc.plan;
+    function chip(cls, color, head, why) {
+      const d = document.createElement("div"); d.className = "chip " + cls; if (color) d.style.borderLeftColor = color;
+      const a = document.createElement("div"); a.className = "pk"; a.textContent = head;
+      const b = document.createElement("div"); b.className = "pw"; b.textContent = why;
+      d.appendChild(a); d.appendChild(b); box.appendChild(d);
+    }
+    chip("size", null, "Zone size · " + plan.size, nf(plan.names) + " names · " + plan.zones + " zones · every signed RRset is one MTL leaf");
+    plan.tiers.forEach((t) => chip("", col(sc.family), t.head, t.why));
+  })();
+
+  // ────────────── hierarchy panel (left) ──────────────
+  const hier = $("hier");
+  const Y = { root: 50, tld: 150, sld: 262 };
+  const slds = sc.zones.filter((z) => z.tier === "sld");
+  const slot = {};
+  const order = slds.map((z, i) => ({ z, i })).sort((a, b) => (a.z.parent || "").localeCompare(b.z.parent || "") || a.i - b.i);
+  const step = 252 / Math.max(1, slds.length);
+  const R = clamp(step * 0.4, 3, 11);
+  order.forEach((o, k) => { slot[o.z.origin] = { x: 24 + (k + 0.5) * step, y: Y.sld, r: R }; });
+  const tlds = sc.zones.filter((z) => z.tier === "tld");
+  tlds.forEach((z, i) => {
+    const kids = slds.filter((s) => s.parent === z.origin).map((s) => slot[s.origin].x);
+    slot[z.origin] = { x: kids.length ? kids.reduce((a, b) => a + b, 0) / kids.length : 24 + (i + 0.5) * 252 / tlds.length, y: Y.tld, r: 12 };
+  });
+  sc.zones.filter((z) => z.tier === "root").forEach((z) => { slot[z.origin] = { x: 150, y: Y.root, r: 14 }; });
+
+  [["ROOT", Y.root - 26], ["TLD", Y.tld - 24], ["LEAF ZONES", Y.sld - 24]].forEach(([t, y]) => T(t, { x: 8, y: y, class: "dim" }, hier));
+  const edgeG = S("g", {}, hier), nodeG = S("g", {}, hier), dsG = S("g", {}, hier);
+  const nodes = [];
+  sc.zones.forEach((z) => {
+    const p = slot[z.origin]; if (!p) return;
+    let edge = null;
+    if (z.parent && slot[z.parent]) { const q = slot[z.parent]; edge = S("line", { x1: p.x, y1: p.y, x2: q.x, y2: q.y, class: "edge" }, edgeG); }
+    const c = S("circle", { cx: p.x, cy: p.y, r: p.r, class: "node" }, nodeG);
+    const label = z.tier === "sld" ? (slds.length <= 10 ? z.origin.split(".")[0] : "") : (z.origin === "." ? "." : z.origin);
+    if (label) T(label, { x: p.x, y: p.y + p.r + 12, "text-anchor": "middle", class: "small" }, nodeG);
+    const ds = z.parent && slot[z.parent] ? S("circle", { r: 3.6, fill: "#fde68a" }, dsG) : null;
+    if (ds) ds.style.display = "none";
+    nodes.push({ z, p, c, edge, ds });
+  });
+  const ring = S("circle", { r: 18, fill: "none", stroke: "#f5b942", "stroke-width": 1.6, "stroke-dasharray": "3 3" }, hier); ring.style.display = "none";
+  const rootZ = sc.zones.find((z) => z.tier === "root");
+  const anchor = T("★ trust anchor", { x: 150 + 22, y: Y.root + 4, class: "small", style: "fill:#fde68a !important" }, hier); anchor.style.opacity = 0;
+  S("circle", { cx: 12, cy: 326, r: 3.6, fill: "#fde68a" }, hier);
+  T("DS record handed to the parent zone", { x: 22, y: 329, class: "small" }, hier);
+
+  // ────────────── spotlight panel (right) ──────────────
+  const spot = $("spot");
+  const introG = S("g", {}, spot);
+  T("Prepare signs the hierarchy bottom-up", { x: 320, y: 150, "text-anchor": "middle", style: "font-size:20px;font-weight:650" }, introG);
+  T("leaf zones  →  TLDs  →  root", { x: 320, y: 184, "text-anchor": "middle", class: "big", style: "fill:#f5b942 !important" }, introG);
+  T(sc.label + " · " + (Object.values(sc.algorithms)[0] || ""), { x: 320, y: 214, "text-anchor": "middle", class: "small" }, introG);
+
+  const groups = [];   // one per phase
+  function build(zone) {
+    const g = S("g", {}, spot); g.style.display = "none";
+    const items = [];
+    const add = (el, a, b, kind, extra) => { items.push(Object.assign({ el, a, b, kind: kind || "fade" }, extra || {})); if (kind !== "text") el.style.opacity = 0; return el; };
+    const C = col(zone.family), n = zone.n_leaves;
+    T(TIER[zone.tier] + " · " + (zone.origin === "." ? ". (root zone)" : zone.origin), { x: 24, y: 30, class: "zt" }, g);
+    T(nf(n) + " RRsets · " + zone.algorithm, { x: 24, y: 50, class: "zs" }, g);
+    add(T("real signing time " + fmtS(zone.sign_s), { x: 616, y: 30, "text-anchor": "end", class: "zs" }, g), 0.22, 0.30);
+    add(T("✔ zone verified in " + fmtS(zone.verify_s) + (zone.tier === "root" ? " · trust anchor ready" : " · DS sent to parent"),
+      { x: 616, y: 50, "text-anchor": "end", class: "zs", style: "fill:#7ee0b0 !important" }, g), 0.94, 1.0);
+    return zone.family === "mtl" ? buildMTL(g, zone, items, add, C) : buildDirect(g, zone, items, add, C);
+  }
+
+  const SUP = "⁰¹²³⁴⁵⁶⁷⁸⁹";
+  const sup = (k) => String(k).split("").map((d) => SUP[+d]).join("");
+
+  function buildMTL(g, z, items, add, C) {
+    const cell = 34, collW = 76, gap = 22, baseY = 300, lvl = 38, leafS = 18, rungs = z.rungs, n = z.n_leaves, avail = 592;
+    const widthsFor = (th) => rungs.map((s) => (s <= th ? s * cell : collW));
+    const totalFor = (w) => w.reduce((a, b) => a + b, 0) + gap * (rungs.length - 1);
+    // Perfect trees up to 16 leaves are drawn in full; if that would shrink the picture too much, only up to 8.
+    const th = avail / totalFor(widthsFor(16)) < 0.6 ? 8 : 16;
+    const widths = widthsFor(th), total = totalFor(widths);
+    const k = Math.min(1, avail / total);
+    const tx = 24 + (avail - total * k) / 2, ty = baseY * (1 - k);
+    const P = (x, y) => [tx + x * k, ty + y * k];
+    const lay = S("g", { transform: "translate(" + tx + "," + ty + ") scale(" + k + ")" }, g);
+    const full = rungs.filter((s) => s <= th);
+    const drawnTotal = full.reduce((a, b) => a + b, 0) || 1;
+    const kmax = Math.max(1, ...full.map((s) => Math.log2(s)));
+    let x = 0, drawn = 0; const tops = [], paths = [];
+    rungs.forEach((s, ri) => {
+      const kk = Math.log2(s), mid = x + widths[ri] / 2;
+      // size of this tree, as a power of two (outside the scaled group, so it stays readable)
+      const [lx, ly] = P(mid, baseY + 30);
+      add(T(nf(s) + " = 2" + sup(kk), { x: lx, y: ly, class: "trit" }, g), 0.24, 0.34);
+      if (s <= th) {
+        const levels = [[]];
+        for (let i = 0; i < s; i++) {
+          const cx = x + (i + 0.5) * cell, a = 0.02 + 0.16 * (drawn++ / drawnTotal);
+          add(S("rect", { x: cx - leafS / 2, y: baseY - leafS, width: leafS, height: leafS, rx: 3, class: "leaf" }, lay), a, a + 0.05);
+          levels[0].push({ x: cx, y: baseY - leafS / 2 });
+        }
+        for (let L = 1; L <= kk; L++) {
+          levels[L] = [];
+          const a = 0.22 + 0.2 * (L - 1) / kmax, b = a + 0.18 / kmax;
+          for (let j = 0; j < levels[L - 1].length; j += 2) {
+            const c1 = levels[L - 1][j], c2 = levels[L - 1][j + 1];
+            const nd = { x: (c1.x + c2.x) / 2, y: baseY - leafS / 2 - L * lvl };
+            [c1, c2].forEach((c) => add(S("line", { x1: c.x, y1: c.y - (L === 1 ? leafS / 2 : 6), x2: nd.x, y2: nd.y + 6, class: "edge" }, lay), a, b));
+            add(S("circle", { cx: nd.x, cy: nd.y, r: 6, class: "node" }, lay), a, b);
+            levels[L].push(nd);
+          }
+        }
+        for (let i = 0; i < s; i++) {
+          const pts = []; for (let L = 0; L <= kk; L++) pts.push(levels[L][i >> L]);
+          paths.push({ pts, base: levels[0][i] });
+        }
+        tops.push(levels[kk][0]);
+      } else {
+        add(S("rect", { x: x, y: baseY - 10, width: collW, height: 10, rx: 3, class: "leaf" }, lay), 0.02, 0.2);
+        add(S("polygon", { points: x + "," + (baseY - 10) + " " + (x + collW) + "," + (baseY - 10) + " " + (x + collW / 2) + "," + (baseY - 4 * lvl), class: "tri" }, lay), 0.24, 0.42);
+        add(T(nf(s) + " leaves", { x: x + collW / 2, y: baseY - 30, class: "trit" }, lay), 0.24, 0.42);
+        const top = { x: x + collW / 2, y: baseY - 4 * lvl };
+        paths.push({ pts: [{ x: top.x, y: baseY - 5 }, top], base: { x: top.x, y: baseY - 5 } });
+        tops.push(top);
+      }
+      x += widths[ri] + gap;
+    });
+    // why these sizes: N written as a sum of powers of two (its binary digits)
+    const split = rungs.map(nf).join(" + ");
+    const eq = rungs.length === 1 ? nf(n) + " leaves = 2" + sup(Math.log2(n)) + " → already a perfect tree: one rung"
+                                 : nf(n) + " leaves = " + split + "  →  " + rungs.length + " perfect trees";
+    const why = rungs.length === 1 ? "hashes pair up 2 → 1 until a single top hash is left"
+      : "binary " + n.toString(2) + ": one tree per 1-bit · a tree pairs leaves 2 by 2, so it needs 2" + "ᵏ leaves";
+    add(T(eq, { x: 320, y: 352, class: "big", style: "fill:" + C + " !important" }, g), 0.12, 0.2, "fade", { c: 0.78, d: 0.82 });
+    add(T(why, { x: 320, y: 370, class: "small", "text-anchor": "middle" }, g), 0.16, 0.26, "fade", { c: 0.78, d: 0.82 });
+    // rungs
+    tops.forEach((t, i) => {
+      add(S("circle", { cx: t.x, cy: t.y, r: 10, fill: "none", stroke: C, "stroke-width": 2.2 }, lay), 0.44, 0.5);
+      if (i === 0) add(T("rung", { x: t.x, y: t.y - 15, class: "trit", style: "fill:" + C + " !important" }, lay), 0.44, 0.5);
+    });
+    // ladder bar
+    const barX = 40, barW = 560, barY = 82, barH = 30, nR = rungs.length, segW = (barW - (nR - 1) * 4) / nR;
+    add(T("LADDER", { x: barX, y: barY - 12, class: "dim" }, g), 0.46, 0.58);
+    rungs.forEach((s, i) => {
+      const sx = barX + i * (segW + 4);
+      add(S("rect", { x: sx, y: barY, width: segW, height: barH, rx: 5, class: "seg" }, g), 0.46, 0.58);
+      add(T("×" + nf(s), { x: sx + segW / 2, y: barY + barH / 2 + 4, class: "segt" }, g), 0.46, 0.58);
+      const [px, py] = P(tops[i].x, tops[i].y - 10);
+      add(S("line", { x1: px, y1: py, x2: sx + segW / 2, y2: barY + barH, class: "conn" }, g), 0.5, 0.58);
+    });
+    add(S("rect", { x: barX, y: barY, width: 0, height: barH, rx: 5, fill: C, opacity: 0.55 }, g), 0.6, 0.74, "sweep", { w: barW });
+    add(T("signed ONCE · one SLH-DSA signature for the whole zone", { x: 320, y: barY - 12, class: "big", style: "fill:" + C + " !important" }, g), 0.6, 0.7);
+    add(T("ladder ≈ " + fmtB(z.ladder_bytes), { x: barX + barW, y: barY - 12, "text-anchor": "end", class: "small" }, g), 0.74, 0.8);
+    // condensed paths
+    paths.forEach((p, i) => {
+      const pts = p.pts.map((q) => q.x + "," + q.y).join(" ");
+      let len = 0; for (let j = 1; j < p.pts.length; j++) len += Math.hypot(p.pts[j].x - p.pts[j - 1].x, p.pts[j].y - p.pts[j - 1].y);
+      const a = 0.78 + 0.14 * (i / paths.length), b = a + 0.07;
+      const el = S("polyline", { points: pts, class: "path", stroke: C, "stroke-dasharray": len }, lay);
+      add(el, a, b, "dash", { len });
+      add(S("rect", { x: p.base.x - 5, y: baseY + 6, width: 10, height: 0, rx: 2, fill: C }, lay), a, b, "grow", { h: chipH(z.condensed_bytes) });
+    });
+    add(T("each RRset keeps only its own path · ≈ " + fmtB(z.condensed_bytes) + " (a direct SLH-DSA signature is " + fmtB(sc.slh_sig_bytes) + ")",
+      { x: 320, y: 352, class: "big", style: "fill:" + C + " !important" }, g), 0.84, 0.92);
+    add(T("the resolver fetches the signed ladder once, caches it, and checks every answer against it", { x: 320, y: 370, class: "small", "text-anchor": "middle" }, g), 0.9, 0.96);
+    return { el: g, zone: z, items };
+  }
+
+  function buildDirect(g, z, items, add, C) {
+    const n = z.n_leaves, cnt = Math.min(n, 24), cell = Math.min(40, 592 / cnt), leafS = Math.min(22, cell - 6);
+    const x0 = 24 + (592 - cnt * cell) / 2, ly = 130, h = chipH(z.direct_bytes);
+    add(T(nf(n) + " RRsets, each signed on its own", { x: 24, y: ly - 14, class: "small" }, g), 0.0, 0.2);
+    for (let i = 0; i < cnt; i++) {
+      const lx = x0 + i * cell + (cell - leafS) / 2, a = 0.22 + 0.68 * (i / cnt), b = a + 0.68 / cnt * 0.9;
+      const leaf = S("rect", { x: lx, y: ly, width: leafS, height: leafS, rx: 4, class: "leaf" }, g);
+      add(leaf, 0.0 + 0.18 * (i / cnt), 0.0 + 0.18 * (i / cnt) + 0.05);
+      add(S("rect", { x: lx, y: ly + leafS + 8, width: leafS, height: 0, rx: 2, fill: C }, g), a, b, "grow", { h });
+      items.push({ el: leaf, a, b, kind: "fill", off: "#3a4a6b", on: C });
+    }
+    if (n > cnt) add(T("+ " + nf(n - cnt) + " more", { x: 616, y: ly + leafS / 2 + 4, "text-anchor": "end", class: "small" }, g), 0.0, 0.2);
+    const by = ly + leafS + 8 + h;
+    add(T(fmtB(z.direct_bytes) + " per RRset — a full signature on every record", { x: 320, y: by + 28, class: "big", style: "fill:" + C + " !important" }, g), 0.3, 0.4);
+    const clock = T("", { x: 320, y: 270, class: "big", style: "font-size:15px" }, g);
+    add(clock, 0.22, 0.28, "text", { fn: (u) => "real signing time so far: " + fmtS(z.sign_s * ramp(u, 0.22, 0.9)) });
+    items[items.length - 1].opacityFn = (u) => ramp(u, 0.22, 0.28);
+    add(T(nf(n) + " × " + fmtB(z.direct_bytes) + " = " + fmtB(n * z.direct_bytes) + " of signatures in this zone (analytical)", { x: 320, y: 312, class: "big" }, g), 0.92, 1.0);
+    add(T("bar height ≈ signature size (same scale as the other scenarios)", { x: 24, y: 370, class: "small" }, g), 0.3, 0.4);
+    return { el: g, zone: z, items };
+  }
+
+  sc.phases.forEach((ph) => {
+    const z = sc.zones.find((q) => q.phase === ph.index && q.spotlight);
+    groups[ph.index] = build(z);
+  });
+
+  function applyItem(it, u) {
+    const r = ramp(u, it.a, it.b);
+    switch (it.kind) {
+      case "fade": it.el.style.opacity = it.c === undefined ? r : r * (1 - ramp(u, it.c, it.d)); break;
+      case "dash": it.el.style.opacity = r > 0 ? 1 : 0; it.el.style.strokeDashoffset = it.len * (1 - r); break;
+      case "grow": it.el.style.opacity = r > 0 ? 1 : 0; it.el.setAttribute("height", it.h * r); break;
+      case "sweep": it.el.style.opacity = r > 0 ? 0.55 : 0; it.el.setAttribute("width", it.w * r); break;
+      case "fill": it.el.style.fill = r > 0.5 ? it.on : it.off; break;
+      case "text": it.el.textContent = it.fn(u); it.el.style.opacity = it.opacityFn ? it.opacityFn(u) : 1; break;
+    }
+  }
+
+  function captionFor(z, u) {
+    const n = nf(z.n_leaves);
+    if (z.family === "mtl") {
+      const r = z.rungs.length, split = z.rungs.map(nf).join(" + ");
+      if (u < 0.22) return n + " signed RRsets in this zone → " + n + " leaves, one per RRset.";
+      if (u < 0.44) return r === 1
+        ? n + " is a power of two (2" + sup(Math.log2(z.n_leaves)) + "), so it makes one perfect tree: hashes pair up 2 → 1 until a single top hash is left."
+        : n + " = " + split + " (binary " + z.n_leaves.toString(2) + "). A tree pairs leaves 2 by 2, so each one needs 2" + "ᵏ leaves: one perfect tree for every 1-bit of " + n + ".";
+      if (u < 0.6) return "The top hash of each tree is a rung. The " + r + " rung" + (r > 1 ? "s" : "") + " together form the ladder.";
+      if (u < 0.78) return "The ladder is signed once with SLH-DSA — one slow signature covers all " + n + " RRsets.";
+      if (u < 0.94) return "Each RRset gets just its authentication path (condensed signature), about " + fmtB(z.condensed_bytes) + ".";
+      return "Zone verified. " + (z.tier === "root" ? "Its DS becomes the trust anchor." : "Its DS is handed up to the parent.");
+    }
+    const alg = z.algorithm;
+    if (u < 0.22) return n + " RRsets to sign in this zone with " + alg + ".";
+    if (u < 0.92) return "No shortcut: each RRset is signed on its own — " + fmtB(z.direct_bytes) + " per signature.";
+    return "Zone verified. " + (z.tier === "root" ? "Its DS becomes the trust anchor." : "Its DS is handed up to the parent.");
+  }
+
+  // ────────────── frame ──────────────
+  const dur = sc.duration;
+  function render(t) {
+    introG.style.opacity = 1 - ramp(t, sc.t_intro - 0.4, sc.t_intro);
+    let pi = -1; sc.phases.forEach((p) => { if (t >= p.t0) pi = p.index; });
+    groups.forEach((g, i) => { g.el.style.display = i === pi ? "" : "none"; });
+    let step = "Press play to watch Prepare sign the hierarchy.", cap = "";
+    if (pi >= 0) {
+      const g = groups[pi], z = g.zone, u = clamp((t - z.t0) / (z.t1 - z.t0), 0, 1), ph = sc.phases[pi];
+      g.items.forEach((it) => applyItem(it, u));
+      step = "Step " + (pi + 1) + " of " + sc.phases.length + " · " + ph.label + " · " + ph.zones + " zone" + (ph.zones > 1 ? "s" : "") + " · real signing " + fmtS(ph.sign_s);
+      cap = captionFor(z, u);
+    }
+    if (t >= sc.t_phases_end) { step = "Done"; cap = "All zones are signed and verified. The lab can now be started."; }
+    $("step").textContent = step; $("cap").textContent = cap;
+    $("outro").style.opacity = ramp(t, sc.t_phases_end, sc.t_phases_end + 0.8);
+
+    // hierarchy
+    let doneZ = 0, rr = 0, by = 0, sg = 0, spotNode = null;
+    nodes.forEach((o) => {
+      const z = o.z, p = ramp(t, z.t0, z.t1), C = col(z.family);
+      if (p >= 1) doneZ++;
+      rr += z.n_leaves * p; by += z.signed_bytes * p; sg += z.sign_s * p;
+      // inline style, because the .node / .edge CSS classes would override presentation attributes
+      const st = o.c.style;
+      if (p <= 0) { st.fill = "#1c2a47"; st.stroke = "#6d82ad"; o.c.setAttribute("r", o.p.r); }
+      else if (p < 1) { st.fill = "#f5b942"; st.stroke = "#fde68a"; o.c.setAttribute("r", o.p.r * (1 + 0.16 * Math.sin(t * 9))); }
+      else { st.fill = C; st.stroke = "#e6edf7"; o.c.setAttribute("r", o.p.r); }
+      if (o.edge) o.edge.style.stroke = p >= 1 ? C : "#4a5d86";
+      if (o.ds) {
+        const q = ramp(t, z.t1, z.t1 + 0.9), par = slot[z.parent];
+        if (q > 0 && q < 1) { o.ds.style.display = ""; o.ds.setAttribute("cx", o.p.x + (par.x - o.p.x) * q); o.ds.setAttribute("cy", o.p.y + (par.y - o.p.y) * q); }
+        else o.ds.style.display = "none";
+      }
+      if (pi >= 0 && z.phase === pi && z.spotlight) spotNode = o;
+    });
+    if (spotNode && t < sc.t_phases_end) { ring.style.display = ""; ring.setAttribute("cx", spotNode.p.x); ring.setAttribute("cy", spotNode.p.y); ring.setAttribute("r", spotNode.p.r + 7); }
+    else ring.style.display = "none";
+    anchor.style.opacity = rootZ ? ramp(t, rootZ.t1 + 0.2, rootZ.t1 + 0.7) : 0;
+    $("s_zones").textContent = doneZ + " / " + nodes.length;
+    $("s_rr").textContent = nf(rr);
+    $("s_bytes").textContent = fmtB(by);
+    $("s_time").textContent = sg.toFixed(2) + " s";
+    $("time").textContent = mmss(t) + " / " + mmss(dur);
+    $("scrub").style.setProperty("--p", (dur ? (100 * t / dur) : 0) + "%");
+  }
+
+  // outro card
+  $("outro").innerHTML = "<h3></h3><ul></ul>";
+  $("outro").querySelector("h3").textContent = "What Prepare produced · " + sc.scenario;
+  sc.outro.forEach((l) => { const li = document.createElement("li"); li.textContent = l; $("outro").querySelector("ul").appendChild(li); });
+
+  // ────────────── controls ──────────────
+  let t = 0, playing = false, speed = 1, last = performance.now(), dirty = true;
+  const scrub = $("scrub"); scrub.max = dur;
+  function setPlaying(v) { playing = v; $("play").textContent = v ? "Pause" : (t >= dur ? "Replay" : "Play"); }
+  function seek(v) { t = clamp(v, 0, dur); scrub.value = t; dirty = true; if (!playing) $("play").textContent = t >= dur ? "Replay" : "Play"; }
+  $("play").onclick = () => { if (!playing && t >= dur) seek(0); setPlaying(!playing); };
+  $("restart").onclick = () => { seek(0); setPlaying(true); };
+  $("end").onclick = () => { seek(dur); setPlaying(false); };
+  $("speed").onchange = (e) => { speed = +e.target.value; };
+  scrub.oninput = () => { seek(+scrub.value); };
+  document.addEventListener("keydown", (e) => { if (e.code === "Space" && e.target.tagName !== "SELECT") { e.preventDefault(); $("play").click(); } });
+  function tick(ts) {
+    const dt = (ts - last) / 1000; last = ts;
+    if (playing) { t = Math.min(dur, t + dt * speed); scrub.value = t; dirty = true; if (t >= dur) setPlaying(false); }
+    if (dirty) { render(t); dirty = false; }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  // Start once, when the player is actually on screen (it may sit in a hidden tab). Reduced motion: show the end state.
+  const reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let started = false;
+  function start() { if (started) return; started = true; if (reduce) { seek(dur); setPlaying(false); } else { seek(0); setPlaying(true); } }
+  if ("IntersectionObserver" in window) {
+    new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) start(); }, { threshold: 0.25 }).observe($("app"));
+  } else start();
+  render(0);
+})();
+</script>
+</body>
+</html>
