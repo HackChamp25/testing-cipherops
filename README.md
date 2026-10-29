@@ -38,18 +38,26 @@ There are two measurement paths that answer different questions:
 | Environment | one pinned image, one dedicated CPU core, no network | three images per stack; containers share all host CPUs |
 | Start it with | `scripts/run_benchmark.sh` | `streamlit run dashboard/live_lab/app.py` |
 
-## Status and limits
+## What was selected, and why
 
-Read this before relying on any number.
+| Choice | Selected | Why |
+| --- | --- | --- |
+| PQC algorithm | **SLH-DSA-SHA2-128s** ([FIPS 205](https://csrc.nist.gov/pubs/fips/205/final)) | A standardised hash-based signature whose security rests only on hash functions, the same assumption MTL mode relies on. The `128s` parameter set has a 32-byte public key but a 7,856-byte signature and slow signing (about 0.6 s per signature on one core here). That is the situation MTL targets: its draft says the mode is most useful for schemes with a large signature size or computational cost, and one signature per record breaks DNS's UDP limits. A dedicated DNSSEC draft for SLH-DSA with MTL also exists ([draft-fregly-dnsop-slh-dsa-mtl-dnssec](https://datatracker.ietf.org/doc/draft-fregly-dnsop-slh-dsa-mtl-dnssec/)). |
+| MTL implementation | **Verisign MTL reference library** ([verisign/MTL](https://github.com/verisign/MTL)), unmodified, pinned by commit | It is the reference implementation of [draft-harvey-cfrg-mtl-mode](https://datatracker.ietf.org/doc/draft-harvey-cfrg-mtl-mode/), published by the draft's authors' organisation, and it was selected with the mentor's approval. It ships its own unit tests and vectors, which the go/no-go gate runs. Verisign also publishes MTL-enabled ldns, NSD and Unbound, which makes a complete signer, authoritative server and validating resolver available for the live lab. |
+| Comparison set | `slh-dsa` (same algorithm, no MTL), plus `ed25519`, `ecdsa-p256`, `rsa-2048` | The with/without-MTL pair isolates what MTL changes. The classical modes put the sizes and times in context (64-byte Ed25519 and ECDSA signatures, 256-byte RSA-2048). |
+| Dataset sizes | **50, 500 and 5,000 names** (105, 1,005 and 10,005 RRsets) | One decade apart, from a small zone to a large one, so scaling is visible. The quick run uses 20, 60 and 200 names; the live benchmark adds a 20-name smoke size. |
+| Environment | one pinned Docker image, one dedicated core, no network (offline); pinned image stacks (live lab) | Repeatable timings, and every version and setting is recorded in each run. |
 
-- **Reference implementation.** The mentor approved choosing Verisign's MTL implementation but has **not tested a
-  specific version**. PS-036 asks for a mentor-tested implementation; that is unconfirmed, and nothing in this
-  repository claims full PS-036 compliance.
-- **Fixtures.** The reference library's bundled known-answer vectors cover ML-DSA, not SLH-DSA. SLH-DSA-specific fixtures
-  are unconfirmed. SLH-DSA is checked by round trips, negative cases and agreement between two independent
-  implementations (liboqs and OpenSSL, plus Verisign's `mtlverify`). That is an interoperability check, **not** a
-  NIST known-answer test. See [methodology §3](docs/methodology.md#3-gono-go-gate).
-- **Versions differ between the two paths** (table below). Offline and live-lab numbers are not interchangeable.
+Records of what was used are written by every run: `config.yaml` and `environment.json` offline, `suite.json` for the
+live benchmark.
+
+## Scope and limits
+
+- **Fixtures.** The reference library's bundled known-answer vectors cover ML-DSA, not SLH-DSA. SLH-DSA is checked by
+  round trips, negative cases, and agreement between independent implementations (liboqs and OpenSSL, plus Verisign's
+  `mtlverify`). That is an interoperability check, not a NIST known-answer test. See
+  [methodology §3](docs/methodology.md#3-gono-go-gate).
+- **Two pinned stacks** (table below). Offline and live-lab numbers are not interchangeable.
 - **`latest` stack:** its Unbound answers SERVFAIL for plain SLH-DSA although the signed zone is valid and `draft06`
   validates it. The live MTL-versus-non-MTL comparison is valid on `draft06` only.
 - **Live-lab timings are indicative.** Containers are not pinned to cores, and the host CPU governor is recorded, not
@@ -67,22 +75,23 @@ Read this before relying on any number.
 | Live lab `draft06` (default) | see [`ecosystem/docker/Dockerfile`](ecosystem/docker/Dockerfile) | 3.6.0 | 0.14.0 | 1.2.0 (`93b05ef`) | condensed signatures by default; full signature on EDNS option 65050 |
 | Live lab `latest` | same | 3.6.0 | 0.16.0 | `7cef019` | every MTL RRSIG is served as a full signature; plain SLH-DSA not validated |
 
-All component commits (NSD, Unbound, ldns) are in [`ecosystem/stacks/`](ecosystem/stacks). Verisign MTL 1.2.1 is a
-candidate for aligning the paths; it is **not** adopted and has not been tested.
+All component commits (NSD, Unbound, ldns) are in [`ecosystem/stacks/`](ecosystem/stacks). The two paths use different
+MTL versions because `draft06` (condensed signatures by default) is the stack whose resolver validates every scenario,
+while the offline image uses the newer commit that `latest` shares. Aligning them on one version is open work.
 
 ## PS-036 requirements
 
 | Requirement | Where it is met | State |
 | --- | --- | --- |
 | One supported PQC algorithm | SLH-DSA-SHA2-128s | done |
-| One mentor-tested MTL reference implementation | Verisign MTL | **unconfirmed** (see above) |
+| One MTL reference implementation | Verisign MTL, pinned by commit (see above) | done |
 | Three dataset sizes | 50 / 500 / 5,000 names by default; quick run 20 / 60 / 200 | done |
 | With and without MTL | `slh-dsa-mtl` vs `slh-dsa`, plus classical references | done |
 | Repeated trials, pinned environment | pinned image, dedicated core, seeded order, discarded warm-up | done offline; live lab not core-pinned |
 | Signing time, verification time, transmitted bytes | `trials.csv`, `responses.csv`, `workload.csv`; live-lab captures | done |
 | Record configuration and workload parameters | `config.yaml`, `environment.json`, `suite.json` in each run | done |
 | Cache: measured vs analytical, kept apart | `cache.csv` has a `kind` column; the report never mixes them | done |
-| Defer if implementation or fixtures are missing | go/no-go gate (`preflight`) blocks the run | done for the implementation; SLH-DSA fixtures unconfirmed |
+| Defer if implementation or fixtures are missing | go/no-go gate (`preflight`) blocks the run | done; SLH-DSA is checked by interoperability, not published vectors |
 | No new cryptography, resolver or deployment | the harness only calls libraries; the lab uses stock servers | done |
 
 ## Quick start
