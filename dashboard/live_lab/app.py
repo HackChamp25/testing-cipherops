@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -485,61 +486,103 @@ def _activity_expander(h: driver.LabHandle) -> None:
 
 # ─────────────────────────── sidebars ───────────────────────────
 
-# Full screen needs a user click (browsers block it on load). Icon only, pinned to the top-right of the
-# main pane so the sidebar stays tight — Cipherops sits next to "How to use this lab" / Home as before.
-_FULLSCREEN_HTML = """
+def _lab_revision() -> str:
+    """Short git commit for the About panel; empty if git is unavailable."""
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=str(ROOT), text=True, timeout=2,
+        ).strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+# Top-right chrome: "About" (opens a full-page panel) + full-screen symbol. The About content is
+# assets/about.html; this small iframe only draws the two buttons and injects that panel into the page.
+_ABOUT_ASSET = Path(__file__).parent / "assets" / "about.html"
+
+_CHROME_TEMPLATE = r"""
 <style>
   html, body { margin: 0; background: transparent; overflow: hidden; }
-  button {
-    width: 32px; height: 32px; border-radius: 8px; padding: 0; cursor: pointer;
-    font-size: 16px; line-height: 1; color: #31333f;
-    background: rgba(255,255,255,.92); border: 1px solid rgba(49,51,63,.18);
-  }
-  button:hover { border-color: #ff4b4b; color: #ff4b4b; }
+  .bar { display: flex; align-items: center; gap: 6px; justify-content: flex-end; height: 34px;
+         font: 13px "Source Sans Pro", "Source Sans 3", system-ui, sans-serif; }
+  .bar button { height: 32px; border-radius: 8px; cursor: pointer; color: #31333f;
+                background: rgba(255,255,255,.94); border: 1px solid rgba(49,51,63,.18); }
+  .bar button:hover { border-color: #ff4b4b; color: #ff4b4b; }
+  .bar #about { padding: 0 12px; font: inherit; font-weight: 600; letter-spacing: .01em; }
+  .bar #fs { width: 32px; padding: 0; font-size: 15px; line-height: 1; }
   @media (prefers-color-scheme: dark) {
-    button { color: #fafafa; background: rgba(38,39,48,.92); border-color: rgba(250,250,250,.2); }
-    button:hover { border-color: #ff4b4b; color: #ff4b4b; }
+    .bar button { color: #fafafa; background: rgba(38,39,48,.94); border-color: rgba(250,250,250,.2); }
+    .bar button:hover { border-color: #ff4b4b; color: #ff4b4b; }
   }
 </style>
-<button id="b" title="Full screen" aria-label="Full screen">&#x26F6;</button>
+<div class="bar">
+  <button type="button" id="about" title="About this lab">About</button>
+  <button type="button" id="fs" title="Full screen" aria-label="Full screen">&#x26F6;</button>
+</div>
 <script>
-  (function () {
-    const frame = window.frameElement;
-    if (frame) {
-      Object.assign(frame.style, {
-        position: "fixed", top: "4.1rem", right: "1.25rem",
-        width: "34px", height: "34px", zIndex: "998",
-        border: "none", background: "transparent",
-      });
-      // Collapse the Streamlit slot so this control never pushes page content down.
-      const slot = frame.closest("[data-testid='stElementContainer'], .stElementContainer, .element-container");
-      if (slot) Object.assign(slot.style, { height: "0", margin: "0", padding: "0", overflow: "visible" });
-    }
-    const b = document.getElementById("b");
-    try {
-      const doc = window.parent.document;
-      const sync = () => {
-        const on = !!doc.fullscreenElement;
-        b.textContent = on ? "\\u2715" : "\\u26F6";
-        b.title = on ? "Exit full screen" : "Full screen";
-        b.setAttribute("aria-label", b.title);
-      };
-      b.onclick = () => (doc.fullscreenElement ? doc.exitFullscreen() : doc.documentElement.requestFullscreen());
-      doc.addEventListener("fullscreenchange", sync);
-      sync();
-    } catch (e) {
-      b.title = "Press F11 for full screen";
-      b.setAttribute("aria-label", b.title);
-      b.disabled = true;
-    }
-  })();
+(function () {
+  const PANEL = __PANEL__;
+  const frame = window.frameElement;
+  if (frame) {
+    Object.assign(frame.style, { position: "fixed", top: "4.1rem", right: "1.25rem",
+      width: "118px", height: "36px", zIndex: "998", border: "none", background: "transparent" });
+    const slot = frame.closest("[data-testid='stElementContainer'], .stElementContainer, .element-container");
+    if (slot) Object.assign(slot.style, { height: "0", margin: "0", padding: "0", overflow: "visible" });
+  }
+  const win = window.parent, doc = win.document;
+
+  // Full screen: needs a click, so it is a button. Replace any listener left by an earlier run of this script.
+  const fsBtn = document.getElementById("fs");
+  try {
+    const sync = () => {
+      const on = !!doc.fullscreenElement;
+      fsBtn.textContent = on ? "\u2715" : "\u26F6";
+      fsBtn.title = on ? "Exit full screen" : "Full screen";
+      fsBtn.setAttribute("aria-label", fsBtn.title);
+    };
+    fsBtn.onclick = () => (doc.fullscreenElement ? doc.exitFullscreen() : doc.documentElement.requestFullscreen());
+    if (win.__coFs) doc.removeEventListener("fullscreenchange", win.__coFs);
+    win.__coFs = sync;
+    doc.addEventListener("fullscreenchange", sync);
+    sync();
+  } catch (e) { fsBtn.title = "Press F11 for full screen"; fsBtn.disabled = true; }
+
+  // About panel: built once per page load (rebuilt if its content changed), closed by x, backdrop or Esc.
+  function ensurePanel() {
+    let root = doc.getElementById("co-about-root");
+    const version = String(PANEL.length);
+    if (root && root.dataset.v === version) return root;
+    if (root) root.remove();
+    root = doc.createElement("div");
+    root.id = "co-about-root";
+    root.dataset.v = version;
+    root.innerHTML = PANEL;
+    doc.body.appendChild(root);
+    const close = () => root.classList.remove("open");
+    root.querySelector(".ab-close").onclick = close;
+    root.querySelector(".ab-backdrop").onclick = close;
+    if (win.__coAboutKey) doc.removeEventListener("keydown", win.__coAboutKey);
+    win.__coAboutKey = (ev) => { if (ev.key === "Escape") close(); };
+    doc.addEventListener("keydown", win.__coAboutKey);
+    return root;
+  }
+  document.getElementById("about").onclick = () => {
+    const root = ensurePanel();
+    root.classList.add("open");
+    root.querySelector(".ab-scroll").scrollTop = 0;
+  };
+})();
 </script>
 """
 
 
-def _fullscreen_icon() -> None:
-    _embed_html(_FULLSCREEN_HTML, height=1)
+def _chrome_html(revision: str) -> str:
+    panel = _ABOUT_ASSET.read_text(encoding="utf-8").replace("__REV__", revision or "local")
+    return _CHROME_TEMPLATE.replace("__PANEL__", json.dumps(panel).replace("</", "<\\/"))
 
+
+def _chrome_bar() -> None:
+    _embed_html(_chrome_html(_lab_revision()), height=1)
 
 def _sidebar_brand(mode: str) -> None:
     st.sidebar.title("Cipherops")
@@ -785,23 +828,33 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
     st.sidebar.markdown(_step_label(3, "Start", "done" if r["running"] else "none"))
     _hint("Start root, TLD, leaf, and resolver containers. Only one lab runs at a time, "
           "so starting stops any other zone shape.")
+    can_start = bool(r["prepared"])
+    if not can_start:
+        _hint("Start stays off until Prepare has signed this zone size (compose + manifests on disk).")
     b3a, b3b = st.sidebar.columns(2)
-    if b3a.button("Start", key="btn_up", width="stretch", disabled=bool(bench_busy or signing or building or no_images)):
-        activity("step", "Starting the lab", f"Image set {h.stack}", phase="compose", source="compose", h=h)
-        with st.spinner("Starting…"):
-            try:
-                log = driver.up(h)
-                st.session_state.last_log = log[-4000:]
-                st.session_state.pop("last_start_error", None)
-                _log_chunks(log, phase="compose", source="compose", title="up")
-                activity("ok", "Lab is running", "DNS servers and resolver are up.",
-                         phase="compose", source="compose", h=h)
-            except Exception as e:  # noqa: BLE001
-                msg = str(e)
-                st.session_state.last_start_error = msg[-4000:]
-                st.sidebar.error(msg[:800])
-                activity("err", "Start failed", msg[-3000:], phase="compose", source="compose", h=h)
-        st.rerun()
+    # Their rule (Start needs a prepared lab) plus ours (not while a benchmark, signing or build owns the lab, and
+    # not before the images exist).
+    start_off = (not can_start) or bool(bench_busy or signing or building or no_images)
+    if b3a.button("Start", key="btn_up", width="stretch", disabled=start_off):
+        if not h.prepared():
+            st.sidebar.error("Run Prepare first — there is nothing signed to start for this lab.")
+            activity("err", "Start blocked", "Lab is not prepared", phase="compose", source="compose", h=h)
+        else:
+            activity("step", "Starting the lab", f"Image set {h.stack}", phase="compose", source="compose", h=h)
+            with st.spinner("Starting…"):
+                try:
+                    log = driver.up(h)
+                    st.session_state.last_log = log[-4000:]
+                    st.session_state.pop("last_start_error", None)
+                    _log_chunks(log, phase="compose", source="compose", title="up")
+                    activity("ok", "Lab is running", "DNS servers and resolver are up.",
+                             phase="compose", source="compose", h=h)
+                except Exception as e:  # noqa: BLE001
+                    msg = str(e)
+                    st.session_state.last_start_error = msg[-4000:]
+                    st.sidebar.error(msg[:800])
+                    activity("err", "Start failed", msg[-3000:], phase="compose", source="compose", h=h)
+            st.rerun()
     if b3b.button("Stop", key="btn_down", width="stretch", disabled=bool(bench_busy)):
         with st.spinner("Stopping…"):
             try:
@@ -1092,19 +1145,11 @@ def home_page(h: driver.LabHandle, stt: dict) -> None:
                     st.markdown(f"**{tile['pitch']}**")
                     for b in tile["bullets"]:
                         st.markdown(f"- {b}")
-                if mode == "setup":
-                    emphasise = not r["ready"]
-                elif mode == "live":
-                    emphasise = r["ready"]
-                elif mode == "benchmark":
-                    emphasise = r["images"]
-                elif mode == "compare":
-                    emphasise = bool(driver.list_labs())
-                else:
-                    emphasise = False
+                # Every tile opens with the same call-to-action style: readiness is shown by the chip
+                # and the banner above, not by making some buttons look disabled.
                 st.button(
                     f"{tile['cta']} →", key=f"open_{mode}", on_click=_go, args=(mode,),
-                    type="primary" if emphasise else "secondary", width="stretch",
+                    type="primary", width="stretch",
                 )
 
 
@@ -2804,7 +2849,7 @@ PAGES = {
 
 def main() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
-    _fullscreen_icon()  # symbol only, top-right; no layout cost on the sidebar or page body
+    _chrome_bar()  # About + full screen, top-right; no layout cost on the sidebar or page body
     symbol, _full = _brand()
     if symbol is not None:
         st.logo(symbol, icon_image=symbol, size="large")  # top-left on Home and on every tile

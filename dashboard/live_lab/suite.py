@@ -25,6 +25,9 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
+if __package__ in (None, ""):          # `python dashboard/live_lab/suite.py ...` from any folder
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from live_lab import driver
 
 SUITES = driver.SUITES_DIR
@@ -33,6 +36,7 @@ SMOKE_SIZE = 20                       # quick check that the pipeline works
 DEFAULT_SIGN_TRIALS = 5
 DEFAULT_SAMPLE_NAMES = 100
 STEPS_PER_SIZE = 5
+LONG_RUN_S = 12 * 3600                # the command line asks for --yes above this
 
 
 def bench_shape(n_names: int) -> dict:
@@ -140,8 +144,12 @@ def _start_lock(timeout_s: float = 10.0):
         shutil.rmtree(lock, ignore_errors=True)
 
 
-def start(params: dict) -> str:
-    """Write the parameters and launch the suite as a detached process. Returns the suite id."""
+def create(params: dict) -> tuple[str, Path]:
+    """Make the suite folder and write its parameters. Returns (suite id, folder).
+
+    Used by the dashboard (via ``start``) and by the command line. Refuses, under a lock, if anything else already
+    owns the lab, so two launches can never run at once.
+    """
     with _start_lock():
         live = running_suite()
         if live:
@@ -164,15 +172,21 @@ def start(params: dict) -> str:
         # 'started' lets a launch that never produces a process age out instead of blocking everything.
         _write_status(d, {"state": "starting", "step": "starting", "done": 0, "started": time.time(),
                           "total": len(params["sizes"]) * STEPS_PER_SIZE})
-        log = open(d / "progress.log", "ab")
-        proc = subprocess.Popen([sys.executable, "-m", "live_lab.suite", str(d / "params.json")],
-                                cwd=Path(__file__).resolve().parents[1], stdout=log, stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL, env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-                                **driver.background_process_kwargs())
-        st = _read(d / "status.json")
-        if st.get("state") == "starting" and not st.get("pid"):
-            _write_status(d, {**st, "pid": proc.pid})
-        return suite_id
+        return suite_id, d
+
+
+def start(params: dict) -> str:
+    """Write the parameters and launch the suite as a detached process. Returns the suite id."""
+    suite_id, d = create(params)
+    log = open(d / "progress.log", "ab")
+    proc = subprocess.Popen([sys.executable, "-m", "live_lab.suite", str(d / "params.json")],
+                            cwd=Path(__file__).resolve().parents[1], stdout=log, stderr=subprocess.STDOUT,
+                            stdin=subprocess.DEVNULL, env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                            **driver.background_process_kwargs())
+    st = _read(d / "status.json")
+    if st.get("state") == "starting" and not st.get("pid"):
+        _write_status(d, {**st, "pid": proc.pid})
+    return suite_id
 
 
 def cancel(suite_id: str) -> str:
@@ -317,9 +331,92 @@ def run_suite(p: dict) -> None:
         raise SystemExit(1)
 
 
+class _Tee:
+    """Copy everything printed to the console into the suite's progress.log as well."""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, text):
+        for s in self.streams:
+            s.write(text)
+        return len(text)
+
+    def flush(self):
+        for s in self.streams:
+            s.flush()
+
+
+def _cli_parser():
+    import argparse
+    p = argparse.ArgumentParser(
+        prog="suite",
+        description="Run a benchmark from the command line. The result is saved like a dashboard run and "
+                    "appears in the dashboard's Benchmark tab. Example: "
+                    "python dashboard/live_lab/suite.py --sizes 10000 --trials 5 --name full-10000")
+    p.add_argument("params", nargs="?", help="a params.json written by the dashboard (internal use)")
+    p.add_argument("--sizes", default=",".join(str(n) for n in BENCH_SIZES), help="dataset sizes in names, "
+                   "comma separated (default 50,500,5000)")
+    p.add_argument("--scenarios", default="ecdsa,slh-dsa,mtl,rsa,ed25519",
+                   help="comma separated (default ecdsa,slh-dsa,mtl,rsa,ed25519)")
+    p.add_argument("--trials", type=int, default=5, help="measurement trials (cold then warm); 6 or more for a 95%% interval")
+    p.add_argument("--sign-trials", type=int, default=DEFAULT_SIGN_TRIALS, help="repeated sign/verify trials")
+    p.add_argument("--sample", type=int, default=DEFAULT_SAMPLE_NAMES, help="names in the signing sample zone")
+    p.add_argument("--queries", type=int, default=500, help="lookups per cold or warm pass")
+    p.add_argument("--networks", default="lan", help="lan, wan, lossy (comma separated)")
+    p.add_argument("--udp", type=int, default=1232, choices=[1232, 4096])
+    p.add_argument("--jobs", type=int, default=1, help="zones signed in parallel (1 = clean timings)")
+    p.add_argument("--stack", default=driver.DEFAULT_STACK)
+    p.add_argument("--name", default="", help="name shown in the dashboard")
+    p.add_argument("--yes", action="store_true", help="allow a run that needs more than 12 hours")
+    p.add_argument("--plan", action="store_true", help="only show what would run and the time estimate")
+    return p
+
+
 def main(argv: list[str] | None = None) -> None:
     argv = argv if argv is not None else sys.argv[1:]
-    run_suite(json.loads(Path(argv[0]).read_text(encoding="utf-8")))
+    args = _cli_parser().parse_args(argv)
+    if args.params:                      # started by the dashboard
+        run_suite(json.loads(Path(args.params).read_text(encoding="utf-8")))
+        return
+    split = lambda s: [t.strip() for t in s.split(",") if t.strip()]  # noqa: E731
+    sizes = sorted(int(n) for n in split(args.sizes))
+    if not sizes or sizes[0] < 1:
+        raise SystemExit("--sizes needs whole numbers of 1 or more, e.g. --sizes 10000")
+    scenarios, networks = split(args.scenarios), split(args.networks)
+    bad = [s for s in scenarios if s not in driver.SCENARIO_ALGS]
+    if bad:
+        raise SystemExit(f"unknown scenario(s) {bad}; choose from {', '.join(driver.SCENARIO_ALGS)}")
+    bad = [n for n in networks if n not in driver.PROFILE_DEFAULTS]
+    if bad:
+        raise SystemExit(f"unknown network(s) {bad}; choose from {', '.join(driver.PROFILE_DEFAULTS)}")
+    est = estimate_seconds(sizes, scenarios, args.jobs, args.sign_trials, args.sample)
+    print(f"Benchmark: sizes {sizes} · {', '.join(scenarios)} · {args.trials} measurement trial(s), "
+          f"{args.sign_trials} signing trial(s) · networks {', '.join(networks)}")
+    print(f"Signing and sign trials about {driver.format_duration(est)}, plus measuring a few minutes per size.")
+    if args.plan:
+        return
+    if est > LONG_RUN_S and not args.yes:
+        raise SystemExit(f"That is more than {LONG_RUN_S // 3600} hours of signing alone. If you really mean it, "
+                         "add --yes (use --plan to preview).")
+    params = {
+        "label": args.name, "stack": args.stack, "sizes": sizes, "scenarios": scenarios, "trials": args.trials,
+        "sign_trials": args.sign_trials, "sample_names": args.sample, "n_queries": args.queries,
+        "networks": networks, "udp": args.udp, "jobs": args.jobs,
+        "workload": dict(driver.WORKLOAD_DEFAULTS),
+        "profiles": {k: dict(v) for k, v in driver.PROFILE_DEFAULTS.items() if k != "lan"},
+    }
+    try:
+        suite_id, d = create(params)
+    except driver.LabBusy as e:
+        raise SystemExit(str(e))
+    print(f"Saved as {suite_id}; it shows up in the dashboard's Benchmark tab. Keep this window open.\n")
+    with open(d / "progress.log", "a", encoding="utf-8") as log:
+        sys.stdout = _Tee(sys.__stdout__, log)
+        try:
+            run_suite(json.loads((d / "params.json").read_text(encoding="utf-8")))
+        finally:
+            sys.stdout = sys.__stdout__
 
 
 if __name__ == "__main__":

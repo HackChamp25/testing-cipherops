@@ -322,3 +322,27 @@ def test_worker_streams_the_log_and_records_the_result(eco, monkeypatch, code, s
 def test_stacks_that_cannot_validate_a_scenario_are_flagged():
     assert driver.unvalidated_scenarios("latest", ["ecdsa", "slh-dsa", "mtl"]) == ["slh-dsa"]
     assert driver.unvalidated_scenarios("draft06", ["ecdsa", "slh-dsa", "mtl"]) == []
+
+
+# ───────────── the command-line suite shares the same guards ─────────────
+
+def test_cli_plan_prints_the_estimate_and_starts_nothing(eco, capsys):
+    suite.main(["--sizes", "20,50", "--scenarios", "ecdsa,mtl", "--plan"])
+    out = capsys.readouterr().out
+    assert "sizes [20, 50]" in out and "5 measurement trial(s)" in out
+    assert not (eco[0] / "results" / "suites").exists() or not list((eco[0] / "results" / "suites").glob("2*"))
+
+
+def test_cli_refuses_while_another_suite_runs(eco):
+    root, _ = eco
+    _suite_status(root, "s1", state="running", pid=1, started=time.time())
+    with pytest.raises(SystemExit) as e:
+        suite.main(["--sizes", "20", "--scenarios", "ecdsa"])
+    assert "already" in str(e.value)
+
+
+def test_create_claims_the_lab_so_a_second_creator_is_refused(eco):
+    first, _ = suite.create({"sizes": [20], "label": "a"})
+    assert suite.status(first)["state"] == "starting"
+    with pytest.raises(driver.LabBusy):
+        suite.create({"sizes": [20], "label": "b"})

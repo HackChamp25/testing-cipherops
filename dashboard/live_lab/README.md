@@ -21,6 +21,8 @@ The app opens on a hub of five tiles. **Setup** builds the images (and, for Live
 | **Compare** | MTL vs SLH-DSA and the other modes, side by side | Benchmark, dataset size, network, candidate and baseline | Cards, scaling across sizes, signing, bytes per tier, cache, latency, CSV |
 | **Reset** | Clear only the scopes you pick | Notes on what is kept | What the last reset removed |
 
+The **About** button (top right) opens a panel describing the lab and the team; a full-screen button sits beside it. Start is available only once Prepare has signed at least one scenario for the chosen zone size.
+
 ## Signing replay
 
 After **Prepare**, Setup opens an animated replay of how the hierarchy was signed (also under Setup → **Signing replay**, any time the lab is prepared). It plays bottom-up: leaf zones, then TLDs, then the root, with the DS record travelling up to each parent and the root DS ending as the trust anchor. Pick a scenario to compare the stories:
@@ -42,6 +44,7 @@ An RRSIG count is the number of real RRSIG records in the signed zone: a leaf zo
 
 One press of **Run benchmark** does, for each dataset size (default 50, 500 and 5,000 data names): build the hierarchy, sign it with every chosen scenario (timed), repeat signing and verification on sample zones (several trials), start the lab, replay the same seeded workload with repeated cold and warm trials, and stop the lab. It needs only the built images: no Prepare and no running lab. It runs in the background, so you can leave the page; Results fills in when it finishes.
 
+- **From the command line:** `python3 dashboard/live_lab/suite.py --sizes 50,500,5000 --trials 5 --name full` runs the same suite in the foreground and saves it like a dashboard run. `--plan` prints the settings and time estimate only, and a run estimated above 12 hours needs `--yes`. It takes the same lab guard as the dashboard: it refuses to start while another benchmark, a build or a signing job owns the lab, and while it runs the dashboard's lab buttons are disabled. Defaults: 5 measurement and 5 signing trials, scenarios ecdsa, slh-dsa, mtl, rsa, ed25519.
 - **Algorithm and implementation:** SLH-DSA-SHA2-128s, with MTL (mtl) and without (slh-dsa), using Verisign's MTL-mode ldns, NSD and Unbound. ecdsa is an optional classical reference.
 - **Signing and verification time:** each trial signs two sample zones; a straight line through them gives a fixed cost per zone and a cost per RRSIG, applied to every zone of the dataset. This is an extrapolation and is labelled as one. The full zones are also signed once and that time is shown next to it.
 - **Transmitted bytes, truncation, cache memory, latency:** measured in the resolver run, per tier (root, TLD, leaf), cold and warm.

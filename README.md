@@ -146,6 +146,14 @@ streamlit run dashboard/live_lab/app.py
 | **Compare** | MTL against SLH-DSA and the classical reference from a finished benchmark |
 | **Reset** | remove sessions, captures, runs or signed zones |
 
+The benchmark can also run without the browser (same guards and the same saved results, which then appear in the
+Benchmark tile):
+
+```bash
+python3 dashboard/live_lab/suite.py --sizes 50,500,5000 --name full --plan   # preview the plan and time estimate
+python3 dashboard/live_lab/suite.py --sizes 50,500,5000 --name full          # run it; keep the terminal open
+```
+
 Use the **`draft06`** image version (the live lab default) for the MTL-versus-non-MTL comparison. A first image build takes tens of minutes;
 it runs in the background with a live log. Details: [`dashboard/live_lab/README.md`](dashboard/live_lab/README.md).
 
@@ -223,5 +231,6 @@ Presentation: [`A3-PS036-TC161.pptx.pdf`](A3-PS036-TC161.pptx.pdf).
 
 ## Team and licence
 
-**A3-PS036-TC161**: Akash Joshi, Anitha, Induradhakrishnan. MIT licence, see [LICENSE](LICENSE). Verisign MTL, liboqs,
+**A3-PS036-TC161**, PES University, Bengaluru (Cyber and Data Security): Akash Joshi and Anitha Natarajan (student
+developers), Indu Radhakrishnan (faculty mentor). MIT licence, see [LICENSE](LICENSE). Verisign MTL, liboqs,
 OpenSSL and NSD keep their own licences.
