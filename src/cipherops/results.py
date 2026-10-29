@@ -60,7 +60,7 @@ def load(root: Path) -> Run:
 
 
 def timing_table(trials: pd.DataFrame) -> pd.DataFrame:
-    """Median over trials with a bootstrap 95% CI for each zone-level timing."""
+    """Median over trials with a distribution-free CI of the median (stats.median_ci) for each zone-level timing."""
     rows = []
     metrics = ("sign_total_ns", "verify_warm_total_ns", "sign_per_rrset_ns", "verify_per_rrset_ns",
                "verify_full_median_ns", "keygen_ns", "sign_total_extrapolated_ns",
@@ -73,7 +73,7 @@ def timing_table(trials: pd.DataFrame) -> pd.DataFrame:
         for m in metrics:
             if m in g and g[m].notna().any():
                 vals = g[m].dropna()
-                lo, hi = stats.bootstrap_ci(vals)
+                lo, hi = stats.median_ci(vals)
                 row[m] = float(vals.median())
                 row[m + "_lo"], row[m + "_hi"] = lo, hi
         rows.append(row)

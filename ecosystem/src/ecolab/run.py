@@ -18,7 +18,7 @@ from pathlib import Path
 import pandas as pd
 
 from cipherops import pcap
-from cipherops.stats import bootstrap_ci
+from cipherops.stats import median_ci
 
 from . import control
 from .client import replay, workload
@@ -61,15 +61,27 @@ def hop_rows(path: Path, lab: Lab) -> list[dict]:
     return out
 
 
+ANSWERED = ("NOERROR", "NXDOMAIN")  # a real answer; SERVFAIL, REFUSED and timeouts are failures, not slow answers
+
+
 def _pass_row(rows: list[dict]) -> dict:
+    """One pass of the workload.
+
+    Latency is taken over answered lookups only. A SERVFAIL comes back fast and a timeout waits out the clock, so
+    counting either would make a broken resolver look quick (or slow) instead of failing the pass. ``valid`` is
+    False if any lookup failed, and ``summarize`` leaves invalid passes out of every figure.
+    """
     q = pd.DataFrame(rows)
-    ok = q[~q.timeout]
+    ok = q[(~q.timeout) & q.rcode.isin(ANSWERED)]
     return {
         "queries": len(q),
+        "answered": len(ok),
+        "failed": len(q) - len(ok),
+        "valid": len(ok) == len(q),
         "median_ms": float(ok.latency_ms.median()) if len(ok) else float("nan"),
         "p95_ms": float(ok.latency_ms.quantile(0.95)) if len(ok) else float("nan"),
         "mean_ms": float(ok.latency_ms.mean()) if len(ok) else float("nan"),
-        "total_ms": float(q.latency_ms.sum()),
+        "total_ms": float(ok.latency_ms.sum()),
         "validated_pct": 100.0 * float(q.ad.mean()),
         "servfail": int((q.rcode == "SERVFAIL").sum()),
         "timeouts": int(q.timeout.sum()),
@@ -97,7 +109,7 @@ def clean_label(label: str | None) -> str:
 
 
 def run(lab: Lab, scenarios: list[str], udp_limits: list[int], profiles: list[str], trials: int, log=print,
-        run_label: str = "", stamp: str = "") -> Path:
+        run_label: str = "", stamp: str = "", warmup: int = 1) -> Path:
     label = clean_label(run_label)
     # The dashboard passes its own clock so folder names match the user's time, not the container's.
     stamp = stamp if re.fullmatch(r"\d{8}-\d{6}", stamp or "") else time.strftime("%Y%m%d-%H%M%S")
@@ -108,7 +120,7 @@ def run(lab: Lab, scenarios: list[str], udp_limits: list[int], profiles: list[st
     pd.DataFrame(items).to_csv(rdir / "workload.csv", index=False)
     meta = {"run_id": run_id, "run_label": label, "started": stamp,
             "lab": lab.cfg, "scenarios": scenarios, "udp_limits": udp_limits, "profiles": profiles,
-            "trials": trials, "environment": environment(lab),
+            "trials": trials, "warmup_trials": warmup, "environment": environment(lab),
             "manifests": {s: load_manifest(lab, s) for s in scenarios}}
     (rdir / "run.json").write_text(json.dumps(meta, indent=2, default=str))
 
@@ -123,8 +135,15 @@ def run(lab: Lab, scenarios: list[str], udp_limits: list[int], profiles: list[st
             control.unbound_ready()
             for profile in profiles:
                 control.shape(lab, lab.cfg["network"]["profiles"][profile])
-                for trial in range(trials):
+                # Trials -warmup..-1 run exactly like the rest but are discarded: the first replay after a restart
+                # pays one-off costs (page faults, first TCP connections) that are not part of the measurement.
+                for trial in range(-warmup, trials):
                     control.flush_resolver()
+                    if trial < 0:
+                        log(f"  {scenario:<10} udp {udp}  {profile:<5}  warm-up {trial + warmup + 1}/{warmup} (discarded)")
+                        replay(lab, items)
+                        replay(lab, items)
+                        continue
                     for pass_ in ("cold", "warm"):
                         key = {"scenario": scenario, "udp_limit": udp, "profile": profile, "trial": trial, "pass": pass_}
                         name = f"{scenario}-{udp}-{profile}-t{trial}-{pass_}.pcap"
@@ -154,7 +173,8 @@ def run(lab: Lab, scenarios: list[str], udp_limits: list[int], profiles: list[st
                         log(f"      median {prow['median_ms']:.1f} ms  validated {prow['validated_pct']:.1f}%  "
                             f"upstream {prow['upstream_bytes'] / 1e3:.1f} KB in {prow['upstream_queries']} queries "
                             f"(unbound sent {st.get('num.query.udpout', 0) + st.get('num.query.tcpout', 0):.0f})  "
-                            f"servfail {prow['servfail']}  timeouts {prow['timeouts']}")
+                            f"servfail {prow['servfail']}  timeouts {prow['timeouts']}"
+                            + ("" if prow["valid"] else "  INVALID PASS: excluded from the summary"))
                     pd.DataFrame(passes).to_csv(rdir / "passes.csv", index=False)
     pd.DataFrame(queries).to_csv(rdir / "queries.csv", index=False)
     pd.DataFrame(hops).to_csv(rdir / "hops.csv", index=False)
@@ -162,9 +182,10 @@ def run(lab: Lab, scenarios: list[str], udp_limits: list[int], profiles: list[st
     return rdir
 
 
-SUMMARY_COLS = ("median_ms", "p95_ms", "total_ms", "upstream_bytes", "upstream_queries", "upstream_truncated",
+FAILURE_COLS = ("failed", "servfail", "timeouts")  # summed over all passes, valid or not
+SUMMARY_COLS = ("answered", "median_ms", "p95_ms", "total_ms", "upstream_bytes", "upstream_queries", "upstream_truncated",
                 "upstream_tcp_connections", "hop_client_bytes", "hop_root_bytes", "hop_tld_bytes", "hop_sld_bytes",
-                "validated_pct", "servfail", "timeouts", "mem.cache.rrset", "mem.cache.message")
+                "validated_pct", "mem.cache.rrset", "mem.cache.message")
 
 
 def summarize(rdir: Path) -> pd.DataFrame:
@@ -173,12 +194,20 @@ def summarize(rdir: Path) -> pd.DataFrame:
     for key, g in p.groupby(["scenario", "udp_limit", "profile", "pass"], sort=False):
         row = dict(zip(["scenario", "udp_limit", "profile", "pass"], key))
         row["trials"] = len(g)
+        # passes where a lookup failed (SERVFAIL, timeout) say nothing about speed or bytes; keep the count
+        # visible and compute every figure from the valid ones only (older runs have no `valid` column)
+        row["valid_trials"] = int(g["valid"].sum()) if "valid" in g else len(g)
+        # failures are counted over ALL passes so they cannot disappear from the summary
+        for c in FAILURE_COLS:
+            if c in g:
+                row[c] = int(g[c].sum())
+        g = g[g["valid"].astype(bool)] if "valid" in g else g
         for c in SUMMARY_COLS:
             if c in g and g[c].notna().any():
                 v = g[c].dropna().astype(float)
                 row[c] = float(v.median())
                 if c in ("median_ms", "total_ms", "upstream_bytes"):
-                    row[f"{c}_ci_lo"], row[f"{c}_ci_hi"] = bootstrap_ci(v.to_numpy())
+                    row[f"{c}_ci_lo"], row[f"{c}_ci_hi"] = median_ci(v.to_numpy())
         rows.append(row)
     s = pd.DataFrame(rows)
     s.to_csv(rdir / "summary.csv", index=False)

@@ -89,3 +89,14 @@ def test_suite_report_writes_md_html_when_suite_present(tmp_path):
     assert out.is_file() and "PS-036" in out.read_text(encoding="utf-8")
     html = out.with_suffix(".html")
     assert html.is_file() and "Signing" in html.read_text(encoding="utf-8")
+
+
+def test_lookup_problems_names_the_scenario_and_counts():
+    summary = pd.DataFrame([
+        {"scenario": "slh-dsa", "profile": "lan", "pass": "cold", "trials": 3, "valid_trials": 0, "failed": 30,
+         "servfail": 30, "timeouts": 0},
+        {"scenario": "mtl", "profile": "lan", "pass": "cold", "trials": 3, "valid_trials": 3, "failed": 0,
+         "servfail": 0, "timeouts": 0}])
+    notes = compare.lookup_problems(summary)
+    assert len(notes) == 1 and "slh-dsa" in notes[0] and "SERVFAIL 30" in notes[0] and "0 of 3" in notes[0]
+    assert compare.lookup_problems(pd.DataFrame()) == [] and compare.lookup_problems(None) == []

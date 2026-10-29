@@ -30,7 +30,7 @@ from live_lab import driver
 SUITES = driver.SUITES_DIR
 BENCH_SIZES = (50, 500, 5000)         # data names in the dataset, as in the main Cipherops benchmark
 SMOKE_SIZE = 20                       # quick check that the pipeline works
-DEFAULT_SIGN_TRIALS = 3
+DEFAULT_SIGN_TRIALS = 5
 DEFAULT_SAMPLE_NAMES = 100
 STEPS_PER_SIZE = 5
 
@@ -293,7 +293,8 @@ def run_suite(p: dict) -> None:
         _write_csv(r.dir / "signing_full.csv", full_rows)
         suite = {**p, "finished": time.strftime("%Y%m%d-%H%M%S"), "seconds": round(time.time() - r.t0),
                  "sizes_detail": detail,
-                 "host": {"platform": platform.platform(), "cpus": os.cpu_count(), "python": platform.python_version()}}
+                 "host": {"platform": platform.platform(), "cpus": os.cpu_count(), "python": platform.python_version()},
+                 "provenance": driver.provenance(p["stack"])}
         (r.dir / "suite.json").write_text(json.dumps(suite, indent=2), encoding="utf-8")
         try:
             from live_lab import suite_report

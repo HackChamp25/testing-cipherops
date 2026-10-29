@@ -261,7 +261,8 @@ def summarise(trials: pd.DataFrame, frames: dict[str, pd.DataFrame]) -> dict:
                     "verify_full_median_ns", "keygen_ns"):
             vals = g[col].dropna()
             if len(vals):
-                entry[col] = {**stats.summarize(vals), "median_ci95": stats.bootstrap_ci(vals)}
+                entry[col] = {**stats.summarize(vals), "median_ci": stats.median_ci(vals),
+                              "ci_coverage": stats.median_ci_coverage(len(vals))}
         entry["all_checks_passed"] = bool((g.exit_code == 0).all() and (g.failures_total == 0).all()
                                           and g.tamper_all_rejected.all())
         entry["limited"] = bool(g.limited.any())
@@ -366,7 +367,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         write_frame(df, root, name)
     log("saved responses.csv, workload.csv, cache.csv, sizes.csv")
 
-    stage(6, STEPS, "Statistics: medians and bootstrap 95% confidence intervals", "stats.py, runner.py (summarise)")
+    stage(6, STEPS, "Statistics: medians and confidence intervals of the median", "stats.py, runner.py (summarise)")
     summary = summarise(trials, frames)
     (root / "summary.json").write_text(json.dumps(summary, indent=2, default=float))
     for ds in cfg["datasets"]:
@@ -374,7 +375,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             e = summary["trials"][ds["name"]][mk]
             s, v = e["sign_total_ns"], e["verify_warm_total_ns"]
             log(f"  {ds['name']:<7} {mk:<12} sign {s['median'] / 1e9:8.3f} s "
-                f"[{s['median_ci95'][0] / 1e9:.3f}, {s['median_ci95'][1] / 1e9:.3f}]  "
+                f"[{s['median_ci'][0] / 1e9:.3f}, {s['median_ci'][1] / 1e9:.3f}]  "
                 f"verify {v['median'] / 1e9:8.4f} s  checks {'passed' if e['all_checks_passed'] else 'FAILED'}"
                 + ("  (signing sample, see extrapolation)" if e["limited"] else ""))
     log("saved summary.json")

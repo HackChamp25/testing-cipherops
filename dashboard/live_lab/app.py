@@ -939,8 +939,9 @@ def sidebar_benchmark(h: driver.LabHandle, stt: dict) -> None:
             options=list(driver.SCENARIO_ALGS),
             help="slh-dsa is the PQC algorithm without MTL, mtl is the same algorithm with MTL. "
                  "ecdsa is a classical reference.")
-    sb(st.sidebar.number_input, "bench_trials", 3, "Measurement trials", min_value=1, max_value=10,
-       help="Each trial replays the workload with a cold cache, then again warm.")
+    sb(st.sidebar.number_input, "bench_trials", 5, "Measurement trials", min_value=1, max_value=10,
+       help="Each trial replays the workload with a cold cache, then again warm. One discarded warm-up trial "
+            "runs first. The interval of the median needs at least 6 trials to reach 95%; with 5 it covers 94%.")
     sb(st.sidebar.number_input, "bench_sign_trials", suite_mod.DEFAULT_SIGN_TRIALS, "Signing trials",
        min_value=1, max_value=10, help="How often signing and verification are repeated on sample zones.")
     sb(st.sidebar.number_input, "bench_sample", suite_mod.DEFAULT_SAMPLE_NAMES, "Signing sample (names)",
@@ -999,7 +1000,7 @@ def sidebar_benchmark(h: driver.LabHandle, stt: dict) -> None:
     if st.sidebar.button("Run benchmark", key="btn_bench", type="primary", width="stretch", disabled=not ready):
         params = {
             "label": clean, "stack": cfg("stack", "draft06"), "sizes": sorted(int(n) for n in sizes),
-            "scenarios": list(sc), "trials": int(cfg("bench_trials", 3)),
+            "scenarios": list(sc), "trials": int(cfg("bench_trials", 5)),
             "sign_trials": int(cfg("bench_sign_trials", suite_mod.DEFAULT_SIGN_TRIALS)),
             "sample_names": int(cfg("bench_sample", suite_mod.DEFAULT_SAMPLE_NAMES)),
             "n_queries": int(cfg("bench_queries", 500)), "networks": list(nets),
@@ -1993,7 +1994,7 @@ def _suite_params() -> dict:
     return {
         "sizes": sorted(int(n) for n in (cfg("bench_sizes") or SUITE_DEFAULT_SIZES)),
         "scenarios": list(cfg("bench_scenarios") or ["ecdsa", "slh-dsa", "mtl"]),
-        "trials": int(cfg("bench_trials", 3)),
+        "trials": int(cfg("bench_trials", 5)),
         "sign_trials": int(cfg("bench_sign_trials", suite_mod.DEFAULT_SIGN_TRIALS)),
         "sample_names": int(cfg("bench_sample", suite_mod.DEFAULT_SAMPLE_NAMES)),
         "n_queries": int(cfg("bench_queries", 500)),
@@ -2106,9 +2107,9 @@ def _signing_stats_table(stats: pd.DataFrame) -> pd.DataFrame:
         "Sample (names)": stats["sample_names"],
         "Sign per RRSIG (ms)": stats["sign_ms_per_rrsig"].round(3),
         "Fixed per zone (s)": stats["sign_fixed_s"].round(3),
-        "Dataset sign, estimated (95% CI)": [_fmt_ci(m, a, b) for m, a, b in
+        "Dataset sign, estimated (CI of the median)": [_fmt_ci(m, a, b) for m, a, b in
                                              zip(stats["est_sign_s"], stats["est_sign_lo"], stats["est_sign_hi"])],
-        "Dataset verify, estimated (95% CI)": [_fmt_ci(m, a, b) for m, a, b in
+        "Dataset verify, estimated (CI of the median)": [_fmt_ci(m, a, b) for m, a, b in
                                                zip(stats["est_verify_s"], stats["est_verify_lo"], stats["est_verify_hi"])],
         "Full zones sign, measured once": stats["full_sign_s"].map(compare.fmt_seconds),
         "Full zones verify, measured once": stats["full_verify_s"].map(compare.fmt_seconds),
@@ -2194,10 +2195,12 @@ def benchmark_results(h: driver.LabHandle) -> None:
             summary = sd["bench"].get(n)
             if summary is not None and not summary.empty:
                 st.markdown("**Resolver measurements**")
-                cols = [c for c in ["scenario", "profile", "pass", "udp_limit", "trials", "median_ms", "p95_ms",
-                                    "upstream_bytes", "upstream_queries", "upstream_truncated", "validated_pct",
-                                    "servfail", "timeouts"] if c in summary.columns]
+                cols = [c for c in ["scenario", "profile", "pass", "udp_limit", "trials", "valid_trials", "median_ms",
+                                    "p95_ms", "upstream_bytes", "upstream_queries", "upstream_truncated",
+                                    "validated_pct", "failed", "servfail", "timeouts"] if c in summary.columns]
                 st.dataframe(summary[cols], width="stretch", hide_index=True)
+                for note in compare.lookup_problems(summary):
+                    st.warning(note)
                 _bench_charts(summary)
     report_html = by[pick]["path"] / "report.html"
     report_md = by[pick]["path"] / "report.md"
@@ -2368,6 +2371,9 @@ def compare_page(h: driver.LabHandle, stt: dict) -> None:
                 else "no benchmark run with results for this lab"
             st.caption(f"Signing and verification: {src_sign} · Bytes, truncation, cache: {src_bench}")
 
+    for note in compare.lookup_problems(sd["bench"].get(int(ds)) if use_suite else summary):
+        st.warning(note + ". Do not compare this scenario until the failures are explained.")
+
     if df.empty:
         st.info("Nothing to compare yet. Run a **benchmark** in the Benchmark tile.")
         st.button("Go to Benchmark", on_click=_go, args=("benchmark",), key="cmp_to_bench")
@@ -2380,7 +2386,7 @@ def compare_page(h: driver.LabHandle, stt: dict) -> None:
     st.markdown(f"#### {cand} vs {base}")
     cards = compare.headline(df, base, cand)
     if use_suite:
-        cards[0]["help"] = "Estimated from repeated sample trials, extrapolated to the whole dataset (95% CI in the table)"
+        cards[0]["help"] = "Estimated from repeated sample trials, extrapolated to the whole dataset (CI of the median in the table)"
         cards[1]["help"] = "ldns-verify-zone, estimated the same way (offline check, not the resolver)"
     cols = st.columns(len(cards))
     for col, c in zip(cols, cards):
@@ -2442,7 +2448,7 @@ def compare_page(h: driver.LabHandle, stt: dict) -> None:
                 long["err_lo"] = (long["seconds"] - long["sign_lo_s"]).where(is_sign)
                 f1 = px.bar(long, x="scenario", y="seconds", color="what", barmode="group", log_y=True,
                             error_y="err_hi", error_y_minus="err_lo", category_orders={"scenario": scen_order},
-                            title="Signing and verification time, estimated (s, log; bars = 95% CI)")
+                            title="Signing and verification time, estimated (s, log; bars = CI of the median)")
             else:
                 f1 = px.bar(long, x="scenario", y="seconds", color="what", barmode="group", log_y=True,
                             category_orders={"scenario": scen_order}, title="Signing and verification time (s, log)")
