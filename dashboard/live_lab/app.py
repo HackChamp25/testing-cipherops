@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -29,6 +30,7 @@ sys.path.insert(0, str(ROOT / "dashboard"))
 from live_lab import compare, compare_hub, decode, driver  # noqa: E402
 from live_lab import build_job, prepare_job, prepare_story  # noqa: E402
 from live_lab import suite as suite_mod  # noqa: E402
+from cipherops import evolution  # noqa: E402
 
 compare = importlib.reload(compare)
 compare_hub = importlib.reload(compare_hub)
@@ -2323,7 +2325,7 @@ def benchmark_page(h: driver.LabHandle, stt: dict) -> None:
 
 # ─────────────────────────── COMPARE ───────────────────────────
 
-CMP_VIEWS = {"algorithms": "Algorithms side by side", "runs": "Run against run"}
+CMP_VIEWS = {"algorithms": "Algorithms side by side", "runs": "Run against run", "evolution": "Evolving zone"}
 CMP_SOURCES = {"offline": "Offline harness", "live": "Live lab", "lab": "Single lab"}
 CMP_SOURCE_NOTE = {
     "offline": "Pinned image, one dedicated core, repeated trials: the PS-036 timings (FIPS 205 SLH-DSA on the `latest` stack).",
@@ -2840,12 +2842,207 @@ def _cmp_runs(source: str, pick: dict) -> None:
         st.caption("Noise floor: the larger A/A band of the two runs, for signing and verification only.")
 
 
+def _ladder_figure(leaves: int, cached_leaves: int, age: int):
+    """The signer's ladder and a resolver's older one on the same leaf axis: a rung is a complete binary subtree, and
+    the leaves appended since the cached ladder have no rung in it."""
+    fig = go.Figure()
+    palette = ["#2e9e6f", "#4c78a8"]
+    rows = [("Signer's ladder now", leaves), (f"Resolver's cached ladder ({age} round(s) old)", cached_leaves)]
+    for i, (name, count) in enumerate(rows):
+        for size, a, b in evolution.rungs_of(count):
+            fig.add_trace(go.Bar(y=[name], x=[size], base=[a], orientation="h", marker_color=palette[i],
+                                 marker_line=dict(color="white", width=1.5), text=[f"{size:,}"],
+                                 textposition="inside", insidetextanchor="middle", showlegend=False,
+                                 hovertemplate=f"rung of {size:,} leaves ({a:,} to {b:,})<extra></extra>"))
+    if leaves > cached_leaves:
+        fig.add_trace(go.Bar(y=[rows[1][0]], x=[leaves - cached_leaves], base=[cached_leaves], orientation="h",
+                             marker_color="#e4572e", marker_line=dict(color="white", width=1.5),
+                             text=[f"{leaves - cached_leaves:,} new"], textposition="inside", showlegend=False,
+                             hovertemplate="appended since: no rung in the cached ladder<extra></extra>"))
+    fig.update_layout(barmode="overlay", height=230, margin=dict(l=10, r=10, t=30, b=10), showlegend=False,
+                      xaxis_title="leaves of the series (rungs are complete binary subtrees)",
+                      yaxis=dict(autorange="reversed"))
+    return fig
+
+
+def _cmp_evolution(h: driver.LabHandle) -> None:
+    cat = compare_hub.evolution_catalogue(ROOT / "results")
+    if not cat:
+        st.info("No offline run includes the evolving-zone experiment yet. It is part of every offline run that has an "
+                "`evolution:` block in its config (the default configs do): "
+                "`bash scripts/run_benchmark.sh configs/quick.yaml`.")
+        return
+    by = {e["id"]: e for e in cat}
+    st.sidebar.markdown("### Evolving zone")
+    rid = sb(st.sidebar.selectbox, "cmp_ev_run", next(iter(by)), "Run", options=list(by),
+             format_func=lambda i: by[i]["title"])
+    path = by[rid]["path"]
+    run = _cmp_offline_run(str(path), (path / "summary.json").stat().st_mtime)
+    mtl, direct = run.frames["evolution"], run.frames["evolution_direct"]
+    datasets = [d for d in run.dataset_order if d in set(mtl.dataset)]
+    ds = sb(st.sidebar.selectbox, "cmp_ev_ds", datasets[-1], "Dataset size", options=datasets)
+    ks = sorted(int(k) for k in mtl.k.unique())
+    k = sb(st.sidebar.selectbox, "cmp_ev_k", ks[len(ks) // 2], "Changed RRsets per round (k)", options=ks)
+    if st.sidebar.button("Refresh", width="stretch", key="sb_refresh_ev"):
+        _cmp_offline_run.clear()
+        st.rerun()
+
+    n_trials = int(run.config.get("trials", 0))
+    st.caption(f"**{by[rid]['title']}** · dataset **{ds}** · {n_trials} trials · measured with the reference library on "
+               f"one pinned core. A change is modelled as a same-size message with new bytes, chosen at random; "
+               f"{stats_note(n_trials)}")
+    st.markdown(":green-badge[Measured] cost, growth and ladder checks · :violet-badge[Derived] bytes per answer")
+
+    cost = evolution.update_cost(mtl, direct)
+    cost = cost[cost.dataset == ds].set_index("k")
+    c = cost.loc[k]
+    m = st.columns(4)
+    m[0].metric("One update round, MTL", compare.fmt_seconds(c.mtl_round_ns / 1e9),
+                f"1 ladder signature (k = {k})", delta_color="off", delta_arrow="off")
+    m[1].metric("Same updates, direct SLH-DSA", compare.fmt_seconds(c.direct_round_ns / 1e9),
+                f"{k} signature(s)", delta_color="off", delta_arrow="off")
+    ratio = compare_hub.fmt_x(c.ratio)  # direct ÷ MTL: above 1 means MTL needs less time
+    m[2].metric("MTL signing vs direct", ratio.replace("lower", "less time").replace("higher", "more time"),
+                f"per-trial ratio {c.ratio:.3g} [{c.ratio_lo:.3g}, {c.ratio_hi:.3g}]", delta_color="off",
+                delta_arrow="off")
+    m[3].metric("Resolver takes in the update", compare.fmt_seconds(c.mtl_resolver_ns / 1e9),
+                f"vs {compare.fmt_seconds(c.direct_resolver_ns / 1e9)} for {k} signature(s)", delta_color="off",
+                delta_arrow="off")
+    if c.ratio_hi < 1.5 and c.ratio_lo > 0.67:
+        st.warning(f"At k = {k} MTL is **not faster to sign**: it still signs one ladder per round, the same SLH-DSA "
+                   "signature plain signing needs for one changed RRset. Its gain here is in bytes and verification.")
+
+    t_ladder, t_cov, t_cost, t_bytes, t_stale, t_growth = st.tabs(
+        ["Ladder and rungs", "Cached ladder coverage", "Cost per update", "Bytes per answer",
+         "Published signatures", "Growth"])
+    g = evolution.growth(mtl)
+    g = g[(g.dataset == ds) & (g.k == k)].sort_values("round")
+    rounds = [int(r) for r in g["round"]]
+    ages = [a for a in evolution.ages_in(mtl) if a > 0]
+
+    with t_ladder:
+        c1, c2 = st.columns(2)
+        r = c1.select_slider("Round", options=rounds, value=rounds[-1], key="cmp_ev_round")
+        avail = [a for a in ages if a <= r] or [0]
+        age = c2.select_slider("Age of the resolver's cached ladder (rounds)", options=avail, value=avail[0],
+                               key="cmp_ev_age")
+        row = g[g["round"] == r].iloc[0]
+        leaves = int(row.leaf_count)
+        cached = int(g[g["round"] == r - age].iloc[0].leaf_count) if age else leaves
+        parts = " + ".join(f"{s:,}" for s, _a, _b in evolution.rungs_of(leaves))
+        st.markdown(f"**Round {r}:** {leaves:,} leaves = {parts} · {int(row.rung_count)} rung(s) · signed ladder "
+                    f"**{compare_hub.fmt_value(row.ladder_bytes, 'B')}** · largest condensed signature "
+                    f"**{int(row.condensed_bytes_max)} B**")
+        st.plotly_chart(_ladder_figure(leaves, cached, age), width="stretch")
+        st.caption("A ladder lists one hash per rung, and each rung is a complete binary subtree, so the rungs are the "
+                   "binary breakdown of the leaf count. An RRset whose leaf lies inside a rung of the resolver's "
+                   "cached ladder verifies with a condensed signature. A leaf appended after that ladder was signed "
+                   "(orange) has no rung in it: that answer needs a fresh ladder, that is, a full signature.")
+
+    with t_cov:
+        cov = evolution.coverage_table(mtl)
+        cov = cov[(cov.dataset == ds) & (cov.age > 0)]
+        if cov.empty:
+            st.info("No cached-ladder ages in this run.")
+        else:
+            piv = cov.pivot_table(index="k", columns="age", values="share") * 100
+            fig = px.imshow(piv, text_auto=".1f", aspect="auto", color_continuous_scale="RdYlGn", zmin=0, zmax=100,
+                            labels=dict(x="age of the cached ladder (rounds)", y="changed RRsets per round (k)",
+                                        color="% still verify"),
+                            title=f"Share of answers that still verify with a condensed signature, {ds} zone")
+            fig.update_yaxes(type="category")
+            fig.update_xaxes(type="category")
+            st.plotly_chart(_plot_cfg(fig, 340), width="stretch")
+            st.caption("Measured by the library for every RRset of the zone in every round in which that age exists. "
+                       "The missing share is the share of RRsets changed since that ladder: those answers need a full "
+                       "signature (about 8 KB over TCP) from a resolver that has not refreshed. With changes spread "
+                       "independently of popularity, the share of lookups affected is the same in expectation.")
+
+    with t_cost:
+        d = mtl[(mtl.dataset == ds) & (mtl["round"] >= 1)].assign(
+            seconds=lambda x: (x.append_ns + x.ladder_sign_ns) / 1e9)
+        a = d.groupby(["k", "round"]).seconds.median().reset_index().assign(method="MTL: k appends + 1 ladder signature")
+        dd = direct[direct["round"] >= 1].groupby(["k", "round"]).sign_ns.median().reset_index()
+        b = dd.assign(seconds=dd.sign_ns / 1e9, method="Direct SLH-DSA: k signatures")
+        both = pd.concat([a, b[["k", "round", "seconds", "method"]]], ignore_index=True)
+        both["k"] = both["k"].map(lambda v: f"k = {int(v)}")
+        fig = px.line(both, x="round", y="seconds", color="k", line_dash="method", markers=True, log_y=True,
+                      title=f"Signing time of one update round, {ds} zone (log scale)")
+        fig.update_layout(legend_title_text="", xaxis_title="update round")
+        st.plotly_chart(_plot_cfg(fig, 400), width="stretch")
+        tab = cost.reset_index()
+        st.dataframe(pd.DataFrame({
+            "k": tab.k, "MTL per round": [compare.fmt_seconds(v / 1e9) for v in tab.mtl_round_ns],
+            "Direct per round": [compare.fmt_seconds(v / 1e9) for v in tab.direct_round_ns],
+            "Direct ÷ MTL": [f"{r:.3g} [{lo:.3g}, {hi:.3g}]" for r, lo, hi in zip(tab.ratio, tab.ratio_lo, tab.ratio_hi)],
+            "Interval covers": [f"{x * 100:.0f}%" for x in tab.coverage]}), width="stretch", hide_index=True)
+        st.caption("MTL pays one SLH-DSA signature per round whatever k is; direct signing pays k. The ratio is the "
+                   "median of the per-trial ratios with its order-statistic interval. Extracting condensed "
+                   "signatures is a per-answer cost and is not part of the update.")
+
+    with t_bytes:
+        eb = evolution.effective_bytes(mtl)
+        eb = eb[(eb.dataset == ds) & (eb.age > 0)]
+        if eb.empty:
+            st.info("No cached-ladder ages in this run.")
+        else:
+            eb = eb.assign(k=eb.k.map(lambda v: f"k = {int(v)}"), age=eb.age.map(lambda v: f"{int(v)} round(s) old"))
+            fig = px.bar(eb, x="age", y="effective_bytes", color="k", barmode="group", text_auto=",.0f",
+                         title=f"Signature bytes per answer, {ds} zone (derived)")
+            fig.add_hline(y=7856, line_dash="dot", annotation_text="plain SLH-DSA: 7,856 B")
+            fig.update_layout(xaxis_title="age of the resolver's cached ladder", yaxis_title="bytes per answer")
+            st.plotly_chart(_plot_cfg(fig, 400), width="stretch")
+            st.caption(":violet-badge[Derived] Measured condensed size plus the measured uncovered share times a full "
+                       "signature. An upper bound: it assumes every uncovered answer fetches a full signature, while "
+                       "a real resolver refreshes its ladder once and covers the rest.")
+
+    with t_stale:
+        s = evolution.stale_by_round(mtl)
+        s = s[(s.dataset == ds) & (s.k == k)]
+        if s.empty or s.stale_tested.sum() == 0:
+            st.info("No data.")
+        else:
+            fig = px.line(s, x="round", y=s.share * 100, markers=True, title=f"Signatures published earlier that still "
+                          f"verify against the newest ladder, {ds} zone, k = {k}")
+            fig.update_layout(yaxis_title="% still valid", xaxis_title="update round", yaxis_range=[0, 102])
+            st.plotly_chart(_plot_cfg(fig, 360), width="stretch")
+            st.caption("A condensed signature issued when a leaf was created ends at the rung that covered that leaf "
+                       "then. When rungs merge as the series grows, the new ladder has no such rung: the signature "
+                       "still verifies against the older ladder, but must be reissued for resolvers holding the new "
+                       "one. At a power-of-two leaf count every earlier signature is affected.")
+
+    with t_growth:
+        gg = evolution.growth(mtl)
+        gg = gg[(gg.dataset == ds)].assign(k=lambda x: x.k.map(lambda v: f"k = {int(v)}"))
+        c1, c2 = st.columns(2)
+        c1.plotly_chart(_plot_cfg(px.line(gg, x="round", y="leaf_count", color="k", markers=True,
+                                          title="Leaves in the series"), 320), width="stretch")
+        c2.plotly_chart(_plot_cfg(px.line(gg, x="round", y="ladder_bytes", color="k", markers=True,
+                                          title="Signed ladder (bytes)"), 320), width="stretch")
+        c1.plotly_chart(_plot_cfg(px.line(gg, x="round", y="condensed_bytes_max", color="k", markers=True,
+                                          title="Largest condensed signature (bytes)"), 320), width="stretch")
+        c2.plotly_chart(_plot_cfg(px.line(gg, x="round", y="rung_count", color="k", markers=True,
+                                          title="Rungs in the ladder"), 320), width="stretch")
+        st.caption("Every change adds a leaf and old leaves never leave the series, so it only grows. The ladder size "
+                   "follows the number of rungs (the number of 1 bits in the leaf count), and the condensed "
+                   "signature grows by 16 bytes each time the leaf count reaches a power of two.")
+
+
+def stats_note(n_trials: int) -> str:
+    return evolution.stats.ci_label(n_trials) + "."
+
+
 def compare_page(h: driver.LabHandle, stt: dict) -> None:
     _page_header("compare", h, stt)
     sources = {s: len(_cmp_catalogue(s, h)) for s in CMP_SOURCES}
     available = [s for s, n in sources.items() if n]
     view = sb(st.segmented_control, "cmp_view", "algorithms", "What to compare", options=list(CMP_VIEWS),
               format_func=CMP_VIEWS.get) or "algorithms"
+    if view == "evolution":
+        st.caption("MTL's real use is a series that keeps growing: a zone changes, new leaves are appended, a new "
+                   "ladder is signed, and resolvers hold older ladders. Offline harness data only.")
+        _cmp_evolution(h)
+        return
     default_src = "offline" if sources["offline"] else ("live" if sources["live"] else "offline")
     source = sb(st.segmented_control, "cmp_src", default_src, "Data from", options=list(CMP_SOURCES),
                 format_func=lambda s: f"{CMP_SOURCES[s]} ({sources[s]})") or default_src
