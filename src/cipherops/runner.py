@@ -5,7 +5,6 @@
     cipherops report --run DIR          regenerate the markdown report
     cipherops crosscheck --run DIR      validate byte counts against a real NSD server
     cipherops live --run DIR            real client vs real NSD: every zone, buffer and network profile
-    cipherops serve --run DIR           keep NSD running so the dashboard can send real queries
 """
 
 from __future__ import annotations
@@ -386,7 +385,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     log(f"report: {root / 'report.md'} and report.html, figures/")
     failed = trials[(trials.exit_code != 0) | (trials.failures_total != 0) | (~trials.tamper_all_rejected)]
     log(f"DONE. {len(trials)} trials, {len(failed)} with failed checks. Results in {root}")
-    log("view it: streamlit run dashboard/app.py   (pick this run in the sidebar)")
     return 1 if len(failed) else 0
 
 
@@ -422,12 +420,6 @@ def cmd_live(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_serve(args: argparse.Namespace) -> int:
-    from . import live
-    live.serve(Path(args.run), args.dataset, args.profile, args.base_port)
-    return 0
-
-
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="cipherops")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -458,12 +450,6 @@ def main(argv: list[str] | None = None) -> int:
     lv.add_argument("--profiles", default="lan,wan,lossy", help="network profiles (live.PROFILES), comma-separated")
     lv.add_argument("--repeats", type=int, default=3)
     lv.set_defaults(func=cmd_live)
-    sv = sub.add_parser("serve", help="keep one NSD per mode running for the dashboard (docker service 'serve')")
-    sv.add_argument("--run", required=True)
-    sv.add_argument("--dataset", help="default: the largest dataset")
-    sv.add_argument("--profile", default="lan", help="network profile applied to eth0 (live.PROFILES)")
-    sv.add_argument("--base-port", type=int, default=5301)
-    sv.set_defaults(func=cmd_serve)
     args = p.parse_args(argv)
     return args.func(args)
 

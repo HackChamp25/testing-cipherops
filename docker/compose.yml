@@ -25,13 +25,3 @@ services:
     <<: *bench
     cap_add: [NET_ADMIN]
     command: ["python3 -m cipherops.runner live --help"]
-
-  # Live server for the dashboard: NSD per mode, published on the host's loopback only.
-  serve:
-    <<: *bench
-    network_mode: bridge
-    cap_add: [NET_ADMIN]
-    ports:
-      - "127.0.0.1:5301-5310:5301-5310/udp"
-      - "127.0.0.1:5301-5310:5301-5310/tcp"
-    command: ["python3 -m cipherops.runner serve --help"]

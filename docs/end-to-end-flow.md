@@ -1,8 +1,8 @@
 # Cipherops end-to-end flow
 
-What goes into each of the 7 stages, what comes out, with the exact values of the quick demo run
-`results/runs/20261007T045213Z-quick-demo`. Column-level detail for every output is in
-[outputs-reference.md](outputs-reference.md). To watch every variable being filled on tiny zones, run `own.py`.
+What goes into each of the 7 stages, what comes out, with illustrative values from an
+earlier quick demo run (they are not results; each run's own numbers are in its `report.html`). Column-level detail for every output is in
+[outputs-reference.md](outputs-reference.md). To watch every variable being filled on tiny zones, run `scripts/own.py`.
 
 ```
 quick.yaml ──► 1 config + environment ──► 2 go/no-go ──► 3 zones + signing inputs ──► 4 sign + verify (mtlbench)
@@ -56,11 +56,13 @@ quick.yaml ──► 1 config + environment ──► 2 go/no-go ──► 3 zon
 | Verisign test suite `mtltest` | 89 passed, 0 failed |
 | bundled test-vector scheme (warning only) | ML-DSA-44-MTL-SHAKE-128 (our algorithm is covered by the round trip) |
 | `mtlkeygen` → `mtlsign` → `mtlverify`, 16 messages + 1 tampered | all verified, tampered rejected |
-| `mtlbench` smoke test, 6-name zone, each of the 5 modes | all exit 0, no failures, tampering rejected |
+| `mtlbench` smoke test, 6-name zone, each of the 5 modes | all exit 0, no failures, every negative case rejected |
+| `mtlverify` on the harness's own MTL signatures | accepted; a changed message rejected |
+| OpenSSL on the harness's own SLH-DSA signatures (non-MTL) | accepted; a changed message rejected (interoperability check, not a NIST known-answer test) |
 
 | Output | Value |
 |---|---|
-| `preflight.json` | `verdict: "GO"` + the 9 checks |
+| `preflight.json` | `verdict: "GO"` + the checks listed above |
 | control flow | GO → continue. NO-GO → print verdict, exit code 3, no benchmark numbers |
 
 ## Stage 3 – Zones and signing inputs
@@ -106,7 +108,8 @@ In memory for later stages: `zones` (3 Zone objects), `paths` (15 entries, e.g.
 
 What happens in one run: new process, new key pair; every message signed and verified, each library call
 timed in nanoseconds; MTL additionally signs one ladder, extracts condensed signatures, verifies warm (ladder
-cached) and cold (16 full signatures); bit-flip tamper tests must be rejected; one JSON line printed.
+cached) and cold (16 full signatures); every negative case (changed message, damaged or truncated signature,
+signature for another message, wrong key, and for MTL a damaged ladder) must be rejected; one JSON line printed.
 
 | Output | Value |
 |---|---|
@@ -115,16 +118,6 @@ cached) and cold (16 full signatures); bit-flip tamper tests must be rejected; o
 | `trials.csv` | 45 rows (one per run) |
 | `ops.parquet` | 16,899 rows (one per timed call) |
 | result | every run: exit 0, 0 verification failures, tampering rejected |
-
-Large zone (405 RRsets), median of 3 trials:
-
-| Mode | Sign whole zone | Verify one answer, warm | Verify, cold | Signature |
-|---|---|---|---|---|
-| SLH-DSA + MTL | 0.516 s (ladder 0.515 s) | 5.3 µs | 513 µs | 204 B + 8,056 B ladder |
-| SLH-DSA direct | 209 s (100 signed at 0.52 s each, × 405) | 588 µs | 511 µs | 7,856 B |
-| Ed25519 | 14.4 ms | 111 µs | 103 µs | 64 B |
-| ECDSA P-256 | 10.7 ms | 88 µs | 71 µs | 64 B |
-| RSA-2048 | 254.5 ms | 35 µs | 31 µs | 256 B |
 
 ## Stage 5 – DNS answers, transmitted bytes, cache
 
@@ -189,17 +182,4 @@ p05, p95, min, max and a bootstrap 95% CI of the median (2,000 resamples, seed 0
 | `figures/` | `sign.png`, `verify.png`, `responses.png`, `workload.png`, `cache.png` |
 | exit code | 0 (no trial failed a check); 1 if any did; 3 if stage 2 said NO-GO |
 
-The dashboard (`streamlit run dashboard/app.py`) reads the same run folder.
-
----
-
-## The result in one table (large zone, 405 RRsets)
-
-| | SLH-DSA direct | SLH-DSA + MTL | Ed25519 |
-|---|---|---|---|
-| Signature per RRSIG | 7,856 B | ≤ 204 B (+ one 8,056 B ladder per zone) | 64 B |
-| Sign whole zone | ≈ 209 s | 0.52 s | 0.014 s |
-| Verify one answer, ladder cached | 588 µs | 5.3 µs | 111 µs |
-| Small answers fitting in 1232-byte UDP | 0% | 100% | 100% |
-| Bytes on the wire, 301 lookups | 1,522,371 B | 88,895 B (17× less) | 53,292 B |
-| Signature storage for the zone | 3.18 MB | 0.087 MB (36× less) | 0.026 MB |
+Open `report.html` in a browser; it is a single file with the figures embedded.

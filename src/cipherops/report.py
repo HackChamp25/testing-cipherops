@@ -561,7 +561,6 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
         "scripts/run_benchmark.sh preflight                     # go/no-go gate\n"
         "scripts/run_benchmark.sh configs/scenarios.yaml        # full run -> results/runs/<id>/\n"
         f"python -m cipherops.runner report --run results/runs/{run.root.name}\n"
-        "streamlit run dashboard/app.py                         # interactive dashboard / demo\n"
         "```\n")
     add("### Demonstration pseudocode\n")
     add("```python\n" + PSEUDOCODE + "```\n")

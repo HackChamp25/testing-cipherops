@@ -43,13 +43,19 @@ Numbers live in each run’s `report.html` under `results/runs/` — not duplica
 | `slh-dsa` | SLH-DSA-SHA2-128s directly | liboqs |
 | `ed25519`, `ecdsa-p256`, `rsa-2048` | Classical DNSSEC | OpenSSL |
 
-Pinned Docker image: Fedora 42, OpenSSL 3.6.0, liboqs 0.16.0, Verisign MTL `7cef019`.
+The offline Docker image uses Fedora 42, OpenSSL 3.6.0, liboqs 0.16.0, and Verisign MTL `7cef019`. The live lab's default [`draft06` stack](ecosystem/stacks/draft06.env) uses liboqs 0.14.0 and Verisign MTL 1.2.0 (`93b05ef`); it is a separate pinned stack.
+
+### Reference implementation status
+
+The mentor approved choosing Verisign's MTL reference implementation but has not tested a specific version. PS-036's mentor-tested implementation requirement, and the availability of SLH-DSA-specific test fixtures, need clarification with the organizers.
+
+Verisign MTL 1.2.1 is a candidate for aligning the offline and live lab paths, subject to compatibility and correctness testing. It is not yet the pinned version for either path. The current offline preflight's bundled known-answer vectors cover ML-DSA; SLH-DSA is checked through reference-tool round trips and harness smoke tests.
 
 ![Cipherops architecture](docs/architecture-slide1.png)
 
 ### Scope (honest)
 
-- Empirical timings and wire sizes on one pinned stack — not a security proof or a production DNSSEC product.
+- Empirical timings and wire sizes on pinned environments — not a security proof or a production DNSSEC product.
 - Offline harness (zone sign / verify / model) plus an optional live hierarchy (NSD + Unbound) with packet capture.
 - Absolute milliseconds depend on the host; fair comparisons share the same image and configs.
 
@@ -117,15 +123,6 @@ Replay lookups against NSD over LAN / WAN / lossy profiles; captures land in the
 powershell -ExecutionPolicy Bypass -File .\scripts\run_live.ps1 -Run <run-folder>
 ```
 
-### 4. Offline results dashboard
-
-```bash
-pip install -r requirements-dashboard.txt
-streamlit run dashboard/app.py
-```
-
-Pick a folder under `results/runs/`.
-
 ---
 
 ## Output
@@ -148,7 +145,7 @@ docker/         pinned image and compose
 harness/        mtlbench.c linked to reference libs
 src/cipherops/  offline runner, report, live validation
 ecosystem/      multi-zone lab (NSD / Unbound / MTL signing)
-dashboard/      Streamlit — offline runs + live_lab control room
+dashboard/      Streamlit live lab: setup, live queries, benchmark suite, compare
 scripts/        Windows / Unix entry points
 docs/           methodology, architecture, brand (docs/media)
 tests/          gates and unit tests
@@ -159,7 +156,6 @@ tests/          gates and unit tests
 - [Methodology](docs/methodology.md)
 - [Architecture](docs/architecture.md)
 - [Outputs reference](docs/outputs-reference.md)
-- [Dashboard guide](docs/dashboard-guide.md)
 - [Live lab](dashboard/live_lab/README.md)
 
 ## Team

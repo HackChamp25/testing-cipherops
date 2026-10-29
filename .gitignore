@@ -7,7 +7,6 @@ harness/mtlbench
 harness/*.o
 results/runs/
 results/work/
-results/live-server/
 results/*.log
 results/preflight.json
 # Large capture / trial outputs stay local; thin CSV samples under ecosystem/results may be committed

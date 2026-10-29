@@ -144,7 +144,6 @@ How the DNS draft (draft-fregly) carries this:
  |   results/runs/<timestamp>-<run_name>/   (shared with Windows)   |
  +------------------------------------------------------------------+
                  |
-                 +--> dashboard/app.py (Streamlit) reads the run folder
                  +--> scripts/make_pdf.ps1 turns report.html into a PDF
                  +--> optional: runner live / crosscheck (real NSD server)
 ```
@@ -155,7 +154,7 @@ Three layers, each with one job:
 |---|---|---|---|
 | Crypto | C | Sign, verify, time, check tampering. Only calls libraries. | `harness/mtlbench.c` |
 | Orchestration and DNS | Python | Build zones, run trials, build DNS answers, count bytes, statistics | `src/cipherops/*.py` |
-| Presentation | Python | Report, figures, dashboard | `report.py`, `results.py`, `dashboard/app.py` |
+| Presentation | Python | Report and figures | `report.py`, `results.py` |
 
 ---
 
@@ -183,21 +182,24 @@ Cipherops/
 │   ├── stats.py            summary statistics, bootstrap CIs
 │   ├── preflight.py        go/no-go gate (PS-036 "defer if unavailable")
 │   ├── envinfo.py          records hardware/software versions
-│   ├── results.py          loads a finished run (for report and dashboard)
+│   ├── results.py          loads a finished run (for the report)
 │   ├── report.py           writes report.md, report.html, figures/
 │   ├── crosscheck.py       NSD server helper + byte-model cross-check
 │   └── live.py             live mode: real client, real NSD, pcap capture
-├── dashboard/app.py        Streamlit dashboard
+├── dashboard/              Streamlit live lab (app.py launches live_lab/app.py)
 ├── scripts/
 │   ├── run_benchmark.ps1   Windows: build image + run (start here)
 │   ├── run_benchmark.sh    Linux/macOS equivalent
 │   ├── make_pdf.ps1        report.html -> report.pdf via Edge/Chrome
 │   ├── probe.py            one quick trial per mode (debugging)
+│   ├── own.py              learning trace: every variable of stages 1-7 on tiny zones
 │   └── pcap_bytes.py       sums bytes in live-mode pcaps, compares with client
 ├── tests/                  pytest unit tests (see section 6.16)
 ├── docs/
 │   ├── methodology.md      measurement method in detail
-│   └── architecture.md     this file
+│   ├── architecture.md     this file
+│   ├── end-to-end-flow.md  what each of the 7 stages takes in and puts out
+│   └── outputs-reference.md  every output file and column
 └── results/runs/<run_id>/  every run's outputs (section 9)
 ```
 
@@ -359,7 +361,6 @@ Reads the run folder through `results.load()` and writes:
 
 | Command | What it does |
 |---|---|
-| `streamlit run dashboard/app.py` | Interactive dashboard over any run |
 | `.\scripts\make_pdf.ps1 results/runs/<run>` | `report.pdf` from `report.html` |
 | `python3 -m cipherops.runner live --run <run>` | Real client vs real NSD, pcaps (section 7) |
 | `python3 -m cipherops.runner crosscheck --run <run>` | Compare byte model with NSD (section 8) |
@@ -555,7 +556,6 @@ PS-036 requires measured cache usage kept separate from analytical estimates.
 |---|---|---|
 | `resolver_cache_measured(responses, ladder)` | measured | Puts the workload's answers into dnspython's real `LRUCache`, measures Python heap with `tracemalloc`, counts signature bytes; adds the one ladder for MTL. |
 | `resolver_cache_analytical(mode, n_rrsigs, ...)` | analytical | Same quantity from formulas (signature size × count + ladder). |
-| `signer_state_measured(trial)` | measured | Memory growth of libmtl while appending the zone (from the harness). |
 | `signer_state_analytical(zone_rrsets)` | analytical | Hash storage of a binary node set: `(2N-1)·16 + N·16` bytes. |
 
 ### 6.8 `src/cipherops/analytical.py`: draft formulas
@@ -596,7 +596,7 @@ That is the "pinned environment" evidence in the report appendix.
 
 ### 6.12 `src/cipherops/results.py`
 
-Loads a finished run for the report and the dashboard.
+Loads a finished run for the report.
 
 | Name | Why |
 |---|---|
@@ -615,17 +615,13 @@ numbers. `figures()` draws the charts (extrapolated bars are hatched).
 `TRACEABILITY` maps each PS-036 requirement to the report section that
 satisfies it. `build_html()` embeds images so the HTML is one file.
 
-### 6.14 `dashboard/app.py`
+### 6.14 `dashboard/`
 
-Streamlit app. Sidebar: pick a run, see the go/no-go verdict and environment.
-Tabs: *Signing & verification*, *Transmitted bytes*, *Cache usage*, *MTL sizes
-vs draft*, *Live demo* (builds a real answer from the run's signatures and
-shows it dig-style), *Reproducibility*.
-
-```powershell
-pip install -r requirements-dashboard.txt
-streamlit run dashboard/app.py
-```
+The Streamlit live lab (`streamlit run dashboard/app.py`, which launches
+`dashboard/live_lab/app.py`). It drives the multi-zone lab in `ecosystem/`
+(setup, live queries and captures, the benchmark suite, compare). It does not
+read the offline `results/runs/` folders; the offline run's output is its
+`report.html`. See `dashboard/live_lab/README.md`.
 
 ### 6.15 `src/cipherops/crosscheck.py` and `src/cipherops/live.py`
 
@@ -643,7 +639,7 @@ helpers (`NSD`, `_udp`, `_tcp`, `signed_zone_text`, `load_run_zone`) that
 | `test_cache.py` | Measured cache counts exact signature bytes; MTL counts the ladder once; analytical rows per family. |
 | `test_harness.py` | (Docker only) Real signing in every mode: all signatures verify, every negative check rejected (including cross-message, wrong key, truncation), ECDSA wire form verifies, `mtlverify` and OpenSSL accept the artifacts, SLH-DSA signature is 7,856 B, MTL sizes within draft bounds, public key lengths match the DNSKEY field, artifacts round-trip. |
 | `test_crosscheck.py` | Signed zone file parses, every RRset signed; (Docker) NSD serves it. |
-| `test_dashboard.py` | Dashboard renders for real runs. |
+| `test_dashboard.py` | Every live-lab tile renders without an exception. |
 
 ```powershell
 $env:PYTHONPATH="src"; python -m pytest -q                         # host: quick tests
@@ -660,9 +656,7 @@ docker compose -f docker/compose.yml run --rm bench "python3 -m pytest -q tests"
 - `docker/compose.yml`: service `bench`; `cpuset` pins one core;
   `mem_limit: 4g`; `network_mode: none` (no Internet, no noise); mounts
   `results/` and `configs/` from Windows. Service `live` is the same plus
-  `NET_ADMIN` (tc-netem on the container's own loopback); service `serve`
-  adds a bridge network and publishes ports 5301-5310 on `127.0.0.1` for the
-  dashboard's live server.
+  `NET_ADMIN` (tc-netem on the container's own loopback).
 
 ---
 
@@ -729,24 +723,9 @@ python scripts/pcap_bytes.py results/runs/20261007T045213Z-quick-demo
 ```
 
 Open a `.pcap` in Wireshark and filter `dns` to see each question, answer,
-RRSIG and TC flag, or use the dashboard: *Live demo → Recorded live run*
-picks one lookup and draws its packets (UDP, IP fragments, TCP handshake and
-segments) as a sequence diagram. `pcap.py` does the parsing in pure Python.
-
-### Live server for the dashboard
-
-```powershell
-.\scripts\live_server.ps1 -Run 20261007T045213Z-quick-demo -Profile wan
-```
-
-Service `serve` runs one NSD per mode on ports 5301.. and an NSD with full
-MTL signatures on 5310, published on `127.0.0.1` only. netem on the
-container's `eth0` adds the profile (the full round trip, since only the
-server's packets cross it). `results/live-server/server.json` tells the
-dashboard where to send; `server.pcap` holds the server-side packets. In the
-dashboard, *Live demo → Send a real query* sends the same question to every
-mode from the Windows host and shows the client-side steps next to the
-packets tcpdump saw in the container.
+RRSIG and TC flag. `pcap.py` does the parsing in pure Python. The live lab
+(`dashboard/live_lab`) draws one lookup's packets (UDP, IP fragments, TCP
+handshake and segments) as a sequence diagram from its own captures.
 
 Why live bytes differ from the model for MTL and RSA: when an NXDOMAIN
 answer does not fit in 1232 bytes, NSD fills the truncated UDP reply with as
@@ -978,7 +957,7 @@ is labelled with where it came from.**
    server (NSD), a client sends real queries, and tcpdump captures the
    packets. The capture totals equal the client's counts byte for byte.
 8. **Output**: CSV/Parquet tables, `summary.json` with confidence intervals,
-   a report (MD/HTML/PDF) and a dashboard.
+   a report (MD/HTML/PDF).
 
 Key result shape (quick-demo, large zone, live): MTL answers are ~320-415 bytes
 and mostly fit in UDP; direct SLH-DSA answers are ~8,000 bytes and every one
