@@ -650,6 +650,8 @@ helpers (`NSD`, `_udp`, `_tcp`, `signed_zone_text`, `load_run_zone`) that
 | `test_stats.py` | The order-statistic confidence interval of the median: exact coverage figures, narrowing with more trials, empirical coverage matches the formula, labels warn when trials are too few. |
 | `test_lab_run.py` | Live-lab pass validity: SERVFAIL and timeouts are not latency; invalid passes are left out of the summary but their failures stay counted. |
 | `test_lab_guard.py` | Demo safety: lab operations are refused while a benchmark runs, a launching suite counts as active, `dig` accepts only allow-listed options, Prepare starts when `work/` is root-owned, root-owned folders are removed, the image build is a one-at-a-time background job. |
+| `test_results.py`, `test_control.py` | Paired per-trial ratios, the A/A control and its noise band, the timer-calibration summary. |
+| `test_compare_hub.py` | The shared algorithm frame for offline runs and live-lab suites, ratios to a baseline, run-against-run ratios and the comparability notes. |
 | `test_compare.py`, `test_live.py`, `test_prepare_job.py`, `test_prepare_story.py` | Dashboard helpers, packet decoding, the signing job and its replay (no Docker). |
 
 ```bash

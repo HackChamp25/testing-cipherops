@@ -143,7 +143,7 @@ streamlit run dashboard/live_lab/app.py
 | **Setup** | step 1 build or pull the images; step 2 choose zone size and scenarios, then **Prepare** (signs the hierarchy); step 3 **Start** the lab |
 | **Live** | send queries or `dig`, switch scenario, capture packets, view the packet sequence |
 | **Benchmark** | one press runs the PS-036 benchmark: three dataset sizes, repeated signing and measurement trials; needs only the built images |
-| **Compare** | MTL against SLH-DSA and the classical reference from a finished benchmark |
+| **Compare** | two views. *Algorithms side by side*: every algorithm of an offline-harness run or a live-lab benchmark, with the ratio to a baseline (paired per-trial intervals for the offline timings). *Run against run*: two saved runs (stack profiles, repeats, machines) with what differs between them spelled out. Offline and live-lab data are never drawn together |
 | **Reset** | remove sessions, captures, runs or signed zones |
 
 The benchmark can also run without the browser (same guards and the same saved results, which then appear in the
