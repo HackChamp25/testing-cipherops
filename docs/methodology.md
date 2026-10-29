@@ -7,9 +7,14 @@ numbers are estimates. It is the reference for every table in a run's
 ## 1. Scope (PS-036)
 
 - **Algorithm.** One supported PQC signature algorithm: **SLH-DSA-SHA2-128s**
-  (FIPS 205, "pure" mode).
+  (FIPS 205, "pure" mode). It was chosen because its signatures are large
+  (7,856 bytes) and slow to produce, the case MTL mode is designed for, and
+  because a DNSSEC draft for SLH-DSA with MTL exists. The README ("What was
+  selected, and why") gives the full rationale.
 - **Reference implementation.** The **Verisign MTL C library**
-  (`github.com/verisign/MTL`, pinned commit in the Dockerfile). Cipherops
+  (`github.com/verisign/MTL`, pinned commit in the Dockerfile), the reference
+  implementation of draft-harvey-cfrg-mtl-mode, selected with the mentor's
+  approval. Cipherops
   contains no cryptographic code of its own. The harness calls only:
   - the library's public API (`mtllib.h`) for MTL mode
   - liboqs `OQS_SIG` for direct SLH-DSA
@@ -313,11 +318,10 @@ Rules the live-lab benchmark follows:
 - **Fixture coverage.** The reference library's bundled known-answer vectors
   cover a different scheme than SLH-DSA-SHA2-128s-MTL (see section 3). The
   SLH-DSA check is cross-implementation agreement (OpenSSL), not published
-  vectors; SLH-DSA-specific fixtures are unconfirmed.
-- **Implementation status.** The mentor approved choosing the Verisign MTL
-  reference implementation but has not tested a specific version. Version
-  alignment between the offline image and the live-lab stacks is unresolved
-  (see the README).
+  vectors.
+- **Versions.** The offline image and the two live-lab stacks pin different
+  MTL and liboqs versions (table in the README), so their numbers are not
+  interchangeable. Aligning them on one version is open work.
 - **Few trials.** Intervals are wide with 5 trials (section 6.2). The live
   benchmark defaults to 5 measurement and 5 signing trials.
 - **No security claims.** None are made or implied.
