@@ -240,9 +240,6 @@ def wire_summary(df: pd.DataFrame) -> dict:
     """Client↔unbound vs upstream byte totals and MTL FULL count."""
     if df is None or df.empty:
         return {"client_bytes": 0, "upstream_bytes": 0, "packets": 0, "mtl_full_packets": 0}
-    client_mask = df["hop"].astype(str).str.contains(r"client|unbound", regex=True) & (
-        df["hop"].astype(str).str.contains("client")
-    )
     # hops that include "client"
     is_client = df["hop"].astype(str).str.contains("client")
     client_bytes = int(df.loc[is_client, "bytes"].sum())

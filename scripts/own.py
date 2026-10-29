@@ -3,7 +3,7 @@
 Whole pipeline, every variable printed (needs the container: mtltest, mtlbench and the libraries live there).
 Run from the repository root in PowerShell:
 
-    docker compose -f docker/compose.yml run --rm -v "${PWD}\\own.py:/work/own.py" -v "${PWD}\\src:/work/src" `
+    docker compose -f docker/compose.yml run --rm -v "${PWD}\\scripts\\own.py:/work/own.py" -v "${PWD}\\src:/work/src" `
         bench "python3 own.py 2>&1 | tee results/own_trace.txt"
 
     options:  --skip-preflight   (stage 2 takes a few minutes)   --trials N   --names-list 3,5,8
@@ -13,9 +13,9 @@ results/runs/<time>-own-trace/ exactly like `cipherops run`, and the printed tra
 
 Stage-3 deep dives (run anywhere, no container needed):
 
-    python own.py --deep zone                         build_zone line by line, 5 names, seed 20261005
-    python own.py --deep sign --mode rsa-2048         signing_messages line by line for one algorithm
-    python own.py --deep zone --names 5 --seed 27     5 names that hit every branch: A, AAAA, 3 x MX, 4 x AAAA, TXT
+    python scripts/own.py --deep zone                 build_zone line by line, 5 names, seed 20261005
+    python scripts/own.py --deep sign --mode rsa-2048 signing_messages line by line for one algorithm
+    python scripts/own.py --deep zone --names 5 --seed 27 5 names that hit every branch: A, AAAA, 3 x MX, 4 x AAAA, TXT
 """
 
 import argparse
@@ -36,7 +36,8 @@ import time
 from collections import Counter
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+# repo checkout: scripts/own.py -> ../src; container: own.py and src/ are both mounted under /work
+sys.path.insert(0, str(next(c for c in (Path(__file__).parent / "src", Path(__file__).parents[1] / "src") if c.is_dir())))
 
 import dns.dnssec
 import dns.name
@@ -1002,9 +1003,9 @@ def pipeline(args) -> None:
 
     if not Path(HARNESS).exists():
         print(f"mtlbench not found at {HARNESS}. Stages 2 and 4 need the container; run from the repo root:")
-        print('  docker compose -f docker/compose.yml run --rm -v "${PWD}\\own.py:/work/own.py" '
+        print('  docker compose -f docker/compose.yml run --rm -v "${PWD}\\scripts\\own.py:/work/own.py" '
               '-v "${PWD}\\src:/work/src" bench "python3 own.py 2>&1 | tee results/own_trace.txt"')
-        print("Stage-3 deep dives work anywhere: python own.py --deep zone | --deep sign")
+        print("Stage-3 deep dives work anywhere: python scripts/own.py --deep zone | --deep sign")
         sys.exit(2)
     import pandas as pd
     pd.set_option("display.width", 220)

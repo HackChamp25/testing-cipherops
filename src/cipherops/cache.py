@@ -86,14 +86,6 @@ def resolver_cache_analytical(mode: Mode, n_rrsigs: int, zone_rrsets: int, class
     }
 
 
-def signer_state_measured(trial: dict) -> dict:
-    mem = trial.get("memory", {})
-    out = {"maxrss_bytes": mem.get("maxrss")}
-    if "rss_after_append" in mem:
-        out["node_set_rss_growth_bytes"] = mem["rss_after_append"] - mem["rss_after_keygen"]
-    return out
-
-
 def signer_state_analytical(zone_rrsets: int) -> dict:
     """Hash storage for a binary node set: 2N-1 nodes plus N randomizers, n bytes each."""
     n = MTL_SECURITY_PARAMETER_N

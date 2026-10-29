@@ -4,7 +4,7 @@ Every file a run writes, every column in it, what unit it is in, how it is calcu
 example value. Examples come from the quick demo run `results/runs/20261007T045213Z-quick-demo`
 (`configs/quick.yaml`: zones of 20 / 60 / 200 names, 3 trials) unless a row says otherwise.
 
-To watch these values being produced one by one, run `own.py` (see its header).
+To watch these values being produced one by one, run `scripts/own.py` (see its header).
 
 ## Units and words used everywhere
 
@@ -90,6 +90,8 @@ Proof of what the numbers were measured on.
 | `reference_fixture_scheme` | no | reads the scheme of the bundled test vectors | ML-DSA-44-MTL-SHAKE-128 |
 | `reference_tools_roundtrip` | yes | `mtlkeygen` → `mtlsign` → `mtlverify` on 16 messages + 1 tampered | all verified, tamper rejected |
 | `harness_smoke_<mode>` × 5 | MTL and direct only | `mtlbench` on a 6-name zone | exit 0, no failures |
+| `mtl_artifacts_verified_by_reference_tool` | yes | `mtlverify` on the harness's own MTL signatures; a changed message must fail | accepted, tamper rejected |
+| `slh_dsa_artifacts_verified_by_openssl` | if OpenSSL has SLH-DSA | OpenSSL on the harness's own non-MTL signatures; a changed message must fail (interoperability, not a known-answer test) | accepted, tamper rejected |
 
 ---
 
@@ -152,7 +154,9 @@ Exactly what `mtlbench` printed, plus `exit_code`, `stderr_tail` and `command` a
 | `sign_ns[]`, `verify_ns[]`, `signature_bytes[]` | direct, classical | one sign and one verify per message | Ed25519: 26.9 µs, 90.3 µs, 64 B |
 | `public_key_bytes` | all | DNSKEY public key field size | 32 (64 ECDSA, 260 RSA) |
 | `failures` | all | verifications that failed (must be 0) | `{ladder: 0, verify_condensed: 0, verify_full: 0}` |
-| `tamper` | all | flipped one bit in message / signature / ladder; each must be rejected | all `true` |
+| `tamper` | all | negative cases, each must be rejected: changed message, damaged and truncated signature, signature for another message, wrong key; MTL also a damaged ladder, changed series id, full signature with damaged ladder. Cases that do not apply are omitted | all present values `true` |
+| `observations` | MTL | measured library behaviour, not pass/fail: `condensed_header_bytes_unauthenticated` = leading condensed-signature bytes the library does not authenticate (0 to 2) | 2 |
+| `failures.verify_wire` | classical | ECDSA verified again in the r‖s form sent on the wire | 0 |
 | `memory` | all | `rss_*` from `/proc/self/statm`, `maxrss` from `VmHWM` in `/proc/self/status` | see note below |
 | `stderr_tail` | all | last 2,000 chars of stderr. For MTL it holds library `ERROR` lines from the tamper tests: expected | |
 

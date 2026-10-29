@@ -1343,12 +1343,6 @@ def reset_preview(h: LabHandle) -> dict:
     }
 
 
-def set_show_prepare_metrics(h: LabHandle, visible: bool) -> None:
-    sess = load_session(h)
-    sess["show_prepare_metrics"] = bool(visible)
-    save_session(h, sess)
-
-
 def session_queries(h: LabHandle, ui_log: list | None) -> list:
     """Merge UI log with on-disk session so a browser refresh does not wipe Queries."""
     disk = list(load_session(h).get("queries") or [])
