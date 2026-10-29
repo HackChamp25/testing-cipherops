@@ -9,11 +9,11 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-from . import stats
+from . import codepoints, stats
 from .codepoints import MODES
 
 MODE_ORDER = ["rsa-2048", "ecdsa-p256", "ed25519", "slh-dsa", "slh-dsa-mtl"]
-FRAMES = ("datasets", "trials", "responses", "workload", "cache", "sizes")
+FRAMES = ("datasets", "trials", "control", "responses", "workload", "cache", "sizes")
 
 
 @dataclass
@@ -83,8 +83,32 @@ def timing_table(trials: pd.DataFrame) -> pd.DataFrame:
 PAIRED_METRICS = {"sign_total_ns": "signing", "verify_warm_total_ns": "verification (warm)"}
 
 
+def noise_floor_table(trials: pd.DataFrame, control: pd.DataFrame, mode: str) -> pd.DataFrame:
+    """The A/A control: one mode against its own copy, run in the same trials on the same input.
+
+    Both runs do identical work, so the true ratio is 1. Whatever the paired ratio shows, and however wide its
+    interval is, is the measurement's own noise. ``band`` is the largest deviation from 1 inside that interval.
+    """
+    if control is None or control.empty:
+        return pd.DataFrame()
+    aa = control[control["mode"].map(codepoints.is_control)]
+    if aa.empty:
+        return pd.DataFrame()
+    both = pd.concat([trials[trials["mode"] == mode], aa.assign(**{"mode": mode + "-copy"})], ignore_index=True)
+    t = paired_ratio_table(both, mode, mode + "-copy")
+    if t.empty:
+        return t
+    t["band"] = [max(abs(lo - 1.0), abs(hi - 1.0)) for lo, hi in zip(t.ratio_lo, t.ratio_hi)]
+    return t
+
+
+def exceeds_noise(ratio_lo: float, ratio_hi: float, band: float) -> bool:
+    """True when the whole interval of a ratio lies outside the noise band around 1 (in either direction)."""
+    return bool(ratio_lo > 1.0 + band or ratio_hi < 1.0 / (1.0 + band))
+
+
 def paired_ratio_table(trials: pd.DataFrame, baseline: str, candidate: str,
-                       metrics: dict[str, str] | None = None) -> pd.DataFrame:
+                       metrics: dict[str, str] | None = None, floor: pd.DataFrame | None = None) -> pd.DataFrame:
     """Per-trial ratio baseline/candidate ("N times faster") with an interval, one row per dataset and metric.
 
     Both modes ran inside the same trial, so the trials are paired. A capped direct SLH-DSA run is compared through
@@ -108,10 +132,16 @@ def paired_ratio_table(trials: pd.DataFrame, baseline: str, candidate: str,
             r = stats.paired_ratio(bv, cv)
             if r["n"] == 0:
                 continue
-            rows.append({"dataset": ds, "metric": name, "baseline": baseline, "candidate": candidate,
-                         "trials": r["n"], "ratio": r["median"], "ratio_lo": r["lo"], "ratio_hi": r["hi"],
-                         "coverage": r["coverage"], "extrapolated": b_ext or c_ext,
-                         "ratio_of_medians": float(bv.median() / cv.median())})
+            row = {"dataset": ds, "metric": name, "baseline": baseline, "candidate": candidate,
+                   "trials": r["n"], "ratio": r["median"], "ratio_lo": r["lo"], "ratio_hi": r["hi"],
+                   "coverage": r["coverage"], "extrapolated": b_ext or c_ext,
+                   "ratio_of_medians": float(bv.median() / cv.median())}
+            if floor is not None and not floor.empty:
+                f = floor[(floor.dataset == ds) & (floor.metric == name)]
+                if len(f):
+                    row["noise_band"] = float(f.band.iloc[0])
+                    row["above_noise"] = exceeds_noise(r["lo"], r["hi"], row["noise_band"])
+            rows.append(row)
     return pd.DataFrame(rows)
 
 

@@ -22,8 +22,9 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from . import analytical, cache, dnswire, envinfo, preflight, results, stats
-from .codepoints import MODES, MTL_SECURITY_PARAMETER_N, SLH_DSA_SHA2_128S_SIG_BYTES
+from . import analytical, cache, dnswire, envinfo, preflight, results, stats, timer
+from .codepoints import (MODES, MTL_SECURITY_PARAMETER_N, SLH_DSA_SHA2_128S_SIG_BYTES, base_key, control_key,
+                         is_control, mode_for)
 from .harness import HARNESS, load_signatures, run_trial
 from .progress import log, stage
 from .workload import build_zone, signing_messages, write_messages, zone_text
@@ -49,11 +50,13 @@ def load_config(path: Path, overrides: argparse.Namespace) -> dict:
     unknown = [m for m in cfg["modes"] if m not in MODES]
     if unknown:
         raise SystemExit(f"unknown modes: {unknown}")
+    if cfg.get("control") and cfg["control"] not in cfg["modes"]:
+        raise SystemExit(f"control mode '{cfg['control']}' must also be one of the modes: {cfg['modes']}")
     return cfg
 
 
 def trial_metrics(res: dict, dataset: str, mode_key: str, trial: int, n_total: int) -> dict:
-    mode = MODES[mode_key]
+    mode = mode_for(mode_key)
     n = res["n_messages"]
     row = {
         "dataset": dataset, "mode": mode_key, "family": mode.family, "algorithm": res["algorithm"],
@@ -131,8 +134,12 @@ def run_trials(cfg: dict, root: Path, paths: dict, sizes: dict) -> tuple[pd.Data
         for w in range(cfg.get("warmup_trials", 1)):
             log(f"  warm-up {mk} on {smallest} ({w + 1})")
             run_trial(MODES[mk], paths[(smallest, mk)], None, cfg["full_verify_sample"])
+    control = control_key(cfg["control"]) if cfg.get("control") else None
     log(f"measured trials: {cfg['trials']} x {len(cfg['datasets'])} datasets x {len(modes)} modes, "
         "mode order shuffled each time (seeded), one mtlbench process per trial")
+    if control:
+        log(f"A/A control: '{cfg['control']}' also runs as '{control}' on the same input inside every trial; "
+            "any difference between the two is the measurement's own noise")
     shown: set[str] = set()
 
     rng = random.Random(cfg["seed"])
@@ -141,18 +148,21 @@ def run_trials(cfg: dict, root: Path, paths: dict, sizes: dict) -> tuple[pd.Data
     raw_dir.mkdir(parents=True, exist_ok=True)
     for t in range(cfg["trials"]):
         for ds in cfg["datasets"]:
-            order = list(modes)
+            order = list(modes) + ([control] if control else [])
             rng.shuffle(order)
             for mk in order:
                 name = ds["name"]
-                out_dir = root / "artifacts" / name / mk if t == 0 else None
+                is_aa = is_control(mk)
+                out_dir = root / "artifacts" / name / mk if t == 0 and not is_aa else None
                 start = time.time()
-                res = run_trial(MODES[mk], paths[(name, mk)], out_dir, cfg["full_verify_sample"])
+                res = run_trial(mode_for(mk), paths[(name, base_key(mk))], out_dir,
+                                cfg["full_verify_sample"])
                 with gzip.open(raw_dir / f"{name}__{mk}__t{t}.json.gz", "wt") as fh:
                     json.dump(res, fh)
                 row = trial_metrics(res, name, mk, t, sizes[name])
                 trials.append(row)
-                ops.extend(op_rows(res, name, mk, t))
+                if not is_aa:
+                    ops.extend(op_rows(res, name, mk, t))
                 if mk not in shown:
                     shown.add(mk)
                     log(f"  harness command ({mk}): {' '.join(Path(c).name if '/' in c else c for c in res['command'])}")
@@ -161,7 +171,7 @@ def run_trials(cfg: dict, root: Path, paths: dict, sizes: dict) -> tuple[pd.Data
                 log(f"trial {t + 1}/{cfg['trials']} {name:<7} {mk:<12} signed={row['n_signed']:>6} "
                     f"sign={row['sign_total_ns'] / 1e9:8.3f}s verify={row['verify_warm_total_ns'] / 1e9:8.3f}s "
                     f"wall={time.time() - start:6.1f}s  {status}")
-                if MODES[mk].family == "mtl":
+                if mode_for(mk).family == "mtl":
                     log(f"      MTL: append {row['n_signed']} leaves {_secs(row['sign_append_total_ns'])}, "
                         f"sign ladder once {_secs(row['ladder_sign_ns'])}, "
                         f"condensed sigs {_secs(row['condensed_extract_total_ns'])}; "
@@ -253,7 +263,8 @@ def analyse(cfg: dict, root: Path, zones: dict, trials: pd.DataFrame) -> dict[st
             "cache": pd.DataFrame(cache_rows), "sizes": pd.DataFrame(size_rows)}
 
 
-def summarise(trials: pd.DataFrame, frames: dict[str, pd.DataFrame]) -> dict:
+def summarise(trials: pd.DataFrame, frames: dict[str, pd.DataFrame], control: pd.DataFrame | None = None,
+              control_mode: str | None = None) -> dict:
     out: dict = {"trials": {}, "transmitted": {}, "response_fit": {}}
     for (ds, mk), g in trials.groupby(["dataset", "mode"]):
         entry = {}
@@ -267,8 +278,11 @@ def summarise(trials: pd.DataFrame, frames: dict[str, pd.DataFrame]) -> dict:
                                           and g.tamper_all_rejected.all())
         entry["limited"] = bool(g.limited.any())
         out["trials"].setdefault(ds, {})[mk] = entry
+    floor = results.noise_floor_table(trials, control, control_mode) if control_mode else pd.DataFrame()
+    if not floor.empty:
+        out["noise_floor"] = floor.to_dict("records")
     if {"slh-dsa", "slh-dsa-mtl"} <= set(trials["mode"]):
-        out["paired_ratios"] = results.paired_ratio_table(trials, "slh-dsa", "slh-dsa-mtl").to_dict("records")
+        out["paired_ratios"] = results.paired_ratio_table(trials, "slh-dsa", "slh-dsa-mtl", floor=floor).to_dict("records")
     wl = frames["workload"]
     for _, r in wl.iterrows():
         out["transmitted"].setdefault(r.dataset, {}).setdefault(r["mode"], {})[int(r.udp_limit)] = {
@@ -298,8 +312,17 @@ def cmd_run(args: argparse.Namespace) -> int:
     stage(1, STEPS, "Configuration and pinned environment", "runner.py (load_config), envinfo.py (collect)")
     (root / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
     env = envinfo.collect(HARNESS)
+    env["timer"] = timer.calibrate()
     (root / "environment.json").write_text(json.dumps(env, indent=2))
     log(f"run folder: {root}")
+    tm = env["timer"]
+    if "error" in tm:
+        log(f"timer calibration unavailable: {tm['error']}")
+    else:
+        worst = max(o["timer_share_of_operation"] for o in tm["operations"].values())
+        log(f"timer: empty timed region {tm['empty_region']['median_ns']} ns (median), smallest step "
+            f"{tm['smallest_observed_step_ns']} ns; costs at most {worst * 100:.1f}% of the fastest operation "
+            f"-> per-call timing {'reliable' if tm['per_call_timing_reliable'] else 'NOT reliable for the fastest operations'}")
     log(f"config: {args.config}  seed={cfg['seed']}  trials={cfg['trials']}  modes={', '.join(cfg['modes'])}")
     log("datasets: " + ", ".join(f"{d['name']}={d['n_names']} names" for d in cfg["datasets"]))
     hw, sw = env["hardware"], env["software"]
@@ -357,6 +380,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     stage(4, STEPS, "Sign and verify every RRset, repeated trials",
           "runner.py (run_trials) -> harness.py (run_trial) -> harness/mtlbench.c -> libmtl / liboqs / OpenSSL")
     trials, ops = run_trials(cfg, root, paths, sizes)
+    is_aa = trials["mode"].map(is_control)
+    control, trials = trials[is_aa].reset_index(drop=True), trials[~is_aa].reset_index(drop=True)
+    if len(control):
+        write_frame(control, root, "control")
     write_frame(trials, root, "trials")
     write_frame(ops, root, "ops")
     log(f"saved trials.csv ({len(trials)} rows), ops.parquet ({len(ops):,} individual operations), "
@@ -370,7 +397,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     log("saved responses.csv, workload.csv, cache.csv, sizes.csv")
 
     stage(6, STEPS, "Statistics: medians and confidence intervals of the median", "stats.py, runner.py (summarise)")
-    summary = summarise(trials, frames)
+    summary = summarise(trials, frames, control, cfg.get("control"))
     (root / "summary.json").write_text(json.dumps(summary, indent=2, default=float))
     for ds in cfg["datasets"]:
         for mk in cfg["modes"]:
@@ -386,8 +413,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     from . import report
     report.write(root)
     log(f"report: {root / 'report.md'} and report.html, figures/")
-    failed = trials[(trials.exit_code != 0) | (trials.failures_total != 0) | (~trials.tamper_all_rejected)]
-    log(f"DONE. {len(trials)} trials, {len(failed)} with failed checks. Results in {root}")
+    every = pd.concat([trials, control], ignore_index=True)
+    failed = every[(every.exit_code != 0) | (every.failures_total != 0) | (~every.tamper_all_rejected)]
+    log(f"DONE. {len(every)} trials, {len(failed)} with failed checks. Results in {root}")
     return 1 if len(failed) else 0
 
 

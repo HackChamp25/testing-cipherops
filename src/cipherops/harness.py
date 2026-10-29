@@ -34,6 +34,14 @@ def run_trial(mode: Mode, messages: Path, out_dir: Path | None, full_verify: int
     return result
 
 
+def run_calibrate(mtl_algo: str) -> dict:
+    cmd = [HARNESS, "calibrate", "--algo", mtl_algo]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        raise HarnessError(f"{' '.join(cmd)} failed (exit {proc.returncode}): {proc.stderr[-500:]}")
+    return json.loads(proc.stdout)
+
+
 def load_signatures(mode: Mode, out_dir: Path, limited: bool) -> Signatures:
     if mode.family == "mtl":
         return Signatures(mode, read_blob_set(out_dir / "condensed.bin"),

@@ -202,6 +202,35 @@ so this interval is tighter and more honest than dividing two medians. When
 direct SLH-DSA signing is capped, the ratio uses its extrapolated whole-zone
 total and the table says so.
 
+### 6.3 The measurement's own noise
+
+Two controls say how much of a difference is the measurement itself:
+
+- **A/A control** (`control:` in the config, `ed25519` by default). That mode
+  runs a second time as an identical copy, `ed25519-aa`, on the same input in
+  a random position inside every trial. Both do the same work, so their
+  per-trial ratio should be 1. The widest deviation from 1 inside the
+  interval is the **noise band** for that dataset and metric
+  (`results.noise_floor_table`). A paired ratio between two modes is marked
+  "clearly outside" only if its whole interval lies outside the band
+  (`results.exceeds_noise`); otherwise the report says it is not
+  distinguishable from noise and it must not be claimed as a difference. The
+  copy's rows go to `control.csv` and never enter the byte or cache analysis.
+  Ed25519 is chosen because it is the fastest mode, where clock effects and
+  background load show most.
+- **Timer calibration** (`mtlbench calibrate`, run at the start of every
+  offline run, stored under `timer` in `environment.json`). It times an empty
+  region 200,000 times, which gives the cost of the clock and the smallest
+  step it was seen to take. It then times the two fastest operations, Ed25519
+  verification and one condensed MTL verification, both one call at a time
+  (what the benchmark does) and as 1,000 calls in one region divided by
+  1,000. If the two agree and an empty timed region is a small share of the
+  operation (limit 5%), per-call timing is reliable for those operations. The
+  report tabulates the result and warns if it is not.
+
+The band describes the noise of one machine under the conditions of that run.
+With few trials it is itself uncertain (see the coverage table above).
+
 ## 7. Transmitted bytes (directly measured at the DNS message level)
 
 For every positive answer, the DNSKEY answer and a sample of NXDOMAIN names,

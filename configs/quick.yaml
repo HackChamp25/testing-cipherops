@@ -4,6 +4,7 @@ seed: 20261005
 trials: 3
 warmup_trials: 1
 modes: [slh-dsa-mtl, slh-dsa, ed25519, ecdsa-p256, rsa-2048]
+control: ed25519
 datasets:
   - {name: small, n_names: 20}
   - {name: medium, n_names: 60}
