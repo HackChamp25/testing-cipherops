@@ -150,10 +150,11 @@ this machine. Details: [dashboard/live_lab/README.md](dashboard/live_lab/README.
 
 | Tile | Use |
 | --- | --- |
+| **Offline benchmark** | *Pinned core · primary results.* Start the offline harness from the browser (background job with a live log), list and download its runs, see the commands with copy buttons. The full run takes several hours |
 | **Setup** | step 1 build or pull the images; step 2 choose dataset size and algorithms, then **Sign zones**; step 3 **Start** the lab |
 | **Demonstrate** | send queries or `dig`, switch algorithm, capture packets, view the packet sequence; a **Presenting** toggle for live demonstrations |
-| **Live-lab benchmark** | one press runs the benchmark through a real resolver: three dataset sizes, repeated signing and measurement trials; needs only the built images |
-| **Results** | three views. *Algorithms side by side*: every algorithm of an offline-harness run or a live-lab benchmark, with the ratio to a baseline (paired per-trial intervals for the offline timings). *Run against run*: two saved runs (stack profiles, repeats, machines) with what differs between them spelled out. *Evolving zone*: the offline evolving-zone experiment, with a round slider that draws the ladder's rungs, the cached-ladder coverage, cost per update, bytes per answer and growth. Offline and live-lab data are never drawn together |
+| **Live-lab benchmark** | *Real resolver · indicative timings.* One press runs the benchmark through a real resolver: three dataset sizes, repeated signing and measurement trials; needs only the built images |
+| **Results** | three views. *Algorithms side by side*: every algorithm of an offline benchmark run or a live-lab benchmark, with the ratio to a baseline (paired per-trial intervals for the offline timings). *Run against run*: two saved runs (stack profiles, repeats, machines) with what differs between them spelled out. *Evolving zone*: the offline evolving-zone experiment, with a round slider that draws the ladder's rungs, the cached-ladder coverage, cost per update, bytes per answer and growth. *Data from*: Offline benchmark, Live-lab benchmark or Single lab (older runs), never drawn together |
 | **Learn** | why DNSSEC needs MTL, in six animated scenes |
 | **Clean up** | remove sessions, captures, runs or signed zones |
 

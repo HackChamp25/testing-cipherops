@@ -125,8 +125,8 @@ BADGE_HELP = {
     "analytical": "Computed from the draft's size formulas; never measured.",
     "derived": "Measured values combined with a stated assumption.",
     "extrapolated": "Scaled from a measured sample to the whole zone.",
-    "primary": "Offline harness: one pinned CPU core, no network.",
-    "indicative": "Live lab: containers share all host CPUs.",
+    "primary": "Offline benchmark: one pinned CPU core, no network.",
+    "indicative": "Live-lab benchmark: containers share all host CPUs.",
 }
 
 
@@ -141,7 +141,7 @@ def edns_code_points() -> list[tuple[str, int, str]]:
     from cipherops.codepoints import EDNS_MTL_MODE_FULL
     from live_lab import driver
 
-    return [("Offline harness (byte model)", EDNS_MTL_MODE_FULL, "used to size the full-signature request"),
+    return [("Offline benchmark (byte model)", EDNS_MTL_MODE_FULL, "used to size the full-signature request"),
             ("Live lab, draft-06 stack", driver.MTL_FULL, "sent by the resolver to ask for the full signature")]
 
 
@@ -149,15 +149,22 @@ def edns_code_points() -> list[tuple[str, int, str]]:
 # `id` is the navigation id (query parameter ?tile=...), unchanged. Everything else is display text.
 
 TILES = {
+    "offline": {
+        "icon": ":material/memory:", "title": "Offline benchmark", "subtitle": "Pinned core · primary results",
+        "pitch": "The primary measurement path: the MTL library, liboqs and OpenSSL on one pinned core, no network.",
+        "use_when": "You need signing time, verification time, signature sizes and byte counts for the report.",
+        "not_for": "Resolver behaviour such as truncation and cache counters; use the live-lab benchmark.",
+        "needs": "Docker", "needs_chip": "Needs Docker", "cta": "Open Offline benchmark",
+    },
     "setup": {
-        "icon": ":material/build:", "title": "Setup",
+        "icon": ":material/build:", "title": "Setup", "subtitle": "Build the live lab",
         "pitch": "Build the live lab once: images, signed zones, running containers.",
         "use_when": "First visit, or after changing dataset size, algorithms or software stack.",
         "not_for": "Measuring anything.",
         "needs": "Docker", "needs_chip": "Needs Docker", "cta": "Open Setup",
     },
     "live": {
-        "icon": ":material/podcasts:", "title": "Demonstrate",
+        "icon": ":material/podcasts:", "title": "Demonstrate", "subtitle": "One lookup · live packets",
         "pitch": "Send a real lookup and watch the packets it causes.",
         "use_when": "You present one lookup, its packets and the cold-versus-warm cache.",
         "not_for": "Collecting benchmark figures.",
@@ -165,35 +172,35 @@ TILES = {
         "cta": "Open Demonstrate",
     },
     "benchmark": {
-        "icon": ":material/speed:", "title": "Live-lab benchmark",
+        "icon": ":material/speed:", "title": "Live-lab benchmark", "subtitle": "Real resolver · indicative timings",
         "pitch": "Three dataset sizes, repeated trials, measured through a real resolver.",
         "use_when": "You need resolver-level numbers: bytes per level, truncation, TCP retry, resolver cache.",
-        "not_for": "Headline signing and verification times; use the offline run for those.",
+        "not_for": "Headline signing and verification times; use the offline benchmark for those.",
         "needs": "Images", "needs_chip": "Needs images", "cta": "Open Live-lab benchmark",
     },
     "compare": {
-        "icon": ":material/compare_arrows:", "title": "Results",
+        "icon": ":material/compare_arrows:", "title": "Results", "subtitle": "Side by side · any run",
         "pitch": "Every algorithm side by side, and any run against any other.",
         "use_when": "You compare SLH-DSA-MTL with SLH-DSA and the classical algorithms from a finished run.",
         "not_for": "Running anything.",
         "needs": "A finished run", "needs_chip": "Needs a finished run", "cta": "Open Results",
     },
     "learn": {
-        "icon": ":material/menu_book:", "title": "Learn",
+        "icon": ":material/menu_book:", "title": "Learn", "subtitle": "Six short scenes",
         "pitch": "Why DNSSEC needs MTL, in six short animated scenes.",
         "use_when": "You want the background before touching any control.",
         "not_for": "Evidence.",
         "needs": "Nothing", "needs_chip": "Needs nothing", "cta": "Open Learn",
     },
     "reset": {
-        "icon": ":material/cleaning_services:", "title": "Clean up",
+        "icon": ":material/cleaning_services:", "title": "Clean up", "subtitle": "Remove only what you pick",
         "pitch": "Clear exactly what you pick, and nothing else.",
         "use_when": "You free disk or start fresh.",
         "not_for": "Anything you may still need: saved runs are listed before you confirm.",
         "needs": "Nothing", "needs_chip": "Needs nothing", "cta": "Open Clean up",
     },
 }
-TILE_ORDER = ("setup", "benchmark", "compare", "live", "learn", "reset")
+TILE_ORDER = ("offline", "benchmark", "compare", "setup", "live", "learn", "reset")
 
 
 def tile_title(tile_id: str) -> str:
@@ -230,7 +237,12 @@ GLOSSARY: list[tuple[str, str, str, str]] = [
     ("Measured · Estimated · Analytical", "counted or timed · fitted from samples · computed from the draft's "
      "formulas", "separate measured cache use from analytical estimates",
      "draft-harvey-cfrg-mtl-mode section 12 size formulas"),
-    ("Primary · Indicative", "offline harness, one pinned core · live lab, shared CPUs", "—", "—"),
+    ("Offline benchmark", "the primary measurement path: the MTL library, liboqs and OpenSSL on one pinned core, with "
+     "no network", "benchmark harness", "—"),
+    ("Live-lab benchmark", "the same comparison through a real resolver (Unbound) and servers (NSD) in Docker",
+     "DNSSEC-related workloads; cache-use measurements", "stub resolver, recursive resolver, authoritative server "
+     "(RFC 9499)"),
+    ("Primary · Indicative", "offline benchmark, one pinned core · live-lab benchmark, shared CPUs", "—", "—"),
     ("Demonstrate", "the live lookup and packet views", "technical demonstration",
      "stub resolver, recursive resolver, authoritative server, AD flag (RFC 9499, RFC 4035)"),
     ("Results", "the comparison pages for a finished run", "signing and verification results; transmitted-byte "

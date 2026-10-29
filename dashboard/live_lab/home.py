@@ -1,7 +1,7 @@
 """The CipherOps home page: what this is, what to do, what it found, and whether to trust it.
 
 Built in that order. Every number comes from a run on disk through ``evidence`` (never typed here), measured, estimated
-and analytical figures stay apart, and the offline harness is presented as the primary evidence with the live lab as the
+and analytical figures stay apart, and the offline benchmark is presented as the primary evidence with the live-lab benchmark as the
 resolver-level cross-check. Display words come from ``terms``. ``render`` takes a ``Context`` so this module does not
 import the app.
 """
@@ -110,7 +110,7 @@ def _paths(visitor: str, ev: dict) -> list[dict]:
         "evaluator": [
             {"text": "Read the headline results below and download the newest offline report."},
             {"text": "Check the deliverables checklist. Each row names its proof."},
-            {"text": "Results, Algorithms side by side, data from the offline harness. Open the tabs At a glance, "
+            {"text": "Results, Algorithms side by side, data from the offline benchmark. Open the tabs At a glance, "
                      "Signing & verification, Bytes & truncation and Cache & latency.",
              "tile": "compare", "label": "Open Results", "settings": {"cmp_view": "algorithms", "cmp_src": "offline"}},
             {"text": "Results, data from the live lab, for resolver-level evidence." if has_live else
@@ -128,13 +128,13 @@ def _paths(visitor: str, ev: dict) -> list[dict]:
             {"text": "Demonstrate, Cold vs warm: the ladder cache at work.", "tile": "live", "label": "Open Demonstrate"},
         ],
         "reproducer": [
-            {"text": "Offline: run the gate, then the quick or the full config. The run folder lands in "
-                     "`results/runs/<id>/`.", "code": "bash scripts/run_benchmark.sh preflight\n"
-                                                      "bash scripts/run_benchmark.sh configs/quick.yaml"},
-            {"text": "Live lab: Setup, build the images, then Live-lab benchmark, Run.", "tile": "setup",
+            {"text": "Offline benchmark: run the gate, then the quick or the full config, here or in a terminal. The "
+                     "run folder lands in `results/runs/<id>/`.", "tile": "offline", "label": "Open Offline benchmark",
+             "code": "bash scripts/run_benchmark.sh preflight\nbash scripts/run_benchmark.sh configs/quick.yaml"},
+            {"text": "Live-lab benchmark: Setup, build the images, then Live-lab benchmark, Run.", "tile": "setup",
              "label": "Open Setup"},
-            {"text": "Compare the new run with the reference run: its environment.json (offline) or suite.json "
-                     "(live lab) against the other.", "tile": "compare", "label": "Open Results",
+            {"text": "Compare the new run with the reference run: its environment.json (offline benchmark) or "
+                     "suite.json (live-lab benchmark) against the other.", "tile": "compare", "label": "Open Results",
              "settings": {"cmp_view": "runs", "cmp_src": "offline"}},
         ],
         "explainer": [
@@ -238,10 +238,11 @@ def _card_grid(cards: list[evidence.Card], prefix: str) -> None:
 
 def _headline(ctx: Context, ev: dict) -> None:
     st.markdown("## What it found")
-    st.markdown(f"{terms.badge('primary')} Offline harness: calls the MTL library, liboqs and OpenSSL directly.")
+    st.markdown(f"{terms.badge('primary')} Offline benchmark: calls the MTL library, liboqs and OpenSSL directly.")
     if not ev["offline"]:
         st.info("No offline run is stored on this machine, so there are no results to show. Produce one with "
-                "`bash scripts/run_benchmark.sh configs/quick.yaml`. Nothing here is an example figure.")
+                "`bash scripts/run_benchmark.sh configs/quick.yaml`, or start one from the Offline benchmark tile. Nothing "
+                "here is an example figure.")
     elif ev["card_error"] and not ev["cards"]:
         st.warning(f"The newest offline run could not be summarised ({ev['card_error']}). Open its report instead.")
     elif ev["cards"]:
@@ -249,7 +250,7 @@ def _headline(ctx: Context, ev: dict) -> None:
         st.caption(f"Newest finished offline run: `{run.id}` ({run.when}), "
                    f"{', '.join(terms.dataset_label(d) for d in run.sizes)}.")
         _card_grid(ev["cards"], "hc")
-    st.markdown(f"{terms.badge('indicative')} Live lab: a real resolver, real packets and cache. Byte and truncation "
+    st.markdown(f"{terms.badge('indicative')} Live-lab benchmark: a real resolver, real packets and cache. Byte and truncation "
                 "counts are measured; read timings as ratios only.")
     if not ev["live"]:
         st.caption("No live-lab benchmark on this machine yet. Live-lab benchmark, Run, produces one.")
@@ -303,22 +304,27 @@ def _two_paths(ctx: Context, ev: dict) -> None:
     st.markdown("## Two measurement paths")
     left, right = st.columns(2)
     with left, st.container(border=True, height="stretch"):
-        st.markdown(f"### Offline harness {terms.badge('primary')}")
+        st.markdown(f"### Offline benchmark {terms.badge('primary')}")
         st.markdown("Calls the MTL library, liboqs and OpenSSL directly on one pinned CPU core, with no network.")
         st.markdown("**Measures:** signing time, verification time, signature sizes, and the bytes and cache use of a "
                     "modelled DNS workload.")
         newest = ev["offline"][0] if ev["offline"] else None
         st.caption(f"Newest run: `{newest.id}` ({newest.when})" if newest else "No run on this machine yet.")
         st.code("bash scripts/run_benchmark.sh configs/quick.yaml", language="bash")
+        if st.button("Open Offline benchmark", key="paths_offline", type="secondary", width="stretch"):
+            ctx.go("offline", None)
+            st.rerun()
     with right, st.container(border=True, height="stretch"):
-        st.markdown(f"### Live lab {terms.badge('indicative')}")
+        st.markdown(f"### Live-lab benchmark {terms.badge('indicative')}")
         st.markdown("A root, TLD and SLD hierarchy served by NSD, validated by Unbound, in Docker.")
-        st.markdown("**Shows what the harness cannot:** resolver behaviour, truncation, TCP retry, bytes per level and "
+        st.markdown("**Shows what the offline benchmark cannot:** resolver behaviour, truncation, TCP retry, bytes per level and "
                     "Unbound's cache counters. Containers share the host CPUs, so timings are indicative.")
         newest = ev["live"][0] if ev["live"] else None
         st.caption(f"Newest run: `{newest.id}` ({newest.when})" if newest else "No run on this machine yet.")
-        st.caption("Start it from Setup.")
-    st.caption("Two paths because the harness gives clean timings and sizes, while only a real resolver shows "
+        if st.button("Open Live-lab benchmark", key="paths_live", type="secondary", width="stretch"):
+            ctx.go("benchmark", None)
+            st.rerun()
+    st.caption("Two paths because the offline benchmark gives clean timings and sizes, while only a real resolver shows "
                "truncation, retries and cache behaviour. They run different software, so their numbers are never mixed.")
 
 
@@ -326,20 +332,21 @@ def _two_paths(ctx: Context, ev: dict) -> None:
 
 def _needs_met(tile_id: str, ctx: Context, ev: dict) -> bool:
     r, docker_ok = ctx.ready, not ctx.stt.get("error")
-    return {"setup": docker_ok, "benchmark": r["images"], "live": r["prepared"] and r["running"],
+    return {"offline": docker_ok, "setup": docker_ok, "benchmark": r["images"], "live": r["prepared"] and r["running"],
             "compare": bool(ev["offline"] or ev["live"]), "learn": True, "reset": True}[tile_id]
 
 
 def _tools(ctx: Context, ev: dict) -> None:
     st.markdown("## Tools")
     order = terms.TILE_ORDER
-    for row in (order[:3], order[3:]):
-        cols = st.columns(3)
+    for row in (order[:4], order[4:]):
+        cols = st.columns(4)
         for col, tid in zip(cols, row):
             t = terms.TILES[tid]
             met = _needs_met(tid, ctx, ev)
             with col, st.container(border=True, height="stretch"):
                 st.markdown(f"### {t['icon']} {t['title']}")
+                st.caption(t["subtitle"])
                 st.markdown(f"**Use it when:** {t['use_when']}")
                 st.markdown(f":gray-badge[{t['needs_chip']}] "
                             + (":green-badge[ready]" if met else ":orange-badge[not ready yet]"))
@@ -383,14 +390,14 @@ def _limits(ev: dict) -> None:
     off, live = _mtl_commits(ev)
     codes = terms.edns_code_points()
     st.markdown(
-        f"- **Different MTL versions.** The offline harness (MTL `{off}`) and the live lab on the draft-06 stack "
+        f"- **Different MTL versions.** The offline benchmark (MTL `{off}`) and the live-lab benchmark on the draft-06 stack "
         f"(MTL `{live}`) run different versions. Never merge their numbers.\n"
         "- **Plain SLH-DSA on the latest stack.** Its Unbound answers SERVFAIL for plain SLH-DSA while the signed zone "
         "is valid. Use the draft-06 stack for the live MTL-versus-non-MTL comparison.\n"
         f"- **Placeholder code points.** The DNSSEC algorithm numbers for SLH-DSA are not IANA-assigned, and the "
         f"mtl-mode-full option is {codes[0][1]} in the offline byte model but {codes[1][1]} on the live lab's "
         "draft-06 stack. Both are lab values.\n"
-        "- **Live-lab timings are indicative.** Containers are not pinned to cores. Use the offline harness for "
+        "- **Live-lab timings are indicative.** Containers are not pinned to cores. Use the offline benchmark for "
         "timings.")
 
 

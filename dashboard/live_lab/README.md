@@ -17,7 +17,7 @@ The home page answers four questions in order: what is this, what do you want to
 2. **What brings you here?** Four choices: *Check the PS-036 deliverables*, *Watch the demonstration*, *Reproduce the benchmark*, *Understand MTL first*. Each shows an ordered path with buttons to the exact tile. The choice is kept in the address (`?visitor=evaluator`, `presenter`, `reproducer`, `explainer`) so a link can be shared. There is one primary button on the page: the next step for that visitor. An evaluator with a run on disk is never sent to Setup.
 3. **What it found.** Headline cards read from the newest finished **offline run** (`results/runs/<id>/`), badged *Primary · pinned core*, then live-lab cards badged *Indicative · not core-pinned* for timings. Each card shows its kind (Measured, Extrapolated), the run id and date, the trial count and the interval label, and a *Provenance* popover with the run's `config.yaml`, `environment.json`, `preflight.json` and report. Failed lookups in a live-lab run are listed, never hidden. With no run, the page says which command produces one and shows no figures.
 4. **PS-036 deliverables.** One row per expected outcome: *Evidence found*, *Partial* (what is missing is named) or *Not found on this machine*, with the proof file and a button to where it is shown. *Export evidence summary* downloads the table as Markdown with run ids and file paths. The rules are in `evidence.py`; for example, six or more trials count as found because that is where the interval of the median reaches 95%, and a run without `preflight.json` never counts as the benchmark harness.
-5. **Two measurement paths.** The offline harness (primary: signing time, verification time, sizes) and the live lab (resolver behaviour: truncation, TCP retry, bytes per level, cache counters).
+5. **Two measurement paths.** The offline benchmark (primary: signing time, verification time, sizes) and the live-lab benchmark (resolver behaviour: truncation, TCP retry, bytes per level, cache counters).
 6. **Tools.** The tiles below, each with when to use it and what it needs.
 7. **Lab status.** The lab chips and the next step for the lab only. If Docker is down, it says so once here; the rest of the page still works.
 8. **Known limits.** Always visible: the two paths run different MTL versions, plain SLH-DSA on the latest stack, placeholder code points, live-lab timings.
@@ -38,6 +38,7 @@ Display words come from one module, `terms.py`; internal ids (`mtl`, `slh-dsa`, 
 | **Sign zones** | Prepare | |
 | **Software stack**: draft-06, latest | image version | |
 | **Run** | suite, benchmark (as a noun) | |
+| **Offline benchmark** | (new) | `offline` |
 | **Setup** | Setup | `setup` |
 | **Demonstrate** | Live | `live` |
 | **Live-lab benchmark** | Benchmark | `benchmark` |
@@ -53,12 +54,17 @@ Each tile page opens with the same three facts, from `terms.py`: *Use it when*, 
 
 | Tile | What it is for | Sidebar | Results view |
 |------|----------------|---------|--------------|
+| **Offline benchmark** | *Pinned core · primary results.* Runs the offline harness (`scripts/run_benchmark.sh`) as a background job with a live log and a Cancel button, lists the runs in `results/runs/` (id, date, dataset sizes with RRset counts, trials with the interval label, MTL commit, go/no-go verdict), lets you download each run's `report.html` or open it in Results, and shows the three commands with copy buttons. The full run takes several hours, and more than an hour even with the fewest trials | Run configuration (read from `configs/`), software stack (default latest), CPU core, **Start run**, **Run the go/no-go gate only** | The list of runs; the live log while one runs |
 | **Setup** | Images, then dataset size and algorithms, sign zones, start / stop the lab (for Demonstrate) | Step 1 **Images** (**Software stack** draft-06 or latest, build or pull), step 2 **Sign zones** (zone design, sign), step 3 **Start**. Sign zones, Start and the live-lab benchmark run inside the images, so they wait until step 1 is done | Signing summary and timings |
 | **Demonstrate** | Switch algorithm, send a lookup or `dig`, cold vs warm. A progress panel lists each step of a query with its duration; the last result is labelled with its query, path and algorithm and is cleared when the algorithm changes. **Presenting** (top of the page) hides the sidebar and the activity log and enlarges the text | Active algorithm, capture name | Queries (newest first), packet decode, sequence diagram. Results open on the current query's capture, or the newest capture if no query was run |
-| **Live-lab benchmark** | The PS-036 benchmark through a real resolver: several dataset sizes, repeated trials | Name, dataset sizes, algorithms, trials, queries, networks, workload | Per-size tables, CSVs, and a reproducible `report.html` like the offline report |
-| **Results** | Algorithms side by side, run against run, and the evolving zone, from the offline harness or the live lab | Run, dataset size, network, candidate and baseline | Cards, scaling across sizes, signing, bytes per level, cache, latency, CSV |
+| **Live-lab benchmark** | *Real resolver · indicative timings.* The PS-036 benchmark through a real resolver: several dataset sizes, repeated trials | Name, dataset sizes, algorithms, trials, queries, networks, workload | Per-size tables, CSVs, and a reproducible `report.html` like the offline report |
+| **Results** | Algorithms side by side, run against run, and the evolving zone. *Data from* has three options: **Offline benchmark**, **Live-lab benchmark** and **Single lab (older runs)** | Run, dataset size, network, candidate and baseline | Cards, scaling across sizes, signing, bytes per level, cache, latency, CSV |
 | **Learn** | Why DNSSEC needs MTL: six animated scenes | none | the explainer |
 | **Clean up** | Clear only the scopes you pick | Notes on what is kept | What the last clean-up removed |
+
+### One benchmark at a time
+
+The two benchmark tiles share one rule (`benchmark_lock.py`): while an offline run, a live-lab benchmark, an image build or a signing job is running, none of the others may start, because two jobs would share the CPU and distort the timings. The second one is refused with the reason ("An offline benchmark run (quick.yaml) is already running. ..."), the Start buttons are disabled with the same message, and the check is made under a lock so two sessions, or the dashboard and `suite.py` on the command line, cannot both pass it. A run started from a terminal with `scripts/run_benchmark.sh` is outside the dashboard's view, so the dashboard cannot see it.
 
 The **About** button (top right) opens a panel describing the lab and the team; a full-screen button sits beside it. Start is available only once Sign zones has signed at least one algorithm for the chosen dataset size.
 
@@ -79,7 +85,7 @@ It is a normal animation: play, pause, restart, speed, and a timeline you can dr
 
 An RRSIG count is the number of real RRSIG records in the signed zone: a leaf zone has 2 per name (its record and its NSEC3 proof) plus 7 of its own, a TLD 2 per child plus 7, the root 2 per TLD plus 8 (Small = 55, Medium = 353). Earlier versions also counted NSEC3 records (their type bitmap lists RRSIG), about 1.5x too many. The signer now counts exactly, and manifests written before the fix are recounted from the signed files when the dashboard loads them (the stored figure is kept as `rrsig_count_manifest`). The planned-lab estimate uses the same exact formula.
 
-## Benchmark
+## Live-lab benchmark
 
 One press of **Run benchmark** does, for each dataset size (default 50, 500 and 5,000 data names): build the hierarchy, sign it with every chosen scenario (timed), repeat signing and verification on sample zones (several trials), start the lab, replay the same seeded workload with repeated cold and warm trials, and stop the lab. It needs only the built images: no Prepare and no running lab. It runs in the background, so you can leave the page; Results fills in when it finishes.
 
@@ -100,11 +106,11 @@ Compare reads a finished benchmark (or, for older single-lab runs, a lab you pic
 | Where | Numbers | Needs re-Prepare |
 |-------|---------|------------------|
 | Setup → Zone size → **Custom…** | TLDs, leaf zones, names per leaf zone, leaf servers, seed (Live lab only) | Yes |
-| Benchmark → **Workload mix** | NXDOMAIN share, zone and name popularity skew, lookup timeout | No |
-| Benchmark → **Network profiles** | Delay to client, root, TLD and leaf, and loss, for `wan` and `lossy` | No |
+| Live-lab benchmark → **Workload mix** | NXDOMAIN share, zone and name popularity skew, lookup timeout | No |
+| Live-lab benchmark → **Network profiles** | Delay to client, root, TLD and leaf, and loss, for `wan` and `lossy` | No |
 
 Setup shows a **Planned lab** card (zones, names, containers, rough Prepare time) and the exact YAML the lab will use. A Custom shape gets its own lab folder named after a hash of its numbers (`eco-ui-custom-<hash>`), so signed zones and results from different shapes never mix. Only one lab runs at a time: Start stops any other. Each benchmark records the numbers it used.
 
 ## Naming runs
 
-Give a benchmark a name in the Benchmark sidebar; it is stored with the date and time (`<YYYYMMDD-HHMMSS>_<name>`). Live captures take an optional name the same way (`live-<name>-<date>-<time>.pcap`). Names keep letters, digits, `-` and `_`.
+Give a benchmark a name in the Live-lab benchmark sidebar; it is stored with the date and time (`<YYYYMMDD-HHMMSS>_<name>`). Live captures take an optional name the same way (`live-<name>-<date>-<time>.pcap`). Names keep letters, digits, `-` and `_`.

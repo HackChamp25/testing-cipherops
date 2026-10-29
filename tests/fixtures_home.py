@@ -89,6 +89,8 @@ def make_live_suite(suites_dir: Path, results_dir: Path, name: str = "suite-fixt
         d / "signing_full.csv", index=False)
     (d / "suite.json").write_text(json.dumps({
         "trials": trials, "sizes": list(sizes), "scenarios": list(scenarios), "stack": stack, "sizes_detail": detail,
+        "sign_trials": 3, "sample_names": 100, "n_queries": 500, "networks": ["lan"], "udp": 1232, "jobs": 1,
+        "workload": {}, "profiles": {}, "host": {},
         "provenance": {"stack": stack, "stack_pins": {"MTL_COMMIT": "93b05ef73dab"}, "images": {
             "cipherops-eco-nsd": {"id": "sha256:1"}, "cipherops-eco-unbound": {"id": "sha256:2"}}}}))
     if report:

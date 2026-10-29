@@ -316,7 +316,7 @@ def build_markdown(sd: dict, figs: dict[str, str]) -> str:
         L.append("")
         L.append(f"> **Timing caveat.** The host CPU governor was `{gov}`, so the clock speed can change during the "
                  "run. Repeat on a host set to `performance` for tighter timings. Lab containers also share every "
-                 "host CPU; the offline harness, by contrast, runs on a dedicated core.")
+                 "host CPU; the offline benchmark, by contrast, runs on a dedicated core.")
     built = prov.get("images") or {}
     if built:
         L.append("")
@@ -599,7 +599,7 @@ def build_markdown(sd: dict, figs: dict[str, str]) -> str:
         "3. FIPS 205, *Stateless Hash-Based Digital Signature Standard*.\n"
         "4. RFC 4033–4035 (DNSSEC); RFC 5155 (NSEC3).\n"
         "5. Verisign MTL reference library, https://github.com/verisign/MTL.\n"
-        "6. CipherOps offline-harness report (companion): `results/runs/<id>/report.html`.\n"
+        "6. CipherOps offline-benchmark report (companion): `results/runs/<id>/report.html`.\n"
     )
     return "\n".join(L) + "\n"
 

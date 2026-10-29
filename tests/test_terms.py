@@ -4,7 +4,6 @@ import re
 import sys
 from pathlib import Path
 
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "dashboard"), str(ROOT / "src"), str(ROOT / "tests")]
@@ -188,3 +187,29 @@ def test_a_step_button_opens_the_tile_with_its_controls_preset(tmp_path, monkeyp
 def test_the_raw_id_detector_catches_ids_and_ignores_names_that_contain_them():
     assert RAW_ID.findall("uses mtl and slh-dsa here") == ["mtl", "slh-dsa"]
     assert RAW_ID.findall("the mtl-mode-full option, draft-harvey-cfrg-mtl-mode, `mtl`, results/runs/mtl.csv") == []
+
+
+def test_the_offline_benchmark_tile_comes_before_the_live_lab_benchmark_with_the_agreed_subtitles():
+    assert terms.TILE_ORDER.index("offline") < terms.TILE_ORDER.index("benchmark")
+    assert terms.TILES["offline"]["title"] == "Offline benchmark"
+    assert terms.TILES["offline"]["subtitle"] == "Pinned core · primary results"
+    assert terms.TILES["benchmark"]["title"] == "Live-lab benchmark"
+    assert terms.TILES["benchmark"]["subtitle"] == "Real resolver · indicative timings"
+    assert all(t["subtitle"] for t in terms.TILES.values())
+
+
+def test_compare_data_from_options_use_the_tile_names():
+    src = (ROOT / "dashboard" / "live_lab" / "app.py").read_text()
+    m = re.search(r'CMP_SOURCES = \{([^}]*)\}', src).group(1)
+    assert '"offline": "Offline benchmark"' in m and '"live": "Live-lab benchmark"' in m
+    assert '"lab": "Single lab (older runs)"' in m
+    assert terms.tile_title("offline") == "Offline benchmark" and terms.tile_title("benchmark") == "Live-lab benchmark"
+
+
+def test_home_offers_the_offline_benchmark_and_uses_the_new_names(tmp_path, monkeypatch):
+    at = _run(tmp_path, monkeypatch, offline=True)
+    text = _text(at)
+    labels = [b.label for b in at.button]
+    assert "Open Offline benchmark" in labels and "Open Live-lab benchmark" in labels
+    assert "### Offline benchmark" in text and "### Live-lab benchmark" in text
+    assert "Offline harness" not in text and "Live lab:" not in text

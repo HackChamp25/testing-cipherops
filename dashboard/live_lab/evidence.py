@@ -483,8 +483,9 @@ def next_step(visitor: str, ready: dict, runs: dict) -> dict:
     if visitor == "reproducer":
         if not ready.get("docker", True):
             return {"tile": None, "label": "", "text": "Docker is not reachable. Start Docker, then reload."}
-        return {"tile": None, "label": "", "text": "Run `bash scripts/run_benchmark.sh preflight`, then the quick or full "
-                "config. The run folder lands in `results/runs/`."}
+        return {"tile": "offline", "label": "Open Offline benchmark", "text": "Run `bash scripts/run_benchmark.sh "
+                "preflight`, then the quick or full config, here or in a terminal. The run folder lands in "
+                "`results/runs/`."}
     return {"tile": "learn", "label": "Open Learn", "text": "Six short scenes, no setup needed."}
 
 

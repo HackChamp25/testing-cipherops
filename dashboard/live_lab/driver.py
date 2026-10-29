@@ -25,7 +25,7 @@ STACK_CHOICES = ("draft06", "latest")
 STACK_BLURBS = {
     "draft06": "Condensed MTL by default; full ladder on EDNS 65050 (MTL v1.2 / liboqs 0.14). "
                "Signs with SPHINCS+-SHA2-128s-simple, the pre-standard form of SLH-DSA; all scenarios validate",
-    "latest": "Always-full MTL RRSIGs; FIPS 205 SLH-DSA (liboqs 0.16), same MTL commit as the offline harness. "
+    "latest": "Always-full MTL RRSIGs; FIPS 205 SLH-DSA (liboqs 0.16), same MTL commit as the offline benchmark. "
               "Plain SLH-DSA is not validated by its Unbound (SERVFAIL)",
 }
 # What the stack's signer, MTL library and resolver actually call in liboqs (read from the built binaries).

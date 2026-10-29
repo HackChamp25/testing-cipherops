@@ -27,7 +27,7 @@ ECO_DIR = ROOT / "ecosystem"
 SUITES_DIR = ECO_DIR / "results" / "suites"
 sys.path.insert(0, str(ROOT / "dashboard"))
 
-from live_lab import compare, compare_hub, decode, driver, evidence, home, terms  # noqa: E402
+from live_lab import benchmark_lock, compare, compare_hub, decode, driver, evidence, home, offline_bench, offline_job, terms  # noqa: E402
 from live_lab import build_job, prepare_job, prepare_story  # noqa: E402
 from live_lab import suite as suite_mod  # noqa: E402
 from cipherops import evolution  # noqa: E402
@@ -35,6 +35,9 @@ from cipherops import evolution  # noqa: E402
 compare = importlib.reload(compare)
 compare_hub = importlib.reload(compare_hub)
 terms = importlib.reload(terms)
+benchmark_lock = importlib.reload(benchmark_lock)
+offline_bench = importlib.reload(offline_bench)
+offline_job = importlib.reload(offline_job)
 evidence = importlib.reload(evidence)
 home = importlib.reload(home)
 decode = importlib.reload(decode)
@@ -66,7 +69,7 @@ SCENARIO_BLURB = {
 LEVEL_ICON = {"info": "ℹ️", "ok": "✅", "warn": "⚠️", "err": "❌", "step": "▶️"}
 ACTIVITY_CAP = 500
 
-NAV_MODES = ("home", "setup", "live", "benchmark", "compare", "learn", "reset")
+NAV_MODES = ("home", "offline", "setup", "live", "benchmark", "compare", "learn", "reset")
 TILES = terms.TILES  # display text for every tile lives in terms.py; the dict keys are the navigation ids
 
 _CSS = """
@@ -426,6 +429,7 @@ def _lab_strip(h: driver.LabHandle, stt: dict, *, mode: str = "setup") -> None:
 def _page_header(mode: str, h: driver.LabHandle, stt: dict) -> None:
     tile = TILES[mode]
     st.markdown(f"## {tile['icon']} {tile['title']}")
+    st.markdown(f"**{tile['subtitle']}**")
     st.caption(tile["pitch"])
     st.caption(f"**Use it when:** {tile['use_when']} · **Not for:** {tile['not_for']} · **Needs:** {tile['needs']}")
     if mode in ("setup", "live", "reset"):
@@ -562,11 +566,12 @@ def sidebar_home(h: driver.LabHandle, stt: dict) -> None:
     st.sidebar.markdown("### Where things are")
     st.sidebar.markdown(
         f"1. **{terms.tile_title('compare')}**: results of a finished run, no setup needed  \n"
-        f"2. **{terms.tile_title('setup')}**: build the live lab (first, once)  \n"
-        f"3. **{terms.tile_title('live')}**: one lookup and its packets  \n"
-        f"4. **{terms.tile_title('benchmark')}**: three dataset sizes through a real resolver; needs only the images  \n"
-        f"5. **{terms.tile_title('learn')}**: why DNSSEC needs MTL  \n"
-        f"6. **{terms.tile_title('reset')}**: clear only what you choose"
+        f"2. **{terms.tile_title('offline')}**: the primary run on a pinned core, started here or in a terminal  \n"
+        f"3. **{terms.tile_title('setup')}**: build the live lab (first, once)  \n"
+        f"4. **{terms.tile_title('live')}**: one lookup and its packets  \n"
+        f"5. **{terms.tile_title('benchmark')}**: three dataset sizes through a real resolver; needs only the images  \n"
+        f"6. **{terms.tile_title('learn')}**: why DNSSEC needs MTL  \n"
+        f"7. **{terms.tile_title('reset')}**: clear only what you choose"
     )
     st.sidebar.markdown("---")
     r = readiness(stt)
@@ -682,7 +687,7 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
         format_func=lambda s: f"{terms.stack_label(s)}: {driver.STACK_BLURBS.get(s, '')}".rstrip(': '),
         help="Which pinned software stack to build and run. "
              f"draft-06 = condensed signatures by default, full signature on the mtl-mode-full option (code point {driver.MTL_FULL}, a lab value). "
-             "latest = always-full MTL signatures and FIPS 205 SLH-DSA, the same MTL commit as the offline harness. "
+             "latest = always-full MTL signatures and FIPS 205 SLH-DSA, the same MTL commit as the offline benchmark. "
              "Change this, then build the images and Sign zones again.",
     )
     pins = driver.stack_pins(stack)
@@ -1013,7 +1018,11 @@ def sidebar_benchmark(h: driver.LabHandle, stt: dict) -> None:
                           width="stretch")
 
     _warn_unvalidated(cfg("stack", "draft06"), sc)
-    ready = bool(sizes and sc and nets) and r["images"] and not live and not build_job.is_running()
+    off_running = benchmark_lock.offline_status().get("state") in driver.ACTIVE_STATES
+    ready = (bool(sizes and sc and nets) and r["images"] and not live and not build_job.is_running()
+             and not off_running)
+    if off_running:
+        st.sidebar.warning(benchmark_lock.refusal("live", benchmark_lock.running()) or "")
     if not r["images"]:
         st.sidebar.warning("Build the images first (Setup, step 1).")
     if r["running"] and not live:
@@ -1961,6 +1970,172 @@ def live_page(h: driver.LabHandle, stt: dict) -> None:
         _activity_expander(h)
 
 
+# ─────────────────────────── OFFLINE BENCHMARK ───────────────────────────
+
+def _finish_offline_job(h: driver.LabHandle) -> None:
+    """Take over an offline run that has just ended: log the result in the Activity log, once."""
+    stt = offline_job.status()
+    state = stt.get("state")
+    if state not in ("done", "failed", "stopped") or stt.get("handled"):
+        return
+    offline_job.mark_handled()
+    log = offline_job.log_text(8000)
+    st.session_state.last_log = log
+    secs = float(stt.get("finished") or time.time()) - float(stt.get("started") or time.time())
+    title = stt.get("title") or "offline benchmark"
+    if state == "done":
+        activity("ok", f"Offline benchmark finished ({secs:.0f}s)", f"{title}: {stt.get('run_id') or 'see the log'}",
+                 phase="offline", source="harness", h=h)
+        st.sidebar.success(f"Finished · {secs:.0f}s")
+    else:
+        msg = str(stt.get("error") or "The run did not finish.")[-2000:]
+        st.sidebar.error(msg[:600])
+        activity("err", "Offline benchmark failed", msg, phase="offline", source="harness", h=h)
+
+
+def _start_offline(kind: str) -> None:
+    try:
+        offline_job.start(kind, cfg("off_config", offline_bench.QUICK_CONFIG), str(cfg("off_cpuset", offline_bench.DEFAULT_CPUSET)),
+                          cfg("off_stack", offline_bench.DEFAULT_STACK))
+        activity("step", "Offline benchmark started", f"{kind} · {cfg('off_config')}", phase="offline", source="harness")
+    except (driver.LabBusy, RuntimeError, ValueError) as e:
+        st.sidebar.error(str(e)[:600])
+        return
+    st.rerun()
+
+
+def sidebar_offline(h: driver.LabHandle, stt: dict) -> None:
+    _sidebar_brand("offline")
+    st.sidebar.markdown(f"### {terms.tile_title('offline')}")
+    _finish_offline_job(h)
+    running = benchmark_lock.running()
+    block = benchmark_lock.refusal("offline", running)
+    if block:
+        st.sidebar.warning(block)
+    choices = offline_bench.config_choices()
+    by = {c["path"]: c for c in choices}
+    if by:
+        sb(st.sidebar.selectbox, "off_config", offline_bench.QUICK_CONFIG if offline_bench.QUICK_CONFIG in by else next(iter(by)),
+           "Run configuration", options=list(by),
+           format_func=lambda p: f"{by[p]['label']} · {by[p]['trials']} trials",
+           help="Settings are read from the file in configs/. The full run takes several hours.")
+        chosen = by.get(cfg("off_config"))
+        if chosen:
+            st.sidebar.caption("Dataset sizes: " + ", ".join(chosen["sizes"]))
+    stacks = driver.list_stacks()
+    stack = sb(st.sidebar.selectbox, "off_stack", offline_bench.DEFAULT_STACK, "Software stack", options=stacks,
+               format_func=terms.stack_label,
+               help="The offline benchmark needs the stack whose liboqs has the FIPS 205 SLH-DSA names: latest. "
+                    "On draft-06 the go/no-go gate reports NO-GO by design.")
+    if stack != offline_bench.DEFAULT_STACK:
+        st.sidebar.caption("On this stack the go/no-go gate reports NO-GO by design, so no numbers are produced.")
+    cpuset = sb(st.sidebar.text_input, "off_cpuset", offline_bench.DEFAULT_CPUSET, "CPU core",
+                help="The one core every trial is pinned to, for example 2. The host needs at least 3 cores.")
+    valid = offline_bench.valid_cpuset(cpuset)
+    if not valid:
+        st.sidebar.error("Enter a core number such as 2, or a list such as 2,3.")
+    docker_ok = not stt.get("error")
+    if not docker_ok:
+        st.sidebar.warning("Docker is not reachable. Start Docker, then reload.")
+    can = docker_ok and not block and valid and bool(by)
+    if st.sidebar.button("Start run", key="btn_off_start", type="primary", width="stretch", disabled=not can):
+        _start_offline("run")
+    if st.sidebar.button("Run the go/no-go gate only", key="btn_off_gate", width="stretch", disabled=not can,
+                         help="Builds the pinned image and checks the reference library. No numbers are produced."):
+        _start_offline("preflight")
+    st.sidebar.markdown("---")
+    if st.sidebar.button("Refresh", width="stretch", key="sb_refresh_off"):
+        st.rerun()
+
+
+@st.fragment(run_every=2.0)
+def _offline_live_body() -> None:
+    """Polls the offline job every two seconds and shows its log. Hands over when it ends."""
+    job = offline_job.status()
+    if job.get("state") not in offline_job.ACTIVE_STATES:
+        st.rerun()  # whole page: the sidebar logs the result
+        return
+    log = offline_job.log_text(6000)
+    prog = offline_bench.parse_progress(log)
+    elapsed = time.time() - float(job.get("started") or time.time())
+    frac = (prog["step"] - 1) / prog["steps"] if prog["step"] else 0.0
+    st.progress(min(max(frac, 0.0), 1.0), text=f"{offline_bench.progress_text(log)} · {_clock(elapsed)} elapsed")
+    st.caption(f"{job.get('title')} on core {job.get('cpuset')}, software stack {terms.stack_label(job.get('stack', ''))}. "
+               "The first build compiles the libraries from source and can take tens of minutes. You can leave this page.")
+    st.code(log or "(starting…)", language="text")
+    if st.button("Cancel run", key="btn_off_cancel"):
+        offline_job.cancel()
+        activity("info", "Offline benchmark cancelled", "", phase="offline", source="harness")
+        st.rerun()
+
+
+def _offline_commands() -> None:
+    st.markdown("### Run it from a terminal")
+    stack = cfg("off_stack", offline_bench.DEFAULT_STACK)
+    cmds = offline_bench.commands(stack)
+    for c in cmds:
+        st.markdown(f"**{c['label']}**")
+        st.code(c["command"], language="bash")  # st.code has a copy button
+        st.caption(c["note"])
+    st.caption("Run these at the repository root. Each run writes `results/runs/<id>/` with `report.html`, "
+               "`config.yaml`, `environment.json` and `preflight.json`.")
+
+
+VERDICT_BADGE = {"GO": ":green-badge[GO]", "NO-GO": ":red-badge[NO-GO]", "missing": ":gray-badge[no gate result]"}
+
+
+def _offline_runs() -> None:
+    st.markdown("### Runs on this machine")
+    rows = offline_bench.run_rows(ROOT / "results")
+    if not rows:
+        st.info("No offline run on this machine yet. Start one with **Start run** in the sidebar, or use the "
+                "commands below. Nothing is shown here until a run finishes.")
+        return
+    st.caption(f"{len(rows)} run(s), newest first. Download a run's report, or open the run in Results.")
+    for i, r in enumerate(rows[:20]):
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([4, 4, 3], vertical_alignment="center")
+            c1.markdown(f"**`{r['id']}`**  \n{r['date']}  \n{VERDICT_BADGE[r['verdict']]} "
+                        f"{'stack ' + terms.stack_label(r['stack']) if r['stack'] != '—' else 'stack not recorded'} · "
+                        f"MTL `{r['mtl_commit']}`")
+            c2.markdown("  \n".join(r["sizes"]) or "—")
+            c2.caption(f"{r['trials']} trials · {r['interval']}")
+            with c3:
+                if r["report"] is not None:
+                    st.download_button("Download report", data=_cached_bytes(str(r["report"]), r["report"].stat().st_mtime),
+                                       file_name=f"{r['id']}-report.html", mime="text/html", key=f"off_dl_{i}",
+                                       icon=":material/download:", width="stretch")
+                else:
+                    st.caption("No report.html in this run")
+                st.button("Open in Results", key=f"off_open_{i}", width="stretch", on_click=_go_to,
+                          args=("compare", {"cmp_view": "algorithms", "cmp_src": "offline", "cmp_a_offline": r["id"]}))
+    if len(rows) > 20:
+        st.caption(f"{len(rows) - 20} older run(s) are in `results/runs/`.")
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _cached_bytes(path: str, mtime: float) -> bytes:
+    return Path(path).read_bytes()
+
+
+def offline_page(h: driver.LabHandle, stt: dict) -> None:
+    _page_header("offline", h, stt)
+    st.markdown(terms.badge("primary"))
+    job = offline_job.status()
+    if job.get("state") in offline_job.ACTIVE_STATES:
+        st.markdown("### Running now")
+        _offline_live_body()
+    else:
+        other = [b for b in benchmark_lock.running() if b.kind != "offline"]
+        if other:
+            st.warning(benchmark_lock.refusal("offline", other) or "")
+        if job.get("state") == "failed" and job.get("error"):
+            with st.expander("The last run did not finish", expanded=False):
+                st.code(str(job["error"])[-1500:], language="text")
+    _offline_runs()
+    _offline_commands()
+
+
 # ─────────────────────────── BENCHMARK ───────────────────────────
 
 def _suite_params() -> dict:
@@ -1984,7 +2159,7 @@ def _bench_plan() -> None:
         st.markdown("**Planned benchmark**")
         a = st.columns(5)
         a[0].metric("Dataset sizes", len(p["sizes"]))
-        a[1].metric("Scenarios", len(p["scenarios"]))
+        a[1].metric("Algorithms", len(p["scenarios"]))
         a[2].metric("Measurement trials", p["trials"])
         a[3].metric("Signing trials", p["sign_trials"])
         a[4].metric("Lookups / pass", p["n_queries"])
@@ -2075,7 +2250,7 @@ def _fmt_ci(med: float | None, lo: float | None, hi: float | None) -> str:
 
 def _signing_stats_table(stats: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame({
-        "Scenario": stats["scenario"],
+        "Algorithm": stats["scenario"].map(terms.algorithm_label),
         "Trials": stats["trials"],
         "Sample (names)": stats["sample_names"],
         "Sign per RRSIG (ms)": stats["sign_ms_per_rrsig"].round(3),
@@ -2174,7 +2349,7 @@ def benchmark_results(h: driver.LabHandle) -> None:
                 st.dataframe(summary[cols], width="stretch", hide_index=True)
                 for note in compare.lookup_problems(summary):
                     st.warning(note)
-                _bench_charts(summary)
+                _bench_charts(summary, key=f"{pick}_{n}")
     report_html = by[pick]["path"] / "report.html"
     report_md = by[pick]["path"] / "report.md"
     if not report_html.is_file() or not report_md.is_file():
@@ -2200,7 +2375,7 @@ def benchmark_results(h: driver.LabHandle) -> None:
         st.caption(f"Reproducible report on disk: `{report_html}` (also `report.md` and `figures/`).")
 
 
-def _bench_charts(summary: pd.DataFrame) -> None:
+def _bench_charts(summary: pd.DataFrame, key: str = "") -> None:
     if summary.empty:
         return
     base = {"x": "scenario", "color": "pass", "barmode": "group"}
@@ -2208,21 +2383,17 @@ def _bench_charts(summary: pd.DataFrame) -> None:
     if "median_ms" in summary:
         st.plotly_chart(
             px.bar(summary, y="median_ms", title="Median lookup time (ms)", **base, **facet),
-            width="stretch",
+            width="stretch", key=f"bench_ms_{key}",
         )
     if "upstream_bytes" in summary:
         st.plotly_chart(
             px.bar(summary, y="upstream_bytes", title="Upstream bytes per pass", **base, **facet),
-            width="stretch",
+            width="stretch", key=f"bench_bytes_{key}",
         )
 
 
 def _open_in_compare(suite_id: str) -> None:
-    _store()["cmp_source"] = "suite"
-    _store()["cmp_suite"] = suite_id
-    st.session_state.pop("w_cmp_source", None)
-    st.session_state.pop("w_cmp_suite", None)
-    _go("compare")
+    _go_to("compare", {"cmp_view": "algorithms", "cmp_src": "live", "cmp_a_live": suite_id})
 
 
 def benchmark_page(h: driver.LabHandle, stt: dict) -> None:
@@ -2238,7 +2409,7 @@ def benchmark_page(h: driver.LabHandle, stt: dict) -> None:
 # ─────────────────────────── COMPARE ───────────────────────────
 
 CMP_VIEWS = {"algorithms": "Algorithms side by side", "runs": "Run against run", "evolution": "Evolving zone"}
-CMP_SOURCES = {"offline": "Offline harness", "live": "Live lab", "lab": "Single lab"}
+CMP_SOURCES = {"offline": "Offline benchmark", "live": "Live-lab benchmark", "lab": "Single lab (older runs)"}
 CMP_SOURCE_NOTE = {
     "offline": "Pinned image, one dedicated core, repeated trials: the PS-036 timings (FIPS 205 SLH-DSA on the `latest` stack).",
     "live": "Real Unbound and NSD in containers (a finished live-lab benchmark): real packets and cache, indicative timings (not core-pinned).",
@@ -2952,7 +3123,7 @@ def compare_page(h: driver.LabHandle, stt: dict) -> None:
               format_func=CMP_VIEWS.get) or "algorithms"
     if view == "evolution":
         st.caption("MTL's real use is a series that keeps growing: a zone changes, new leaves are appended, a new "
-                   "ladder is signed, and resolvers hold older ladders. Offline harness data only.")
+                   "ladder is signed, and resolvers hold older ladders. Offline benchmark data only.")
         _cmp_evolution(h)
         return
     default_src = "offline" if sources["offline"] else ("live" if sources["live"] else "offline")
@@ -2964,8 +3135,9 @@ def compare_page(h: driver.LabHandle, stt: dict) -> None:
     if not cat:
         others = [CMP_SOURCES[s] for s in available if s != source]
         if source == "offline":
-            st.info("No offline run yet. Run `bash scripts/run_benchmark.sh configs/quick.yaml` for a short one, or "
-                    "the full run without arguments.")
+            st.info("No offline benchmark run yet. Start one in the Offline benchmark tile, or run "
+                    "`bash scripts/run_benchmark.sh configs/quick.yaml` for a short one.")
+            st.button("Go to Offline benchmark", on_click=_go, args=("offline",), key="cmp_to_offline")
         elif source == "live":
             st.info("No finished live-lab benchmark yet. Run a **benchmark** in the Live-lab benchmark tile.")
             st.button("Go to Benchmark", on_click=_go, args=("benchmark",), key="cmp_to_bench")
@@ -3230,11 +3402,11 @@ def learn_page(h: driver.LabHandle, stt: dict) -> None:
 # ─────────────────────────── ENTRY POINT ───────────────────────────
 
 SIDEBARS = {
-    "home": sidebar_home, "setup": sidebar_setup, "live": sidebar_live,
+    "home": sidebar_home, "offline": sidebar_offline, "setup": sidebar_setup, "live": sidebar_live,
     "benchmark": sidebar_benchmark, "compare": sidebar_compare, "learn": sidebar_learn, "reset": sidebar_reset,
 }
 PAGES = {
-    "setup": setup_page, "live": live_page, "benchmark": benchmark_page, "compare": compare_page,
+    "offline": offline_page, "setup": setup_page, "live": live_page, "benchmark": benchmark_page, "compare": compare_page,
     "learn": learn_page, "reset": reset_page,
 }
 
