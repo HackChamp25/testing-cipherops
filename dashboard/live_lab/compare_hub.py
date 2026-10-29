@@ -130,6 +130,11 @@ def offline_catalogue(results_dir: Path = RESULTS_DIR) -> list[dict]:
     return out
 
 
+def evolution_catalogue(results_dir: Path = RESULTS_DIR) -> list[dict]:
+    """Offline runs that include the evolving-zone experiment."""
+    return [e for e in offline_catalogue(results_dir) if (e["path"] / "evolution.parquet").is_file()]
+
+
 def noise_band(run: results.Run, dataset: str, metric: str) -> float | None:
     """The A/A noise band (fraction) for one dataset and one of 'signing' or 'verification (warm)', if the run had one."""
     for r in run.summary.get("noise_floor", []):
