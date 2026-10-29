@@ -658,6 +658,68 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
         st.sidebar.warning(f"Benchmark {bench_busy['id']} is using the lab. Build, Prepare, Start and Stop are "
                            "paused until it finishes or is cancelled.")
 
+    r = readiness(stt)
+    prepared_session = r["prepared"] and prepare_metrics_visible(h)
+    _hint("Green means ready. Yellow means found on disk from an earlier session.")
+
+    # —— Step 1: images (everything else runs inside them, so this comes first) ——
+    _finish_build_job(h)
+    building = build_job.is_running()
+    st.sidebar.markdown(_step_label(1, "Images", "done" if r["images"] else "none"))
+    _hint("Choose the DNS stack version, then build it. Prepare, Start and the benchmark all run inside these images.")
+    stacks = driver.list_stacks()
+    stack = sb(
+        st.sidebar.selectbox, "stack", driver.DEFAULT_STACK, "Image version",
+        options=stacks, format_func=driver.stack_label,
+        help="Which pinned Verisign DNS stack to build and run. "
+             "draft06 = condensed-by-default (EDNS 65050). "
+             "latest = always-full MTL, same MTL commit as the main Cipherops library report. "
+             "Change this, then Build images (and Prepare again for Live).",
+    )
+    pins = driver.stack_pins(stack)
+    if pins:
+        mtl = (pins.get("MTL_COMMIT") or "")[:12]
+        oqs = pins.get("LIBOQS_TAG") or "?"
+        _hint(f"Pins for **{stack}**: MTL `{mtl}…` · liboqs {oqs}. Build this version before Prepare / Benchmark.")
+    img_mode = sb(st.sidebar.radio, "image_mode", "Build locally", "Image source",
+                  options=["Build locally", "Pull from registry"])
+    if img_mode.startswith("Pull"):
+        reg = sb(
+            st.sidebar.text_input, "registry", "", "Registry", placeholder="ghcr.io/your-org/cipherops",
+            help="Pre-built images named cipherops-eco-nsd / unbound / tools.",
+        )
+        if st.sidebar.button("Pull images", key="btn_pull", width="stretch", disabled=bool(bench_busy or building)):
+            activity("step", "Pull images", reg, phase="build", source="compose", h=h)
+            with st.spinner("Pulling…"):
+                try:
+                    t0 = time.perf_counter()
+                    log = driver.pull_images(h, reg)
+                    secs = time.perf_counter() - t0
+                    st.session_state.last_log = log[-8000:]
+                    _log_chunks(log, phase="build", source="compose", title="pull")
+                    activity("ok", f"Pull done ({secs:.0f}s)", "", phase="build", source="compose", h=h)
+                    st.sidebar.success(f"Done · {secs:.0f}s")
+                except Exception as e:  # noqa: BLE001
+                    st.sidebar.error(str(e)[:800])
+                    activity("err", "Pull failed", str(e)[:2000], phase="build", source="compose", h=h)
+            st.rerun()
+    else:
+        if building:
+            _hint("Building in the background. The log is on the Setup page; you can keep using the dashboard.")
+        if st.sidebar.button("Build images" if not building else "Building…", key="btn_build", width="stretch",
+                             disabled=bool(bench_busy or building)):
+            activity("step", "Build images", f"Image set {h.stack}", phase="build", source="compose", h=h)
+            try:
+                build_job.start(h.stack)  # returns at once; Setup shows the log live
+            except Exception as e:  # noqa: BLE001
+                st.sidebar.error(str(e)[:600])
+                activity("err", "Build failed to start", str(e)[:2000], phase="build", source="compose", h=h)
+            st.rerun()
+
+    # —— Step 2: prepare (zone design, then sign) ——
+    prep_state = "done" if prepared_session else ("partial" if r["prepared"] else "none")
+    st.sidebar.markdown(_step_label(2, "Prepare", prep_state))
+    _hint("Design the zones, then sign them for each selected scenario.")
     size_keys = list(driver.ZONE_SIZE_PRESETS.keys())
     size = sb(
         st.sidebar.selectbox, "zone_size", "small", "Zone size", options=size_keys,
@@ -694,80 +756,19 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
     )
     sb(st.sidebar.number_input, "jobs", 2, "Sign jobs", min_value=1, max_value=8,
        help="How many zones to sign in parallel during Prepare.")
-    stacks = driver.list_stacks()
-    stack = sb(
-        st.sidebar.selectbox, "stack", driver.DEFAULT_STACK, "Image version",
-        options=stacks, format_func=driver.stack_label,
-        help="Which pinned Verisign DNS stack to build and run. "
-             "draft06 = condensed-by-default (EDNS 65050). "
-             "latest = always-full MTL, same MTL commit as the main Cipherops library report. "
-             "Change this, then Build images (and Prepare again for Live).",
-    )
-    pins = driver.stack_pins(stack)
-    if pins:
-        mtl = (pins.get("MTL_COMMIT") or "")[:12]
-        oqs = pins.get("LIBOQS_TAG") or "?"
-        _hint(f"Pins for **{stack}**: MTL `{mtl}…` · liboqs {oqs}. Build this version before Prepare / Benchmark.")
     if not sc:
         st.sidebar.warning("Select at least one scenario")
     _warn_unvalidated(stack, sc)
 
-    r = readiness(stt)
-    prepared_session = r["prepared"] and prepare_metrics_visible(h)
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### Steps")
-    _hint("Green means ready. Yellow means found on disk from an earlier session.")
-
-    # —— Step 1: images ——
-    _finish_build_job(h)
-    building = build_job.is_running()
-    st.sidebar.markdown(_step_label(1, "Images", "done" if r["images"] else "none"))
-    _hint("Get the DNS server and tooling containers.")
-    img_mode = sb(st.sidebar.radio, "image_mode", "Build locally", "Image source",
-                  options=["Build locally", "Pull from registry"])
-    if img_mode.startswith("Pull"):
-        reg = sb(
-            st.sidebar.text_input, "registry", "", "Registry", placeholder="ghcr.io/your-org/cipherops",
-            help="Pre-built images named cipherops-eco-nsd / unbound / tools.",
-        )
-        if st.sidebar.button("Pull images", key="btn_pull", width="stretch", disabled=bool(bench_busy or building)):
-            activity("step", "Pull images", reg, phase="build", source="compose", h=h)
-            with st.spinner("Pulling…"):
-                try:
-                    t0 = time.perf_counter()
-                    log = driver.pull_images(h, reg)
-                    secs = time.perf_counter() - t0
-                    st.session_state.last_log = log[-8000:]
-                    _log_chunks(log, phase="build", source="compose", title="pull")
-                    activity("ok", f"Pull done ({secs:.0f}s)", "", phase="build", source="compose", h=h)
-                    st.sidebar.success(f"Done · {secs:.0f}s")
-                except Exception as e:  # noqa: BLE001
-                    st.sidebar.error(str(e)[:800])
-                    activity("err", "Pull failed", str(e)[:2000], phase="build", source="compose", h=h)
-            st.rerun()
-    else:
-        if building:
-            _hint("Building in the background. The log is on the Setup page; you can keep using the dashboard.")
-        if st.sidebar.button("Build images" if not building else "Building…", key="btn_build", width="stretch",
-                             disabled=bool(bench_busy or building)):
-            activity("step", "Build images", f"Image set {h.stack}", phase="build", source="compose", h=h)
-            try:
-                build_job.start(h.stack)  # returns at once; Setup shows the log live
-            except Exception as e:  # noqa: BLE001
-                st.sidebar.error(str(e)[:600])
-                activity("err", "Build failed to start", str(e)[:2000], phase="build", source="compose", h=h)
-            st.rerun()
-
-    # —— Step 2: prepare ——
-    prep_state = "done" if prepared_session else ("partial" if r["prepared"] else "none")
-    st.sidebar.markdown(_step_label(2, "Prepare", prep_state))
-    _hint("Sign the DNS hierarchy for each selected scenario.")
     _finish_prepare_job(h)
     signing = prepare_job.is_running(h)
+    no_images = not r["images"]
+    if no_images:
+        _hint("Build or pull the images (step 1) first.")
     if signing:
         _hint("Signing is running. Watch it live in Setup.")
     if st.sidebar.button("Prepare", key="btn_prep", width="stretch",
-                         disabled=not sc or bool(shape_errors) or signing or bool(bench_busy) or building):
+                         disabled=not sc or bool(shape_errors) or signing or bool(bench_busy) or building or no_images):
         _apply_ui_config(h)
         jobs = int(cfg("jobs", 2))
         scen_txt = ", ".join(sc)
@@ -785,7 +786,7 @@ def sidebar_setup(h: driver.LabHandle, stt: dict) -> None:
     _hint("Start root, TLD, leaf, and resolver containers. Only one lab runs at a time, "
           "so starting stops any other zone shape.")
     b3a, b3b = st.sidebar.columns(2)
-    if b3a.button("Start", key="btn_up", width="stretch", disabled=bool(bench_busy or signing or building)):
+    if b3a.button("Start", key="btn_up", width="stretch", disabled=bool(bench_busy or signing or building or no_images)):
         activity("step", "Starting the lab", f"Image set {h.stack}", phase="compose", source="compose", h=h)
         with st.spinner("Starting…"):
             try:

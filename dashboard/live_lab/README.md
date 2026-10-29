@@ -15,7 +15,7 @@ The app opens on a hub of five tiles. **Setup** builds the images (and, for Live
 
 | Tile | What it is for | Sidebar | Results view |
 |------|----------------|---------|--------------|
-| **Setup** | Zone size, scenarios, images, sign zones, start / stop the lab (for Live) | Settings and steps 1–3; **Image version** `draft06` or `latest` | Signing summary and timings |
+| **Setup** | Images, then zone size and scenarios, sign zones, start / stop the lab (for Live) | Step 1 **Images** (**Image version** `draft06` or `latest`, build or pull), step 2 **Prepare** (zone design, sign), step 3 **Start**. Prepare, Start and the benchmark run inside the images, so they wait until step 1 is done | Signing summary and timings |
 | **Live** | Switch scenario, send a lookup, cold vs warm | Active scenario, capture name | Queries, packet decode, sequence diagram |
 | **Benchmark** | The PS-036 benchmark: several dataset sizes, repeated trials | Name, dataset sizes, scenarios, trials, queries, networks, workload | Per-size tables, CSVs, and a reproducible `report.html` like the main Cipherops report |
 | **Compare** | MTL vs SLH-DSA and the other modes, side by side | Benchmark, dataset size, network, candidate and baseline | Cards, scaling across sizes, signing, bytes per tier, cache, latency, CSV |
@@ -32,7 +32,7 @@ It is a normal animation: play, pause, restart, speed, and a timeline you can dr
 
 ### Live while Prepare runs
 
-**Prepare** no longer blocks the page. It starts a background job (`prepare_job.py`) and Setup shows the signing as it happens: an overall progress bar, a chip per scenario, leaf/TLD/root counters, the hierarchy coloured by state (grey waiting, amber signing, green signed, with the measured RRSIG count and time on each zone) and a zone table with a live clock. The signer prints one `@@EVENT {json}` line per zone start and finish when `ECOLAB_EVENTS=1` is set (`ecolab.sign.emit`); the job writes them to `ecosystem/work/<lab>/prepare-live/events.jsonl`, so the page can be reloaded or closed and picked up again. When signing ends the page opens the replay by itself. **Cancel signing** stops the job and its container. The job signs from a private copy of the config, so changing Zone size in the sidebar while it runs cannot redirect its output. Tests: `tests/test_prepare_job.py`.
+**Build images** also runs as a background job (`build_job.py`, state in `ecosystem/jobs/_build/`): the Setup page shows its log live and has a Cancel button, and only one build runs at a time. **Prepare** no longer blocks the page. It starts a background job (`prepare_job.py`) and Setup shows the signing as it happens: an overall progress bar, a chip per scenario, leaf/TLD/root counters, the hierarchy coloured by state (grey waiting, amber signing, green signed, with the measured RRSIG count and time on each zone) and a zone table with a live clock. The signer prints one `@@EVENT {json}` line per zone start and finish when `ECOLAB_EVENTS=1` is set (`ecolab.sign.emit`); the job writes them to `ecosystem/jobs/<lab>/prepare-live/events.jsonl`, so the page can be reloaded or closed and picked up again. When signing ends the page opens the replay by itself. **Cancel signing** stops the job and its container. The job signs from a private copy of the config, so changing Zone size in the sidebar while it runs cannot redirect its output. Tests: `tests/test_prepare_job.py`.
 
 ### RRSIG counts
 
