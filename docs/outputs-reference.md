@@ -75,8 +75,8 @@ Proof of what the numbers were measured on.
 | `hardware.cpu_affinity` | `[2]` – the one core every trial ran on |
 | `hardware.mem_total` | memory visible to the container |
 | `software.kernel` | `6.18.33.2-microsoft-standard-WSL2` (Docker Desktop on Windows) |
-| `software.openssl`, `openssl_tag`, `liboqs_tag` | OpenSSL 3.6.0, liboqs 0.16.0 |
-| `software.mtl_reference_commit`, `mtl_reference_cflags` | `7cef0191…`, `-fPIC -Wall -Wextra -O2` |
+| `software.openssl`, `openssl_tag`, `liboqs_tag` | OpenSSL 3.6.0, liboqs 0.16.0 (profile `latest`) |
+| `software.mtl_reference_commit`, `mtl_reference_cflags` | `7cef0191…` (profile `latest`), `-fPIC -Wall -Wextra -O2` |
 | `software.harness_sha256` | hash of the compiled `mtlbench`, so a changed harness is visible |
 | `software.python_packages` | dnspython, numpy, pandas, … versions |
 

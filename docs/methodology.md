@@ -28,9 +28,7 @@ numbers are estimates. It is the reference for every table in a run's
 | Component | Pin |
 |---|---|
 | Base image | `fedora-minimal:42` |
-| OpenSSL | `openssl-3.6.0` |
-| liboqs | `0.16.0` |
-| MTL library | commit `7cef019`, source unmodified; compiled with `make CFLAGS="-fPIC -Wall -Wextra -O2"` |
+| OpenSSL, liboqs, MTL library | from the stack profile `ecosystem/stacks/<profile>.env` (`CIPHEROPS_STACK`). Offline default `latest`: OpenSSL 3.6.0, liboqs 0.16.0 (FIPS 205 `SLH_DSA_PURE_SHA2_128S`), MTL `7cef019`. The live lab is built from the same files and defaults to `draft06`. The MTL source is unmodified; it is compiled with `make CFLAGS="-fPIC -Wall -Wextra -O2"` |
 | Python dependencies | exact versions in `requirements.txt` |
 | CPU | one core via Docker `cpuset` (default core 2); `mem_limit` 4 GB; no network |
 
@@ -40,7 +38,7 @@ CMake Release build. To compare like with like, the MTL library is compiled at
 `-O2` by passing `CFLAGS` to `make`; the source is untouched and its own test
 suite is re-run on this build by the go/no-go gate. To reproduce the as-shipped
 `-O0` build for an ablation, rebuild with
-`docker compose -f docker/compose.yml build --build-arg MTL_MAKE_CFLAGS=upstream`.
+`docker compose --env-file ecosystem/stacks/latest.env -f docker/compose.yml build --build-arg MTL_MAKE_CFLAGS=upstream`.
 The flags actually used are recorded in `environment.json`.
 
 Every run writes `environment.json` with:
@@ -298,8 +296,9 @@ Rules the live-lab benchmark follows:
 - **Stack limitation.** On the `latest` stack, the lab's Unbound answers
   SERVFAIL for plain (non-MTL) SLH-DSA while ldns accepts the same zone, and
   `draft06` validates it. The MTL versus non-MTL live comparison is therefore
-  only valid on `draft06`. The cause inside that Unbound build is not
-  established.
+  run on `draft06`. The Unbound binary on `latest` names only the SPHINCS+
+  algorithm that liboqs 0.16 removed, which strongly indicates an upstream
+  mismatch; it is not confirmed from source and has not been reported.
 
 ## 11. Limitations
 
@@ -319,9 +318,11 @@ Rules the live-lab benchmark follows:
   cover a different scheme than SLH-DSA-SHA2-128s-MTL (see section 3). The
   SLH-DSA check is cross-implementation agreement (OpenSSL), not published
   vectors.
-- **Versions.** The offline image and the two live-lab stacks pin different
-  MTL and liboqs versions (table in the README), so their numbers are not
-  interchangeable. Aligning them on one version is open work.
+- **Profiles.** Offline results are FIPS 205 SLH-DSA (`latest`). Live-lab results
+  on `draft06` are for SPHINCS+-SHA2-128s-simple, the pre-standard form with
+  the same sizes, so byte and cache results carry over but timings are not
+  substituted for the offline ones. Each run records its profile. Why the
+  defaults differ: `docs/design-decisions.md`.
 - **Few trials.** Intervals are wide with 5 trials (section 6.2). The live
   benchmark defaults to 5 measurement and 5 signing trials.
 - **No security claims.** None are made or implied.

@@ -6,13 +6,14 @@
     python3 scripts/show_fixes.py --skip-harness   # no Docker: only the dashboard checks
 
 Everything runs from temporary copies, so it never touches the real lab, results or Docker containers.
-The harness part needs the pinned image (docker compose -f docker/compose.yml build).
+The harness part needs the pinned image (bash scripts/run_benchmark.sh preflight).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -20,7 +21,7 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-IMAGE = "cipherops-bench:pinned"
+IMAGE = f"cipherops-bench:{os.environ.get('CIPHEROPS_STACK', 'latest')}"
 
 DIG_ATTACKS = ["dig -f /etc/passwd", "dig -4f /etc/passwd", "dig -vf /etc/passwd", "dig -4k /etc/key",
                "dig -r -f /etc/hosts", "dig host000000.zone00.test A +dnssec"]
@@ -126,7 +127,7 @@ def probe_dashboard(tree: Path) -> dict:
 
 def probe_harness(ref: str, tmp: Path) -> dict | None:
     if subprocess.run(["docker", "image", "inspect", IMAGE], capture_output=True).returncode != 0:
-        print(f"  (image {IMAGE} not found: build it with docker compose -f docker/compose.yml build)")
+        print(f"  (image {IMAGE} not found: build it with: bash scripts/run_benchmark.sh preflight)")
         return None
     for tag, data in (("old", git_show(ref, "harness/mtlbench.c")), ("new", (REPO / "harness/mtlbench.c").read_bytes())):
         (tmp / "cmp" / tag).mkdir(parents=True)

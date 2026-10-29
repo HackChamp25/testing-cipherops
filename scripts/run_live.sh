@@ -12,7 +12,10 @@ profiles="${2:-lan,wan,lossy}"
 udp="${3:-1232,4096}"
 repeats="${4:-3}"
 export CIPHEROPS_CPUSET="${5:-2}"
+stack="${CIPHEROPS_STACK:-latest}"   # must match the stack the run was made with
+env_file="ecosystem/stacks/${stack}.env"
+[ -f "${env_file}" ] || { echo "unknown stack '${stack}': no ${env_file}" >&2; exit 1; }
 
 [ -d "results/runs/${run}" ] || { echo "no such run: results/runs/${run}" >&2; exit 1; }
-docker compose -f docker/compose.yml run --rm live \
+docker compose --env-file "${env_file}" -f docker/compose.yml run --rm live \
   "python3 -m cipherops.runner live --run results/runs/${run} --profiles ${profiles} --udp ${udp} --repeats ${repeats}"

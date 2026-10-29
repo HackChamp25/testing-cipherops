@@ -3,7 +3,7 @@
 Whole pipeline, every variable printed (needs the container: mtltest, mtlbench and the libraries live there).
 Run from the repository root in PowerShell:
 
-    docker compose -f docker/compose.yml run --rm -v "${PWD}\\scripts\\own.py:/work/own.py" -v "${PWD}\\src:/work/src" `
+    docker compose --env-file ecosystem/stacks/latest.env -f docker/compose.yml run --rm -v "${PWD}\\scripts\\own.py:/work/own.py" -v "${PWD}\\src:/work/src" `
         bench "python3 own.py 2>&1 | tee results/own_trace.txt"
 
     options:  --skip-preflight   (stage 2 takes a few minutes)   --trials N   --names-list 3,5,8
@@ -1003,7 +1003,7 @@ def pipeline(args) -> None:
 
     if not Path(HARNESS).exists():
         print(f"mtlbench not found at {HARNESS}. Stages 2 and 4 need the container; run from the repo root:")
-        print('  docker compose -f docker/compose.yml run --rm -v "${PWD}\\scripts\\own.py:/work/own.py" '
+        print('  docker compose --env-file ecosystem/stacks/latest.env -f docker/compose.yml run --rm -v "${PWD}\\scripts\\own.py:/work/own.py" '
               '-v "${PWD}\\src:/work/src" bench "python3 own.py 2>&1 | tee results/own_trace.txt"')
         print("Stage-3 deep dives work anywhere: python scripts/own.py --deep zone | --deep sign")
         sys.exit(2)
