@@ -62,7 +62,7 @@ live benchmark.
   signed zone. The live MTL-versus-non-MTL comparison therefore runs on `draft06` (see the table above).
 - **Live-lab timings are indicative.** Containers are not pinned to cores, and the host CPU governor is recorded, not
   changed. Byte counts and relative comparisons are more reliable than absolute milliseconds.
-- **Few trials give wide intervals.** With 5 trials the interval of the median covers 94%, not 95%
+- **Few trials give wide intervals.** The full run uses 10 trials (the interval of the median covers 98%); the quick run uses 3 (75%)
   ([methodology §6.2](docs/methodology.md#62-statistics)).
 - Code points (DNSSEC algorithm numbers, the `mtl-mode-full` EDNS option) are lab placeholders, not IANA assignments.
   Nothing here is for the Internet, and no security claim is made.
@@ -117,7 +117,7 @@ cd A3-PS036-TC161
 bash scripts/run_benchmark.sh preflight               # build the image and run the go/no-go gate
 # CIPHEROPS_STACK=draft06 bash scripts/run_benchmark.sh preflight   # reports NO-GO by design (see above)
 bash scripts/run_benchmark.sh configs/quick.yaml      # short demonstration run
-bash scripts/run_benchmark.sh                         # full run (configs/scenarios.yaml); can take over an hour
+bash scripts/run_benchmark.sh                         # full run (configs/scenarios.yaml): 10 trials, about 3.5 hours (direct SLH-DSA signs 2,000 RRsets per trial)
 ```
 
 The first build compiles OpenSSL, liboqs and MTL from source (several minutes); later runs reuse the cache. A run

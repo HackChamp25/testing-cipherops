@@ -6,7 +6,7 @@ seed: 20261005
 
 # Repeated trials. Modes are interleaved in a seeded random order inside each
 # trial so slow drift (thermal, background load) does not favour one mode.
-trials: 5
+trials: 10
 warmup_trials: 1
 
 # One supported PQC algorithm, with and without MTL, plus a classical reference.
