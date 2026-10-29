@@ -337,7 +337,11 @@ class LabHandle:
         return d
 
     def prepared(self) -> bool:
-        return self.compose.is_file() and (self.work / "zones").is_dir()
+        """True only when Prepare finished: compose file plus at least one signed scenario."""
+        zones = self.work / "zones"
+        if not self.compose.is_file() or not zones.is_dir():
+            return False
+        return any(p.is_file() for p in zones.glob("*/manifest.json"))
 
     def scenarios(self) -> list[str]:
         import yaml
@@ -528,12 +532,16 @@ def write_ui_config(
     seed = int(preset.get("seed", seed))
     wl = {**WORKLOAD_DEFAULTS, **(workload or {})}
     prof = {k: {**v, **((profiles or {}).get(k) or {})} for k, v in PROFILE_DEFAULTS.items()}
-    chosen = scenarios or ["ecdsa", "slh-dsa", "mtl"]
+    # None → default trio; explicit [] must fail (do not treat [] as falsy default).
+    if scenarios is None:
+        chosen = ["ecdsa", "slh-dsa", "mtl"]
+    else:
+        chosen = list(scenarios)
+    if not chosen:
+        raise ValueError("select at least one scenario")
     bad = [s for s in chosen if s not in SCENARIO_ALGS]
     if bad:
         raise ValueError(f"unknown scenarios: {bad}")
-    if not chosen:
-        raise ValueError("select at least one scenario")
     profiles_run = network_run or ["lan"]
     cfg = {
         "name": preset["name"],

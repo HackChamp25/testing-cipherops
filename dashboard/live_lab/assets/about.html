@@ -1,0 +1,167 @@
+<style>
+#co-about-root { position: fixed; inset: 0; z-index: 100000; display: none; --ink:#12161f; --mute:#5b6473; --line:rgba(18,22,31,.10);
+  --card:#ffffff; --soft:#f4f6fa; --accent:#2f7de1; --hot:#e0414a; }
+#co-about-root.open { display: block; }
+#co-about-root * { box-sizing: border-box; }
+#co-about-root .ab-backdrop { position:absolute; inset:0; background:rgba(8,12,22,.62); backdrop-filter: blur(3px); animation: ab-fade .18s ease-out; }
+#co-about-root .ab-modal { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:min(940px, calc(100vw - 2.4rem));
+  max-height:min(88vh, 860px); background:var(--soft); color:var(--ink); border-radius:20px; overflow:hidden; display:flex; flex-direction:column;
+  box-shadow:0 30px 80px rgba(0,0,0,.45); font:15px/1.55 "Source Sans Pro","Source Sans 3",system-ui,-apple-system,"Segoe UI",sans-serif;
+  animation: ab-rise .22s cubic-bezier(.2,.8,.2,1); }
+#co-about-root .ab-scroll { overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; }
+#co-about-root .ab-close { position:absolute; top:14px; right:22px; z-index:2; width:36px; height:36px; border-radius:50%; border:1px solid rgba(255,255,255,.35);
+  background:rgba(10,26,44,.88); color:#fff; font-size:20px; line-height:1; cursor:pointer; box-shadow:0 4px 14px rgba(0,0,0,.28); }
+#co-about-root .ab-close:hover { background:#e0414a; border-color:#e0414a; }
+
+#co-about-root .ab-hero { position:relative; padding:46px 48px 40px; color:#fff;
+  background: radial-gradient(900px 340px at 85% -10%, rgba(47,125,225,.55), transparent 60%), linear-gradient(135deg,#0a1a2c 0%,#10345a 100%); }
+#co-about-root .ab-eyebrow { font-size:12px; letter-spacing:.14em; text-transform:uppercase; font-weight:700; color:#8fc2ff; margin:0 0 14px; }
+#co-about-root .ab-hero h1 { margin:0 0 14px; font-size:clamp(26px,4.2vw,38px); line-height:1.12; font-weight:700; letter-spacing:-.015em; max-width:680px; }
+#co-about-root .ab-hero p { margin:0; max-width:660px; color:rgba(255,255,255,.80); font-size:16.5px; }
+
+#co-about-root .ab-body { padding:34px 48px 12px; }
+#co-about-root .ab-quote { margin:0 0 34px; padding:22px 26px; background:var(--card); border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:12px; }
+#co-about-root .ab-quote q { display:block; quotes:none; font-size:19px; line-height:1.5; font-weight:600; letter-spacing:-.005em; }
+#co-about-root .ab-quote cite { display:block; margin-top:10px; font-style:normal; font-size:13px; color:var(--mute); }
+
+#co-about-root .ab-h { margin:34px 0 14px; font-size:12px; letter-spacing:.14em; text-transform:uppercase; font-weight:700; color:var(--mute); }
+#co-about-root .ab-h:first-child { margin-top:0; }
+#co-about-root .ab-two { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+#co-about-root .ab-card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px 22px; }
+#co-about-root .ab-card h3 { margin:0 0 6px; font-size:16.5px; font-weight:700; }
+#co-about-root .ab-card p { margin:0; color:var(--mute); }
+
+#co-about-root .ab-grid4 { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
+#co-about-root .ab-tile { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; }
+#co-about-root .ab-tile b { display:block; margin-bottom:6px; font-size:15px; }
+#co-about-root .ab-tile span { color:var(--mute); font-size:14px; line-height:1.45; display:block; }
+
+#co-about-root .ab-steps { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; counter-reset:s; }
+#co-about-root .ab-step { position:relative; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px 18px 18px 58px; }
+#co-about-root .ab-step::before { counter-increment:s; content:counter(s); position:absolute; left:16px; top:16px; width:30px; height:30px; border-radius:50%;
+  display:grid; place-items:center; font-weight:700; color:#fff; background:linear-gradient(135deg,#2f7de1,#1d4f9a); }
+#co-about-root .ab-step b { display:block; margin-bottom:4px; }
+#co-about-root .ab-step span { color:var(--mute); font-size:14px; line-height:1.45; display:block; }
+
+#co-about-root .ab-chips { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 10px; }
+#co-about-root .ab-chip { padding:6px 13px; border-radius:999px; font-size:13px; font-weight:600; background:#e7f0fd; color:#1c4f94; border:1px solid rgba(47,125,225,.25); }
+#co-about-root .ab-note { color:var(--mute); margin:0; }
+
+#co-about-root .ab-team { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+#co-about-root .ab-person { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:24px 20px 20px; text-align:center; display:flex; flex-direction:column; align-items:center; }
+#co-about-root .ab-avatar { width:76px; height:76px; border-radius:50%; display:grid; place-items:center; color:#fff; font-size:25px; font-weight:700; letter-spacing:.02em; margin-bottom:14px;
+  background:linear-gradient(135deg,#2f7de1,#173f7a); box-shadow:0 6px 18px rgba(23,63,122,.35); }
+#co-about-root .ab-person.mentor .ab-avatar { background:linear-gradient(135deg,#e0414a,#8e1f4c); box-shadow:0 6px 18px rgba(142,31,76,.35); }
+#co-about-root .ab-person h4 { margin:0; font-size:17.5px; font-weight:700; }
+#co-about-root .ab-badge { margin:8px 0 10px; padding:3px 11px; border-radius:999px; font-size:11.5px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; background:#e7f0fd; color:#1c4f94; }
+#co-about-root .ab-person.mentor .ab-badge { background:#fde8ea; color:#9b1f2b; }
+#co-about-root .ab-what { margin:0 0 4px; font-weight:600; }
+#co-about-root .ab-where { margin:0; color:var(--mute); font-size:13.5px; line-height:1.4; }
+#co-about-root .ab-in { margin-top:16px; display:inline-flex; align-items:center; gap:8px; padding:7px 14px; border-radius:9px; border:1px solid var(--line);
+  color:var(--ink); text-decoration:none; font-size:13.5px; font-weight:600; background:var(--soft); }
+#co-about-root .ab-in:hover { border-color:#0a66c2; color:#0a66c2; }
+#co-about-root .ab-in i { font-style:normal; display:grid; place-items:center; width:19px; height:19px; border-radius:4px; background:#0a66c2; color:#fff; font-size:11.5px; font-weight:800; }
+
+#co-about-root .ab-foot { margin:30px -48px 0; padding:20px 48px 26px; background:var(--card); border-top:1px solid var(--line); color:var(--mute); font-size:13.5px; }
+#co-about-root .ab-foot p { margin:0 0 6px; }
+#co-about-root .ab-foot a { color:var(--accent); text-decoration:none; font-weight:600; }
+#co-about-root .ab-foot a:hover { text-decoration:underline; }
+
+@keyframes ab-fade { from { opacity:0 } to { opacity:1 } }
+@keyframes ab-rise { from { opacity:0; transform:translate(-50%,-47%) } to { opacity:1; transform:translate(-50%,-50%) } }
+@media (prefers-reduced-motion: reduce) { #co-about-root .ab-backdrop, #co-about-root .ab-modal { animation:none; } }
+@media (max-width: 760px) {
+  #co-about-root .ab-hero { padding:38px 24px 30px; } #co-about-root .ab-body { padding:26px 22px 8px; } #co-about-root .ab-foot { margin:26px -22px 0; padding:18px 22px 24px; }
+  #co-about-root .ab-two, #co-about-root .ab-steps, #co-about-root .ab-team { grid-template-columns:1fr; } #co-about-root .ab-grid4 { grid-template-columns:1fr 1fr; }
+}
+@media (prefers-color-scheme: dark) {
+  #co-about-root { --ink:#e9edf5; --mute:#a0a9ba; --line:rgba(255,255,255,.10); --card:#1b2030; --soft:#141824; }
+  #co-about-root .ab-chip, #co-about-root .ab-badge { background:rgba(47,125,225,.18); color:#9cc8ff; border-color:rgba(47,125,225,.35); }
+  #co-about-root .ab-person.mentor .ab-badge { background:rgba(224,65,74,.18); color:#ff9aa1; }
+  #co-about-root .ab-in { background:#222839; }
+  #co-about-root .ab-foot a { color:#8fc2ff; }
+}
+</style>
+
+<div class="ab-backdrop" data-close="1"></div>
+<div class="ab-modal" role="dialog" aria-modal="true" aria-label="About Cipherops">
+  <button type="button" class="ab-close" title="Close" aria-label="Close">&times;</button>
+  <div class="ab-scroll">
+    <header class="ab-hero">
+      <p class="ab-eyebrow">About Cipherops</p>
+      <h1>Post-quantum DNSSEC, measured on a real hierarchy.</h1>
+      <p>Cipherops is a hands-on lab that signs a root, TLD and leaf DNSSEC hierarchy, then lets you watch, measure and compare how Merkle Tree Ladder (MTL) signatures behave against classical DNSSEC and plain SLH-DSA.</p>
+    </header>
+
+    <div class="ab-body">
+      <blockquote class="ab-quote">
+        <q>Our goal is to give the future quantum industry a practical, data-driven path to secure DNSSEC, grounded in how real-time DNS operations truly work.</q>
+        <cite>The Cipherops team</cite>
+      </blockquote>
+
+      <div class="ab-two">
+        <div class="ab-card"><h3>Why it exists</h3><p>Post-quantum signatures are large, and DNS answers have to stay small. MTL signs a zone once and gives each record a short proof. A paper can claim that trade-off; this lab lets you see sign time, packet size and cold versus warm lookups on real servers.</p></div>
+        <div class="ab-card"><h3>Who it is for</h3><p>Researchers and engineers evaluating post-quantum DNSSEC, DNS operators weighing the cost of larger signatures, and reviewers who want to check the numbers on a running system.</p></div>
+      </div>
+
+      <h2 class="ab-h">What you can do</h2>
+      <div class="ab-grid4">
+        <div class="ab-tile"><b>Prepare and replay</b><span>Sign the hierarchy, watch each zone finish live, then replay how MTL builds its tree and ladder.</span></div>
+        <div class="ab-tile"><b>Live lookups</b><span>Send a real query through a validating resolver and read the packets it causes.</span></div>
+        <div class="ab-tile"><b>Benchmark</b><span>Run the PS-036 benchmark across dataset sizes, with repeated trials.</span></div>
+        <div class="ab-tile"><b>Compare</b><span>Put MTL beside SLH-DSA, ECDSA and RSA: signing, size, bytes on the wire and cache.</span></div>
+      </div>
+
+      <h2 class="ab-h">How it works</h2>
+      <div class="ab-steps">
+        <div class="ab-step"><b>Set up</b><span>Pick a zone size and the scenarios to sign, build the images, then Prepare.</span></div>
+        <div class="ab-step"><b>Explore</b><span>Start the lab, send lookups and read the capture, cold and warm.</span></div>
+        <div class="ab-step"><b>Measure</b><span>Run the benchmark, then compare the algorithms in one place.</span></div>
+      </div>
+
+      <h2 class="ab-h">Built to be trusted</h2>
+      <div class="ab-chips">
+        <span class="ab-chip">Open source · MIT</span><span class="ab-chip">Runs on your machine</span>
+        <span class="ab-chip">Unmodified Verisign MTL</span><span class="ab-chip">Pinned builds</span>
+      </div>
+      <p class="ab-note">Signed zones and captures stay on your computer. The dashboard has no accounts and does not upload lab data. Signing uses the Verisign MTL reference stack as published, with pinned OpenSSL, liboqs, NSD and Unbound versions.</p>
+
+      <h2 class="ab-h">The team</h2>
+      <div class="ab-team">
+        <article class="ab-person mentor">
+          <div class="ab-avatar">IR</div>
+          <h4>Indu Radhakrishnan</h4>
+          <span class="ab-badge">Faculty mentor</span>
+          <p class="ab-what">Mentor and guide</p>
+          <p class="ab-where">Cyber and Data Security<br>PES University, Bengaluru</p>
+          <a class="ab-in" href="https://www.linkedin.com/in/indu-radhakrishnan-1b051b18/" target="_blank" rel="noopener"><i>in</i>LinkedIn</a>
+        </article>
+        <article class="ab-person">
+          <div class="ab-avatar">AJ</div>
+          <h4>Akash Joshi</h4>
+          <span class="ab-badge">Student developer</span>
+          <p class="ab-what">Developer and researcher</p>
+          <p class="ab-where">Cyber and Data Security<br>PES University, Bengaluru</p>
+          <a class="ab-in" href="https://www.linkedin.com/in/akash-joshi-ab152b205/" target="_blank" rel="noopener"><i>in</i>LinkedIn</a>
+        </article>
+        <article class="ab-person">
+          <div class="ab-avatar">AN</div>
+          <h4>Anitha Natarajan</h4>
+          <span class="ab-badge">Student developer</span>
+          <p class="ab-what">Developer and architect</p>
+          <p class="ab-where">Cyber and Data Security<br>PES University, Bengaluru</p>
+          <a class="ab-in" href="https://www.linkedin.com/in/anitha-priya-natarajan-b0317315/" target="_blank" rel="noopener"><i>in</i>LinkedIn</a>
+        </article>
+      </div>
+
+      <footer class="ab-foot">
+        <p>Version <code>__REV__</code> · Built for AIORI Hackathon 3 · PS-036 · Team A3-PS036-TC161</p>
+        <p>Built on Verisign MTL, liboqs, OpenSSL, NSD, Unbound and Streamlit.</p>
+        <p><a href="https://github.com/aiori-hackathon/A3-PS036-TC161" target="_blank" rel="noopener">GitHub</a> ·
+           <a href="https://github.com/verisign/MTL" target="_blank" rel="noopener">Verisign MTL</a> ·
+           <a href="https://portal.aiori.in/aiori-3/hackathon-guideline/" target="_blank" rel="noopener">AIORI PS-036</a>
+           &nbsp;|&nbsp; Feedback and questions: open an issue on GitHub.</p>
+      </footer>
+    </div>
+  </div>
+</div>
