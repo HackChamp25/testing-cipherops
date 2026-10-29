@@ -26,11 +26,12 @@ ECO_DIR = ROOT / "ecosystem"
 SUITES_DIR = ECO_DIR / "results" / "suites"
 sys.path.insert(0, str(ROOT / "dashboard"))
 
-from live_lab import compare, decode, driver  # noqa: E402
+from live_lab import compare, compare_hub, decode, driver  # noqa: E402
 from live_lab import build_job, prepare_job, prepare_story  # noqa: E402
 from live_lab import suite as suite_mod  # noqa: E402
 
 compare = importlib.reload(compare)
+compare_hub = importlib.reload(compare_hub)
 decode = importlib.reload(decode)
 driver = importlib.reload(driver)
 build_job = importlib.reload(build_job)
@@ -98,10 +99,10 @@ TILES = {
     "compare": {
         "icon": "⚖️",
         "title": "Compare",
-        "pitch": "All algorithms side by side: MTL against SLH-DSA in one place.",
+        "pitch": "Every algorithm side by side, and any run against any other.",
         "bullets": [
-            "Signing, verification, signed size, bytes on the wire, cache",
-            "Headline ratios, charts and one table you can download",
+            "Offline harness or live lab: signing, verification, size, bytes on the wire, cache",
+            "Run against run: stack profiles, repeats or machines, with what differs spelled out",
         ],
         "cta": "Open Compare",
     },
@@ -1103,8 +1104,8 @@ def _tile_chip(mode: str, stt: dict, h: driver.LabHandle) -> str:
             return _chip("Needs Setup", "warn")
         return _chip(f"Live · {r['active']}", "ok") if r["active"] else _chip("Ready", "ok")
     if mode == "compare":
-        labs = driver.list_labs()
-        return _chip("Has data", "ok") if labs else _chip("No data yet", "idle")
+        has = bool(compare_hub.offline_catalogue(ROOT / "results")) or bool(driver.list_labs())
+        return _chip("Has data", "ok") if has else _chip("No data yet", "idle")
     return _chip("Maintenance", "idle")
 
 
@@ -2306,6 +2307,17 @@ def benchmark_page(h: driver.LabHandle, stt: dict) -> None:
 
 # ─────────────────────────── COMPARE ───────────────────────────
 
+CMP_VIEWS = {"algorithms": "Algorithms side by side", "runs": "Run against run"}
+CMP_SOURCES = {"offline": "Offline harness", "live": "Live lab", "lab": "Single lab"}
+CMP_SOURCE_NOTE = {
+    "offline": "Pinned image, one dedicated core, repeated trials: the PS-036 timings (FIPS 205 SLH-DSA on the `latest` stack).",
+    "live": "Real Unbound and NSD in containers (a finished Benchmark): real packets and cache, indicative timings (not core-pinned).",
+    "lab": "One lab's last Prepare plus one saved run, for older data. A Benchmark is easier to compare.",
+}
+CMP_BADGE = {"measured": ":green-badge[Measured]", "estimated": ":blue-badge[Estimated]",
+             "extrapolated": ":orange-badge[Extrapolated]"}
+
+
 def _cmp_summary(tag: str | None, folder: str | None) -> pd.DataFrame | None:
     if not tag or not folder:
         return None
@@ -2318,59 +2330,121 @@ def _cmp_summary(tag: str | None, folder: str | None) -> pd.DataFrame | None:
         return None
 
 
+def _cmp_catalogue(source: str, h: driver.LabHandle) -> list[dict]:
+    """The runs one source can offer, newest first, each with the facts used to judge comparability."""
+    if source == "offline":
+        return compare_hub.offline_catalogue(ROOT / "results")
+    if source == "live":
+        return [compare_hub.live_suite_entry(s) for s in suite_mod.list_suites() if s["complete"]]
+    out = []
+    for lab in driver.list_labs():
+        for r in driver.list_runs(h, lab["tag"]):
+            if (r["path"] / "summary.csv").is_file():
+                out.append({"id": f"{lab['tag']}|{r['folder']}", "title": f"{lab['tag']} · {r['title']}",
+                            "source": "lab", "tag": lab["tag"], "folder": r["folder"], "stack": "—", "trials": None,
+                            "facts": {"Lab": lab["tag"]}, "datasets": [lab["tag"]]})
+    return out
+
+
+@st.cache_resource(show_spinner=False)
+def _cmp_offline_run(path: str, mtime: float):
+    return compare_hub.load_offline(Path(path))
+
+
+@st.cache_resource(show_spinner=False)
+def _cmp_suite(path: str, mtime: float):
+    return compare.load_suite(Path(path))
+
+
+def _cmp_ds_label(source: str):
+    return (lambda d: f"{d:,} names") if source == "live" else (lambda d: str(d))
+
+
+def _cmp_data(entry: dict, ds, prof, udp, h: driver.LabHandle) -> dict:
+    """One run reduced to the shared frame, plus whatever the detailed views need."""
+    src = entry["source"]
+    if src == "offline":
+        run = _cmp_offline_run(str(entry["path"]), (entry["path"] / "summary.json").stat().st_mtime)
+        return {"frame": compare_hub.offline_frame(run, ds), "run": run, "summary": None, "raw": None,
+                "man_rows": [], "sd": None}
+    if src == "live":
+        sd = _cmp_suite(str(entry["path"]), (entry["path"] / "suite.json").stat().st_mtime)
+        raw = compare.suite_frame(sd, int(ds), prof, udp)
+        full = sd["full"][sd["full"]["dataset"] == ds] if not sd["full"].empty else sd["full"]
+        return {"frame": compare_hub.live_frame(raw), "run": None, "summary": sd["bench"].get(int(ds)), "raw": raw,
+                "man_rows": full.to_dict("records"), "sd": sd}
+    man_rows = driver.manifest_rows(h, entry["tag"])
+    summary = _cmp_summary(entry["tag"], entry["folder"])
+    bench = compare.bench_by_scenario(summary, prof, udp) if summary is not None else compare.bench_by_scenario(pd.DataFrame())
+    raw = compare.merge(compare.signing_by_scenario(man_rows), bench, compare.analytical_by_scenario(man_rows))
+    return {"frame": compare_hub.live_frame(raw), "run": None, "summary": summary, "raw": raw, "man_rows": man_rows,
+            "sd": None}
+
+
+def _cmp_net_choices(entry: dict, ds) -> tuple[list, list]:
+    """Network profiles and UDP limits a live run has numbers for."""
+    summary = None
+    if entry["source"] == "live":
+        sd = _cmp_suite(str(entry["path"]), (entry["path"] / "suite.json").stat().st_mtime)
+        summary = sd["bench"].get(int(ds)) if sd else None
+    elif entry["source"] == "lab":
+        summary = _cmp_summary(entry["tag"], entry["folder"])
+    if summary is None or summary.empty:
+        return [], []
+    profiles = [str(p) for p in summary["profile"].dropna().unique()] if "profile" in summary else []
+    udps = [int(u) for u in summary["udp_limit"].dropna().unique()] if "udp_limit" in summary else []
+    return profiles, udps
+
+
 def sidebar_compare(h: driver.LabHandle, stt: dict) -> None:
-    _sidebar_brand("compare")
+    _sidebar_brand("compare")  # the pickers are drawn by compare_page once it knows the view and the source
+
+
+def _cmp_pickers(view: str, source: str, cat: list[dict], h: driver.LabHandle) -> dict | None:
+    """Sidebar: which run(s), which dataset, which pair. Returns the choices with the data loaded."""
+    by = {e["id"]: e for e in cat}
+    ids = list(by)
     st.sidebar.markdown("### Compare")
-    suites = [s for s in suite_mod.list_suites() if s["complete"]]
-    source = "lab"
-    if suites:
-        source = sb(st.sidebar.radio, "cmp_source", "suite", "Source", options=["suite", "lab"],
-                    format_func=lambda x: {"suite": "Benchmark (dataset sizes)", "lab": "A single lab (Live / older runs)"}[x])
-    summary, names = None, []
-    if source == "suite":
-        _hint("Everything comes from one finished benchmark: signing trials, bytes and cache, per dataset size.")
-        by_s = {s["id"]: s for s in suites}
-        sid = sb(st.sidebar.selectbox, "cmp_suite", next(iter(by_s)), "Benchmark", options=list(by_s),
-                 format_func=lambda i: by_s[i]["title"])
-        sd = compare.load_suite(by_s[sid]["path"]) if sid in by_s else None
-        datasets = sd["datasets"] if sd else []
-        ds = sb(st.sidebar.selectbox, "cmp_dataset", datasets[len(datasets) // 2] if datasets else None,
-                "Dataset size", options=datasets, format_func=lambda n: f"{n:,} names")
-        summary = sd["bench"].get(ds) if sd else None
-        if sd:
-            names = list(sd["trials"]["scenario"].unique()) if not sd["trials"].empty else []
-    else:
-        _hint("Signing numbers come from the lab's last Prepare; bytes and cache from a saved benchmark run.")
-        labs = [x["tag"] for x in driver.list_labs()]
-        default_lab = h.tag if h.tag in labs else (labs[0] if labs else h.tag)
-        tag = sb(st.sidebar.selectbox, "cmp_lab", default_lab, "Lab", options=labs or [h.tag],
-                 help="Any lab folder that has signing data or saved runs.")
-        runs = [r for r in driver.list_runs(h, tag) if (r["path"] / "summary.csv").is_file()]
-        by = {r["folder"]: r for r in runs}
-        folder = sb(st.sidebar.selectbox, "cmp_run", next(iter(by), None), "Benchmark run", options=list(by),
-                    format_func=lambda f: by[f]["title"],
-                    help="Bytes, truncation, cache and latency come from this run.")
-        summary = _cmp_summary(tag, folder)
-        names = list(compare.signing_by_scenario(driver.manifest_rows(h, tag)).scenario)
-
-    if summary is not None and not summary.empty:
-        profiles = [str(p) for p in summary["profile"].dropna().unique()] if "profile" in summary else []
-        sb(st.sidebar.selectbox, "cmp_profile", profiles[0] if profiles else None, "Network", options=profiles)
-        udps = [int(u) for u in summary["udp_limit"].dropna().unique()] if "udp_limit" in summary else []
-        sb(st.sidebar.selectbox, "cmp_udp", udps[0] if udps else None, "UDP size limit", options=udps)
-
-    names += list(summary["scenario"].unique()) if summary is not None else []
-    scenarios = compare.order_scenarios(names)
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("**Compare**")
-    cand = sb(st.sidebar.selectbox, "cmp_cand", "mtl" if "mtl" in scenarios else (scenarios[-1] if scenarios else None),
-              "Candidate", options=scenarios)
-    others = [s for s in scenarios if s != cand]
-    sb(st.sidebar.selectbox, "cmp_base", "slh-dsa" if "slh-dsa" in others else (others[0] if others else None),
-       "against baseline", options=others)
+    a_id = sb(st.sidebar.selectbox, f"cmp_a_{source}", ids[0], "Run A" if view == "runs" else "Run",
+              options=ids, format_func=lambda i: by[i]["title"])
+    ea, eb = by[a_id], None
+    if view == "runs":
+        b_id = sb(st.sidebar.selectbox, f"cmp_b_{source}", ids[1] if len(ids) > 1 else ids[0], "Run B",
+                  options=ids, format_func=lambda i: by[i]["title"])
+        eb = by[b_id]
+    datasets = [d for d in ea["datasets"] if eb is None or d in eb["datasets"]]
+    if not datasets:
+        st.sidebar.warning("These two runs have no dataset size in common.")
+        return None
+    ds = sb(st.sidebar.selectbox, f"cmp_ds_{source}", datasets[len(datasets) // 2], "Dataset size",
+            options=datasets, format_func=_cmp_ds_label(source))
+    prof = udp = None
+    if source != "offline":
+        profiles, udps = _cmp_net_choices(ea, ds)
+        if profiles:
+            prof = sb(st.sidebar.selectbox, f"cmp_profile_{source}", profiles[0], "Network", options=profiles)
+        if udps:
+            udp = sb(st.sidebar.selectbox, f"cmp_udp_{source}", udps[0], "UDP size limit", options=udps)
+    a = _cmp_data(ea, ds, prof, udp, h)
+    b = _cmp_data(eb, ds, prof, udp, h) if eb else None
+    out = {"ea": ea, "eb": eb, "ds": ds, "prof": prof, "udp": udp, "a": a, "b": b}
+    if view == "algorithms":
+        keys = list(a["frame"].key)
+        if len(keys) >= 2:
+            st.sidebar.markdown("---")
+            st.sidebar.markdown("**Focus pair**")
+            cand = sb(st.sidebar.selectbox, f"cmp_cand_{source}", next((k for k in ("slh-dsa-mtl", "mtl") if k in keys), keys[-1]),
+                      "Candidate", options=keys, format_func=compare_hub.short)
+            others = [k for k in keys if k != cand]
+            base = sb(st.sidebar.selectbox, f"cmp_base_{source}", "slh-dsa" if "slh-dsa" in others else others[0],
+                      "against baseline", options=others, format_func=compare_hub.short)
+            out.update(cand=cand, base=base)
     st.sidebar.markdown("---")
     if st.sidebar.button("Refresh", width="stretch", key="sb_refresh_cmp"):
+        _cmp_offline_run.clear()
+        _cmp_suite.clear()
         st.rerun()
+    return out
 
 
 def _plot_cfg(fig, height: int = 360):
@@ -2378,98 +2452,65 @@ def _plot_cfg(fig, height: int = 360):
     return fig
 
 
-def compare_page(h: driver.LabHandle, stt: dict) -> None:
-    _page_header("compare", h, stt)
-    base, cand = cfg("cmp_base"), cfg("cmp_cand")
-    use_suite = any(s["complete"] for s in suite_mod.list_suites()) and cfg("cmp_source", "suite") == "suite"
-    sd = None
-    prof, udp = cfg("cmp_profile"), cfg("cmp_udp")
+def _cmp_reference_line(fig, categories: list[str], y: float, name: str) -> None:
+    """A dotted reference line as a trace: a shape on a log axis is placed inconsistently between plotly versions."""
+    fig.add_scatter(x=categories, y=[y] * len(categories), mode="lines", name=name, showlegend=False,
+                    line=dict(dash="dot", color="#555", width=1), hoverinfo="skip")
 
-    if use_suite:
-        by_s = {s["id"]: s for s in suite_mod.list_suites() if s["complete"]}
-        sd = compare.load_suite(by_s[cfg("cmp_suite")]["path"]) if cfg("cmp_suite") in by_s else None
-        ds = cfg("cmp_dataset")
-        if sd is None or ds is None:
-            st.info("Pick a finished benchmark and a dataset size in the sidebar.")
-            return
-        df = compare.suite_frame(sd, int(ds), prof, udp)
-        man_rows = sd["full"][sd["full"]["dataset"] == ds].to_dict("records") if not sd["full"].empty else []
-        n_trials = int(df["sign_trials"].max()) if "sign_trials" in df and df["sign_trials"].notna().any() else 0
-        st.caption(f"Benchmark **{by_s[cfg('cmp_suite')]['title']}** · **{int(ds):,} data names** · "
-                   f"network {prof}, UDP {udp} · signing and verification are estimated from {n_trials} trial(s) "
-                   "on sample zones; bytes and cache are measured in the resolver run")
-    else:
-        tag, folder = cfg("cmp_lab"), cfg("cmp_run")
-        man_rows = driver.manifest_rows(h, tag)
-        sign = compare.signing_by_scenario(man_rows)
-        summary = _cmp_summary(tag, folder)
-        bench = compare.bench_by_scenario(summary, prof, udp) if summary is not None \
-            else compare.bench_by_scenario(pd.DataFrame())
-        df = compare.merge(sign, bench, compare.analytical_by_scenario(man_rows))
-        if not df.empty:
-            run_title = next((r["title"] for r in driver.list_runs(h, tag) if r["folder"] == folder), None)
-            src_sign = f"last Prepare of **{tag}**" if not sign.empty else "no signing data for this lab"
-            src_bench = f"run **{run_title}** ({prof}, UDP {udp})" if not bench.empty \
-                else "no benchmark run with results for this lab"
-            st.caption(f"Signing and verification: {src_sign} · Bytes, truncation, cache: {src_bench}")
 
-    for note in compare.lookup_problems(sd["bench"].get(int(ds)) if use_suite else summary):
-        st.warning(note + ". Do not compare this scenario until the failures are explained.")
+def _cmp_bar(frame: pd.DataFrame, col: str, *, height: int = 330, err: bool = False):
+    d = frame.dropna(subset=[col]).copy()
+    if d.empty:
+        return None
+    title, unit = compare_hub.METRICS[col]
+    d["text"] = [compare_hub.fmt_value(v, unit) + (" (extrapolated)" if col == "sign_s" and b == "extrapolated" else "")
+                 for v, b in zip(d[col], d["sign_basis"])]
+    kw = {}
+    lo, hi = {"sign_s": ("sign_lo", "sign_hi"), "verify_s": ("verify_lo", "verify_hi")}.get(col, (None, None))
+    if err and lo and d[lo].notna().all() and d[hi].notna().all():
+        d["err_hi"], d["err_lo"] = (d[hi] - d[col]).clip(lower=0), (d[col] - d[lo]).clip(lower=0)
+        kw = {"error_y": "err_hi", "error_y_minus": "err_lo"}
+    log = unit != "n" and (d[col] > 0).all()
+    fig = px.bar(d, x="label", y=col, color="key", color_discrete_map=compare_hub.COLORS, text="text", log_y=log,
+                 category_orders={"label": list(frame.label)}, title=f"{title}" + (" (log scale)" if log else ""), **kw)
+    fig.update_layout(showlegend=False, xaxis_title=None, yaxis_title={"s": "seconds", "B": "bytes", "n": "count"}[unit])
+    fig.update_traces(textposition="outside", cliponaxis=False)
+    return _plot_cfg(fig, height)
 
-    if df.empty:
-        st.info("Nothing to compare yet. Run a **benchmark** in the Benchmark tile.")
-        st.button("Go to Benchmark", on_click=_go, args=("benchmark",), key="cmp_to_bench")
-        return
 
-    if not (base and cand):
-        st.warning("Pick a candidate and a baseline in the sidebar.")
-        return
+def _cmp_cards(frame: pd.DataFrame, base: str, cand: str, paired: pd.DataFrame | None) -> None:
+    x = compare_hub.vs_baseline(frame, base).set_index("key")
+    fr = frame.set_index("key")
+    cols = st.columns(len(compare_hub.METRICS))
+    for c, (col, (title, unit)) in zip(cols, compare_hub.METRICS.items()):
+        v, b = fr.loc[cand, col], fr.loc[base, col]
+        if pd.isna(v) or pd.isna(b):
+            c.metric(title, "—", help="No data for this metric.")
+            continue
+        text, help_ = compare_hub.fmt_x(x.loc[cand, col]), None
+        if paired is not None and not paired.empty:
+            p = paired[(paired.key == cand) & (paired.col == col)]
+            if len(p):
+                text = compare_hub.fmt_x(p.iloc[0].ratio)
+                help_ = (f"Median of the per-trial ratios over {int(p.iloc[0].trials)} trials; interval "
+                         f"{p.iloc[0].lo:.3g} to {p.iloc[0].hi:.3g} (baseline ÷ candidate).")
+        c.metric(title, text, f"{compare_hub.fmt_value(v, unit)} vs {compare_hub.fmt_value(b, unit)}",
+                 delta_color="off", delta_arrow="off", help=help_)
 
-    st.markdown(f"#### {cand} vs {base}")
-    cards = compare.headline(df, base, cand)
-    if use_suite:
-        cards[0]["help"] = "Estimated from repeated sample trials, extrapolated to the whole dataset (CI of the median in the table)"
-        cards[1]["help"] = "ldns-verify-zone, estimated the same way (offline check, not the resolver)"
-    cols = st.columns(len(cards))
-    for col, c in zip(cols, cards):
-        col.metric(c["label"], c["value"], c["delta"], delta_color="off", delta_arrow="off", help=c["help"])
-    missing = [c["label"] for c in cards if c["value"] == "—"]
-    if missing:
-        st.caption("No data for: " + ", ".join(missing) + ". "
-                   "Signing and verification need Prepare for both scenarios; the rest need both in the benchmark run.")
 
-    tab_names = ["At a glance", "Signing & size", "Bytes on the wire", "Cache & latency", "All numbers"]
-    if use_suite:
-        tab_names.insert(1, "Across sizes")
-    made = st.tabs(tab_names)
-    glance, signing, wire, cache, allnums = (made[0], *made[-4:])
-    across = made[1] if use_suite else None
+def _cmp_scaling(source: str, a: dict, prof, udp) -> pd.DataFrame:
+    if source == "offline":
+        return compare_hub.offline_scaling(a["run"])
+    if source == "live":
+        parts = [compare_hub.live_frame(compare.suite_frame(a["sd"], d, prof, udp)).assign(dataset=d, rrsets=d)
+                 for d in a["sd"]["datasets"]]
+        return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    return pd.DataFrame()
 
-    scen_order = list(df.scenario)
-    colors = compare.COLORS
 
-    with glance:
-        metrics = [("Signing time", "sign_s"), ("Verification", "verify_s"), ("Signed size", "signed_bytes"),
-                   ("Bytes on the wire", "upstream_bytes"), ("RRset cache", "cache_rrset")]
-        rel_rows = []
-        for _, r in df.iterrows():
-            for label, col in metrics:
-                b = df.loc[df.scenario == base, col]
-                b = float(b.iloc[0]) if len(b) and pd.notna(b.iloc[0]) else None
-                v = r.get(col)
-                if b and b > 0 and pd.notna(v) and v > 0:
-                    rel_rows.append({"Metric": label, "Scenario": r.scenario, "% of baseline": 100 * v / b})
-        if rel_rows:
-            fig = px.bar(pd.DataFrame(rel_rows), x="Metric", y="% of baseline", color="Scenario", barmode="group",
-                         log_y=True, color_discrete_map=colors, category_orders={"Scenario": scen_order},
-                         title=f"Everything relative to {base} (= 100%, log scale; lower is better)")
-            fig.add_hline(y=100, line_dash="dot", annotation_text=base)
-            st.plotly_chart(_plot_cfg(fig, 420), width="stretch")
-        st.caption(
-            "SLH-DSA signs every RRset with a post-quantum signature. MTL appends RRsets to a Merkle tree and "
-            "signs the tree's ladder once, so signing is cheaper and signatures on the wire are much shorter."
-        )
-
+def _cmp_live_detail(df: pd.DataFrame, sd, ds, use_suite: bool, man_rows: list, name: str) -> None:
+    scen_order, colors = list(df.scenario), compare.COLORS
+    signing, wire, cache, allnums = st.tabs(["Signing & size", "Bytes by tier", "Cache & latency", "All numbers"])
     with signing:
         if use_suite:
             st.markdown(":blue-badge[Estimated] sign and verify time from the repeated sample trials · "
@@ -2592,37 +2633,233 @@ def compare_page(h: driver.LabHandle, stt: dict) -> None:
                    "They are never read from the lab and are kept apart from the measured cache above. "
                    "They describe signature material for the whole zone set, not what the resolver actually cached.")
 
-    if across is not None:
-        with across:
-            sc_all = compare.scaling_frame(sd, prof, udp)
-            order = compare.order_scenarios(sc_all["scenario"].unique())
-            st.markdown(f"##### {cand} vs {base} at every dataset size")
-            rows = []
-            for d in sd["datasets"]:
-                cs = compare.headline(sc_all[sc_all["dataset"] == d].reset_index(drop=True), base, cand)
-                rows.append({"Dataset": f"{d:,} names", **{c["label"]: c["value"] for c in cs}})
-            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-            st.caption("Each cell reads as 'candidate is N times better than baseline' for that metric and dataset.")
-            panels = [("sign_s", "Signing time, estimated (s)"), ("verify_s", "Zone verification, estimated (s)"),
-                      ("signed_bytes", "Signed size (bytes)"), ("upstream_bytes", "Bytes on the wire, cold pass"),
-                      ("cache_rrset", "Resolver RRset cache (bytes)")]
-            left, right = st.columns(2)
-            for i, (col, title) in enumerate(panels):
-                data = sc_all.dropna(subset=[col])
-                if data.empty:
-                    continue
-                f = px.line(data, x="dataset", y=col, color="scenario", markers=True, log_x=True, log_y=True,
-                            color_discrete_map=colors, category_orders={"scenario": order}, title=title)
-                f.update_xaxes(title="Data names", tickvals=sd["datasets"])
-                (left if i % 2 == 0 else right).plotly_chart(_plot_cfg(f, 340), width="stretch")
-            st.caption("Both axes are logarithmic: a straight line is power-law growth, and a constant gap between "
-                       "two lines is a constant ratio. Sign and verify times are estimates; the rest are measured.")
 
     with allnums:
         t = compare.table(df)
         st.dataframe(t, width="stretch", hide_index=True)
-        st.download_button("Download comparison (CSV)", data=df.to_csv(index=False), key="cmp_dl",
-                           file_name=f"comparison-{cfg('cmp_suite') if use_suite else cfg('cmp_lab')}.csv", mime="text/csv")
+        st.download_button("Download comparison (CSV)", data=df.to_csv(index=False), key="cmp_live_dl",
+                           file_name=f"comparison-{name}.csv", mime="text/csv")
+
+
+
+def _cmp_algorithms(source: str, pick: dict, h: driver.LabHandle) -> None:
+    a, ea, ds = pick["a"], pick["ea"], pick["ds"]
+    frame = a["frame"]
+    if frame.empty or len(frame) < 2:
+        st.info("This run has fewer than two algorithms with data for the chosen dataset.")
+        return
+    base, cand = pick.get("base"), pick.get("cand")
+    paired = compare_hub.offline_paired(a["run"], ds, base) if a["run"] is not None and base else None
+    facts = ea["facts"]
+    bits = [f"**{ea['title']}**", f"dataset **{_cmp_ds_label(source)(ds)}**"]
+    if source == "offline":
+        bits.append(f"stack {facts.get('Stack profile')} · {facts.get('Measured trials')} trials · one pinned core")
+    elif pick["prof"]:
+        bits.append(f"network {pick['prof']}, UDP {pick['udp']}")
+    st.caption(" · ".join(bits))
+    for note in compare.lookup_problems(a["summary"]):
+        st.warning(note + ". Do not compare this scenario until the failures are explained.")
+    bands = [r["band"] for r in (a["run"].summary.get("noise_floor", []) if a["run"] is not None else [])
+             if r["dataset"] == ds]
+    if bands:
+        band = max(bands)
+        st.caption(f"Measurement noise floor on this run (A/A control): ±{band * 100:.1f}%. A timing difference "
+                   "smaller than that is not a difference.")
+
+    st.markdown(f"#### {compare_hub.short(cand)} vs {compare_hub.short(base)}")
+    _cmp_cards(frame, base, cand, paired)
+
+    tabs = st.tabs(["At a glance", "Signing & verification", "Bytes & truncation", "Cache & latency",
+                    "Across sizes", "All numbers"])
+    glance, signing, wire, cache, across, allnums = tabs
+    notes = compare_hub.METRIC_NOTES["offline" if source == "offline" else "live"]
+    colors = compare_hub.COLORS
+
+    with glance:
+        rel = []
+        fr = frame.set_index("key")
+        for k in frame.key:
+            for col, (title, _u) in compare_hub.METRICS.items():
+                b, v = fr.loc[base, col], fr.loc[k, col]
+                if pd.notna(b) and pd.notna(v) and b > 0 and v > 0:
+                    rel.append({"Metric": title, "Algorithm": compare_hub.short(k), "% of baseline": 100 * v / b})
+        if rel:
+            fig = px.bar(pd.DataFrame(rel), x="Metric", y="% of baseline", color="Algorithm", barmode="group", log_y=True,
+                         color_discrete_map={compare_hub.short(k): c for k, c in colors.items()},
+                         category_orders={"Algorithm": [compare_hub.short(k) for k in frame.key]},
+                         title=f"Everything relative to {compare_hub.short(base)} (= 100%, log scale; lower is better)")
+            _cmp_reference_line(fig, [m[0] for m in compare_hub.METRICS.values()], 100, compare_hub.short(base))
+            st.plotly_chart(_plot_cfg(fig, 420), width="stretch")
+        st.markdown("##### All algorithms")
+        st.dataframe(compare_hub.algorithm_table(frame, base, paired), width="stretch", hide_index=True)
+        st.caption("'× lower' means the value is that many times below the baseline (every metric here: lower is "
+                   "better). Brackets show the interval of the per-trial ratio where trials are paired.")
+
+    with signing:
+        if source == "offline":
+            what = {"measured": "timed library calls", "extrapolated": "direct SLH-DSA total, from a sample of the zone"}
+            st.markdown(" · ".join(f"{CMP_BADGE[b]} {what[b]}" for b in what if b in set(frame.sign_basis)))
+        else:
+            st.markdown(f"{CMP_BADGE['estimated']} {notes['sign_s']}")
+        c1, c2 = st.columns(2)
+        for col_, w in (("sign_s", c1), ("verify_s", c2)):
+            fig = _cmp_bar(frame, col_, err=True)
+            if fig is not None:
+                w.plotly_chart(fig, width="stretch")
+        fig = _cmp_bar(frame, "size_bytes")
+        if fig is not None:
+            st.plotly_chart(fig, width="stretch")
+        st.caption(f"Signing: {notes['sign_s']}  \nVerification: {notes['verify_s']}  \nSize: {notes['size_bytes']}  \n"
+                   "Bars show the interval of the median where one exists.")
+        if source == "offline":
+            st.caption(compare_hub.stats_label(a["run"]))
+
+    with wire:
+        st.markdown(":green-badge[Measured] " + ("DNS messages of the replayed workload" if source == "offline"
+                                                 else "packet counts of the saved run"))
+        c1, c2 = st.columns(2)
+        for col_, w in (("wire_bytes", c1), ("truncations", c2)):
+            fig = _cmp_bar(frame, col_)
+            if fig is not None:
+                w.plotly_chart(fig, width="stretch")
+        if frame[["wire_bytes", "truncations"]].isna().all().all():
+            st.info("No bytes-on-the-wire data in this run. Run a benchmark (live) or the full harness (offline).")
+        st.caption(f"Bytes: {notes['wire_bytes']}  \nTruncations: {notes['truncations']}")
+
+    with cache:
+        st.markdown(":green-badge[Measured] " + notes["cache_bytes"])
+        c1, c2 = st.columns(2)
+        fig = _cmp_bar(frame, "cache_bytes")
+        if fig is not None:
+            c1.plotly_chart(fig, width="stretch")
+        lat = frame.dropna(subset=["cold_ms"])
+        if not lat.empty:
+            m = lat.melt(id_vars=["key", "label"], value_vars=["cold_ms", "warm_ms"], var_name="pass", value_name="ms")
+            m["pass"] = m["pass"].map({"cold_ms": "Cold (empty cache)", "warm_ms": "Warm (cached)"})
+            f2 = px.bar(m, x="label", y="ms", color="pass", barmode="group", category_orders={"label": list(lat.label)},
+                        title="Median lookup time (ms)")
+            f2.update_layout(xaxis_title=None)
+            c2.plotly_chart(_plot_cfg(f2), width="stretch")
+        elif source == "offline":
+            c2.info("Lookup latency is measured only in the live lab, where a real resolver answers.")
+        if fig is None and lat.empty:
+            st.info("No cache or latency data in this run.")
+
+    with across:
+        sc = _cmp_scaling(source, a, pick["prof"], pick["udp"])
+        if sc.empty or sc.dataset.nunique() < 2:
+            st.info("Only one dataset size is available for this run.")
+        else:
+            x_title = "RRsets in the zone" if source == "offline" else "Data names"
+            left, right = st.columns(2)
+            for i, (col_, (title, unit)) in enumerate(compare_hub.METRICS.items()):
+                data = sc.dropna(subset=[col_])
+                data = data[data[col_] > 0]
+                if data.empty:
+                    continue
+                f = px.line(data, x="rrsets", y=col_, color="key", markers=True, log_x=True, log_y=True,
+                            color_discrete_map=colors, category_orders={"key": list(frame.key)}, title=title)
+                f.update_xaxes(title=x_title)
+                f.update_layout(legend_title_text="")
+                (left if i % 2 == 0 else right).plotly_chart(_plot_cfg(f, 320), width="stretch")
+            st.caption("Both axes are logarithmic: a straight line is power-law growth and a constant gap between two "
+                       "lines is a constant ratio.")
+
+    with allnums:
+        st.dataframe(frame.drop(columns=["label"]), width="stretch", hide_index=True)
+        st.download_button("Download this comparison (CSV)", data=frame.to_csv(index=False), key="cmp_alg_dl",
+                           file_name=f"algorithms-{ea['id']}-{ds}.csv", mime="text/csv")
+
+    if source != "offline" and a["raw"] is not None and not a["raw"].empty:
+        with st.expander("Live-lab detail: bytes by tier, latency, analytical sizes"):
+            _cmp_live_detail(a["raw"], a["sd"], ds, source == "live", a["man_rows"], ea["id"])
+
+
+def _cmp_runs(source: str, pick: dict) -> None:
+    ea, eb, ds, a, b = pick["ea"], pick["eb"], pick["ds"], pick["a"], pick["b"]
+    if ea["id"] == eb["id"]:
+        st.info("Run A and Run B are the same run. Pick two different runs in the sidebar.")
+        return
+    st.markdown("#### What differs between the two runs")
+    for note in compare_hub.comparability_notes(ea["facts"], eb["facts"]):
+        (st.info if note.startswith("Same") else st.warning)(note)
+    diff = compare_hub.facts_diff(ea["facts"], eb["facts"])
+    diff["Same"] = diff["Same"].map({True: "", False: "differs"})
+    st.dataframe(diff, width="stretch", hide_index=True)
+
+    bands = {}
+    if source == "offline":
+        for col_, name in (("sign_s", "signing"), ("verify_s", "verification (warm)")):
+            vals = [x for x in (compare_hub.noise_band(a["run"], ds, name), compare_hub.noise_band(b["run"], ds, name))
+                    if x is not None]
+            if vals:
+                bands[col_] = max(vals)
+    ratios = compare_hub.run_ratios(a["frame"], b["frame"], bands)
+    if ratios.empty:
+        st.info("The two runs have no algorithm and metric in common for this dataset.")
+        return
+    st.markdown(f"#### Run B relative to Run A · dataset {_cmp_ds_label(source)(ds)}")
+    near = int((abs(ratios.ratio - 1) <= 0.05).sum())
+    st.caption(f"{near} of {len(ratios)} values are within 5% of each other. A ratio of 1 means identical; "
+               "above 1 means Run B is higher (all metrics here: lower is better).")
+    ratios = ratios.assign(**{"Algorithm": ratios["label"]})
+    fig = px.bar(ratios, x="metric", y="ratio", color="Algorithm", barmode="group", log_y=True,
+                 color_discrete_map={compare_hub.short(k): c for k, c in compare_hub.COLORS.items()},
+                 category_orders={"Algorithm": [compare_hub.short(k) for k in compare_hub.order_keys(ratios.key)]},
+                 title="Run B ÷ Run A (log scale)")
+    _cmp_reference_line(fig, list(dict.fromkeys(ratios["metric"])), 1, "identical")
+    st.plotly_chart(_plot_cfg(fig, 400), width="stretch")
+    show = pd.DataFrame({
+        "Algorithm": ratios["label"], "Metric": ratios["metric"],
+        "Run A": [compare_hub.fmt_value(v, u) for v, u in zip(ratios.a, ratios.unit)],
+        "Run B": [compare_hub.fmt_value(v, u) for v, u in zip(ratios.b, ratios.unit)],
+        "B ÷ A": [f"{r:.3g}" for r in ratios.ratio],
+        "Against the noise floor": ["" if w is None else ("within noise" if w else "outside noise")
+                                    for w in ratios.within_noise],
+    })
+    st.dataframe(show, width="stretch", hide_index=True)
+    st.download_button("Download this comparison (CSV)", data=ratios.drop(columns=["Algorithm"]).to_csv(index=False),
+                       key="cmp_runs_dl", file_name=f"runs-{ea['id']}-vs-{eb['id']}-{ds}.csv", mime="text/csv")
+    if source == "offline" and bands:
+        st.caption("Noise floor: the larger A/A band of the two runs, for signing and verification only.")
+
+
+def compare_page(h: driver.LabHandle, stt: dict) -> None:
+    _page_header("compare", h, stt)
+    sources = {s: len(_cmp_catalogue(s, h)) for s in CMP_SOURCES}
+    available = [s for s, n in sources.items() if n]
+    view = sb(st.segmented_control, "cmp_view", "algorithms", "What to compare", options=list(CMP_VIEWS),
+              format_func=CMP_VIEWS.get) or "algorithms"
+    default_src = "offline" if sources["offline"] else ("live" if sources["live"] else "offline")
+    source = sb(st.segmented_control, "cmp_src", default_src, "Data from", options=list(CMP_SOURCES),
+                format_func=lambda s: f"{CMP_SOURCES[s]} ({sources[s]})") or default_src
+    st.caption(f"{CMP_SOURCE_NOTE[source]} Offline and live-lab results use different primitives and versions, "
+               "so they are never drawn together.")
+    cat = _cmp_catalogue(source, h)
+    if not cat:
+        others = [CMP_SOURCES[s] for s in available if s != source]
+        if source == "offline":
+            st.info("No offline run yet. Run `bash scripts/run_benchmark.sh configs/quick.yaml` for a short one, or "
+                    "the full run without arguments.")
+        elif source == "live":
+            st.info("No finished live-lab benchmark yet. Run a **benchmark** in the Benchmark tile.")
+            st.button("Go to Benchmark", on_click=_go, args=("benchmark",), key="cmp_to_bench")
+        else:
+            st.info("No saved lab run with results yet. The Live tile and the Benchmark tile create them.")
+        if others:
+            st.caption("Data is available from: " + ", ".join(others) + ".")
+        return
+    if view == "runs" and len(cat) < 2:
+        st.info("Comparing runs needs at least two runs from this source. Repeat the benchmark (a reproducibility "
+                "check), or run it on another stack profile or machine.")
+        view = "algorithms"
+    pick = _cmp_pickers(view, source, cat, h)
+    if pick is None:
+        return
+    if view == "runs":
+        _cmp_runs(source, pick)
+    else:
+        _cmp_algorithms(source, pick, h)
 
 
 # ─────────────────────────── RESET ───────────────────────────
