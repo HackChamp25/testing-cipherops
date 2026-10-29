@@ -843,6 +843,8 @@ def sidebar_live(h: driver.LabHandle, stt: dict) -> None:
                 try:
                     msg = driver.activate(h, scenario, udp=udp)
                     st.session_state.query_log = []
+                    for k in ("last_query", "last_stats", *_PCAP_KEYS):  # they describe the previous scenario
+                        st.session_state.pop(k, None)
                     _log_chunks(msg, phase="activate", source="compose", title="activate")
                     activity("ok", f"{scenario} live", "", phase="activate", source="compose", h=h)
                 except Exception as e:  # noqa: BLE001
@@ -1548,6 +1550,7 @@ def query_panel(h: driver.LabHandle, stt: dict) -> None:
             row = driver.probe(
                 h, qname, qtype, server=server, mtl_full=mtl_full, dnssec=dnssec, recurse=recurse,
             )
+            row.update(scenario=h.active_scenario(), path=path, at=time.strftime("%H:%M:%S"))
             if recurse:
                 try:
                     row["unbound_stats"] = driver.unbound_stats_delta({}, driver.unbound_stats(h))
@@ -1596,6 +1599,14 @@ def query_panel(h: driver.LabHandle, stt: dict) -> None:
 
     row = st.session_state.get("last_query")
     if row:
+        shown = row.get("scenario")
+        st.markdown(f"**Last result** · `{row.get('qname')} {row.get('qtype')}` · {row.get('path', '')} · "
+                    f"scenario **{shown or '?'}** · {row.get('at', '')}")
+        now = h.active_scenario()
+        if shown and now and shown != now:
+            st.warning(f"This result was taken on **{shown}**; the lab is now on **{now}**. Run the query again.")
+        elif (row.get("qname"), row.get("qtype")) != (qname, qtype) or row.get("path") != path:
+            st.caption("The query above has changed since this result. Press Run query to refresh it.")
         m = st.columns(5)
         m[0].metric("RCODE", row.get("rcode", "—"))
         m[1].metric("AD", "YES" if row.get("ad") else "no")
