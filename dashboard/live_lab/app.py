@@ -839,7 +839,9 @@ def sidebar_live(h: driver.LabHandle, stt: dict) -> None:
         if r["running"] and scenario and scenario != active and not suite_mod.running_suite():
             udp = int(cfg("udp", 1232))
             activity("step", f"Activate {scenario}", "", phase="activate", source="compose", h=h)
-            with st.spinner(f"Switching to {scenario}…"):
+            st.toast(f"Switching the lab to {scenario}: loading its zones and restarting the root, TLD and leaf "
+                     "servers and the resolver. This takes a few seconds.", icon="⏳")
+            with st.spinner(f"Switching to {scenario}… (reloading root, TLD, leaf and resolver)"):
                 try:
                     msg = driver.activate(h, scenario, udp=udp)
                     st.session_state.query_log = []
@@ -847,6 +849,7 @@ def sidebar_live(h: driver.LabHandle, stt: dict) -> None:
                         st.session_state.pop(k, None)
                     _log_chunks(msg, phase="activate", source="compose", title="activate")
                     activity("ok", f"{scenario} live", "", phase="activate", source="compose", h=h)
+                    st.toast(f"{scenario} is live. Run a query to see its answer.", icon="✅")
                 except Exception as e:  # noqa: BLE001
                     st.sidebar.error(str(e)[:600])
                     activity("err", "Activate failed", str(e)[:2000], phase="activate", source="compose", h=h)
@@ -1539,25 +1542,47 @@ def query_panel(h: driver.LabHandle, stt: dict) -> None:
     if st.button("Run query", type="primary"):
         pcap_path = None
         activity("step", f"Query {qname} {qtype}", path, phase="probe", source="probe", h=h)
+        t_start = time.perf_counter()
+        # Visible progress next to the button: each step is written as it starts, with how long the last one took.
+        box = st.status(f"Running `{qname} {qtype}` · {path}", expanded=True)
+        step_t: list = [None]
+
+        def step(text: str | None) -> None:
+            """Close the previous step with its duration, then announce the next one (None just closes)."""
+            now = time.perf_counter()
+            if step_t[0] is not None:
+                box.write(f"   ↳ {now - step_t[0]:.1f} s")
+            step_t[0] = now if text else None
+            if text:
+                box.write(text)
+                box.update(label=text)
+
         try:
             if recurse:
                 try:
+                    step("1 · Reading the resolver's counters before the lookup")
                     driver.unbound_stats(h)
                 except Exception:  # noqa: BLE001
                     pass
             if capture:
+                step(f"2 · Starting packet capture on {'Unbound' if recurse else 'the client'}")
                 pcap_path = driver.start_capture(h, server=server, label=cfg("capture_label", ""))
+            step(f"3 · Sending the query to {server}" + (" (Unbound resolves it from the root down)" if recurse else ""))
             row = driver.probe(
                 h, qname, qtype, server=server, mtl_full=mtl_full, dnssec=dnssec, recurse=recurse,
             )
+            box.write(f"   answered in {row.get('latency_ms', 0):.1f} ms · {row.get('rcode')}"
+                      f" · AD={'yes' if row.get('ad') else 'no'}")
             row.update(scenario=h.active_scenario(), path=path, at=time.strftime("%H:%M:%S"))
             if recurse:
                 try:
+                    step("4 · Reading the resolver's counters after the lookup")
                     row["unbound_stats"] = driver.unbound_stats_delta({}, driver.unbound_stats(h))
                 except Exception:  # noqa: BLE001
                     row["unbound_stats"] = {}
             dropped = 0
             if capture:
+                step("5 · Stopping the capture and decoding the packets")
                 pcap_path, dropped = driver.stop_capture(h)
                 if pcap_path and Path(pcap_path).exists():
                     try:
@@ -1565,6 +1590,7 @@ def query_panel(h: driver.LabHandle, stt: dict) -> None:
                         st.session_state.last_story = decode.build_story(df)
                         st.session_state.last_wire = decode.wire_summary(df)
                         st.session_state.auto_decode = True
+                        box.write(f"   {len(df)} packets captured")
                         activity("info", "Packet story", "\n".join((st.session_state.last_story or [])[:10]),
                                  phase="pcap", source="pcap", h=h)
                     except Exception:  # noqa: BLE001
@@ -1588,7 +1614,11 @@ def query_panel(h: driver.LabHandle, stt: dict) -> None:
                 f"{row.get('latency_ms', 0):.1f} ms",
                 phase="probe", source="probe", h=h,
             )
+            step(None)
+            box.update(label=f"Done in {time.perf_counter() - t_start:.1f} s · {row.get('rcode')} · "
+                             f"AD={'yes' if row.get('ad') else 'no'} · {size:,} B", state="complete", expanded=False)
         except Exception as e:  # noqa: BLE001
+            box.update(label="Query failed", state="error", expanded=True)
             st.error(str(e)[:800])
             activity("err", "Query failed", str(e)[:2000], phase="probe", source="probe", h=h)
             if capture:
