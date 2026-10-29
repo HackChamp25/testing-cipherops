@@ -62,7 +62,7 @@ SCENARIO_BLURB = {
 LEVEL_ICON = {"info": "ℹ️", "ok": "✅", "warn": "⚠️", "err": "❌", "step": "▶️"}
 ACTIVITY_CAP = 500
 
-NAV_MODES = ("home", "setup", "live", "benchmark", "compare", "reset")
+NAV_MODES = ("home", "setup", "live", "benchmark", "compare", "learn", "reset")
 TILE_TEXT_HEIGHT = 290  # px; fits heading, pitch and bullets even when the copy wraps
 
 TILES = {
@@ -105,6 +105,16 @@ TILES = {
             "Run against run: stack profiles, repeats or machines, with what differs spelled out",
         ],
         "cta": "Open Compare",
+    },
+    "learn": {
+        "icon": "📖",
+        "title": "Learn",
+        "pitch": "Why DNSSEC needs MTL, in six short animated scenes.",
+        "bullets": [
+            "From a poisoned DNS cache to the chain of trust, the quantum threat and the packet-size problem",
+            "No setup needed; the background for everything the other tiles measure",
+        ],
+        "cta": "Open Learn",
     },
     "reset": {
         "icon": "🧹",
@@ -603,7 +613,8 @@ def sidebar_home(h: driver.LabHandle, stt: dict) -> None:
         "3. **Benchmark** — three dataset sizes, repeated trials; needs only the images, "
         "not Prepare or a running lab  \n"
         "4. **Compare** — MTL vs SLH-DSA and the other modes, side by side  \n"
-        "5. **Reset** — clear only what you choose"
+        "5. **Learn** — why DNSSEC needs MTL, a short animated walkthrough  \n"
+        "6. **Reset** — clear only what you choose"
     )
     st.sidebar.markdown("---")
     r = readiness(stt)
@@ -1106,6 +1117,8 @@ def _tile_chip(mode: str, stt: dict, h: driver.LabHandle) -> str:
     if mode == "compare":
         has = bool(compare_hub.offline_catalogue(ROOT / "results")) or bool(driver.list_labs())
         return _chip("Has data", "ok") if has else _chip("No data yet", "idle")
+    if mode == "learn":
+        return _chip("No setup needed", "ok")
     return _chip("Maintenance", "idle")
 
 
@@ -1129,7 +1142,7 @@ def home_page(h: driver.LabHandle, stt: dict) -> None:
         st.info("**Start with Setup** to build the images. Live also needs the lab signed and running; "
                 "Benchmark only needs the images.")
 
-    order = [("setup", "live"), ("benchmark", "compare"), ("reset",)]
+    order = [("setup", "live"), ("benchmark", "compare"), ("learn", "reset")]
     for pair in order:
         cols = st.columns(2)
         for col, mode in zip(cols, pair):
@@ -3069,15 +3082,48 @@ def activity_tab(h: driver.LabHandle) -> None:
                 st.caption(detail[:500])
 
 
+# ─────────────────────────── LEARN ───────────────────────────
+
+LEARN_DIR = ROOT / "docs" / "learn"
+
+
+@st.cache_data(show_spinner=False)
+def _learn_html(mtime: float) -> str:
+    return (LEARN_DIR / "why-dnssec-needs-mtl.html").read_text(encoding="utf-8")
+
+
+def sidebar_learn(h: driver.LabHandle, stt: dict) -> None:
+    _sidebar_brand("learn")
+    st.sidebar.markdown("### Learn")
+    _hint("Click inside the animation first, then use → and ← to step and space to play.")
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Go further**")
+    st.sidebar.markdown("- `docs/learn/README.md`: the same story in text, with a reading path  \n"
+                        "- `docs/methodology.md`: how every number is measured")
+
+
+def learn_page(h: driver.LabHandle, stt: dict) -> None:
+    _page_header("learn", h, stt)
+    page = LEARN_DIR / "why-dnssec-needs-mtl.html"
+    if not page.is_file():
+        st.info("The explainer is missing from this checkout (`docs/learn/why-dnssec-needs-mtl.html`).")
+        return
+    import streamlit.components.v1 as components
+    components.html(_learn_html(page.stat().st_mtime), height=1180, scrolling=True)
+    st.caption("A teaching aid, not a measurement: its sizes are the draft's maximum-size formulas. "
+               "The measured results are in the Compare tile and in each run's report.")
+    st.button("Back to Home", on_click=_go, args=("home",), key="learn_home")
+
+
 # ─────────────────────────── ENTRY POINT ───────────────────────────
 
 SIDEBARS = {
     "home": sidebar_home, "setup": sidebar_setup, "live": sidebar_live,
-    "benchmark": sidebar_benchmark, "compare": sidebar_compare, "reset": sidebar_reset,
+    "benchmark": sidebar_benchmark, "compare": sidebar_compare, "learn": sidebar_learn, "reset": sidebar_reset,
 }
 PAGES = {
     "setup": setup_page, "live": live_page, "benchmark": benchmark_page, "compare": compare_page,
-    "reset": reset_page,
+    "learn": learn_page, "reset": reset_page,
 }
 
 
