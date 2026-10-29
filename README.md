@@ -11,6 +11,10 @@
   AIORI Hackathon 3 · PS-036 · Team A3-PS036-TC161
 </div>
 
+> **New to DNSSEC, post-quantum signatures or MTL?** Start with [Learn: why DNSSEC needs MTL](docs/learn/README.md),
+> a ten-minute animated walkthrough ([open the page](docs/learn/why-dnssec-needs-mtl.html), or the dashboard's
+> **Learn** tile) that builds from a poisoned DNS cache to the packet-size problem MTL addresses.
+
 ## What this is
 
 Post-quantum signatures are large. A single SLH-DSA-SHA2-128s signature is 7,856 bytes, so a signed DNS answer
@@ -214,11 +218,12 @@ ecosystem/      live lab: images, stack pins, lab orchestration (ecolab), IETF d
 dashboard/      Streamlit live lab (dashboard/app.py launches live_lab/app.py)
 scripts/        run_benchmark, run_live, show_fixes, learning trace (own.py)
 tests/          unit tests (host) and harness gates (Docker)
-docs/           methodology, architecture, flow, output reference
+docs/           methodology, architecture, flow, output reference, learn/ (explainer for newcomers)
 ```
 
 ## Documentation
 
+- [Learn: why DNSSEC needs MTL](docs/learn/README.md): the background, with an interactive walkthrough
 - [Design decisions](docs/design-decisions.md): why the benchmark is built this way
 - [Methodology](docs/methodology.md): what is measured and how, statistics, limits
 - [Architecture](docs/architecture.md): components and data flow

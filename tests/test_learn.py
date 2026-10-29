@@ -1,0 +1,34 @@
+"""The Learn explainer stays self-contained and its size figures agree with the draft formulas in the code."""
+
+import re
+from pathlib import Path
+
+from cipherops import analytical
+from cipherops.codepoints import MTL_SECURITY_PARAMETER_N, SLH_DSA_SHA2_128S_SIG_BYTES
+
+PAGE = Path(__file__).resolve().parents[1] / "docs" / "learn" / "why-dnssec-needs-mtl.html"
+N_RRSETS = 10_005  # the large dataset of the full run
+DNS_OVERHEAD = 113  # one signed A answer, before the signature
+
+
+def test_page_needs_no_network():
+    html = PAGE.read_text(encoding="utf-8")
+    assert not re.search(r"""(?:src|href)\s*=\s*["']?https?://""", html)
+    assert "@import" not in html and "fonts.googleapis" not in html
+
+
+def test_size_figures_match_the_formulas():
+    html = PAGE.read_text(encoding="utf-8")
+    cond = analytical.max_condensed_signature(MTL_SECURITY_PARAMETER_N, N_RRSETS)
+    full = cond + analytical.max_signed_ladder(MTL_SECURITY_PARAMETER_N, N_RRSETS, SLH_DSA_SHA2_128S_SIG_BYTES)
+    assert cond == 284 and f"{cond} bytes in all" in html and f"condensed ≈ {cond} B" in html
+    assert f"≈{DNS_OVERHEAD + cond} B per signed answer" in html
+    assert f"'SLH-DSA + MTL','condensed',{DNS_OVERHEAD + cond}" in html
+    assert f"'Plain SLH-DSA','per answer',{DNS_OVERHEAD + SLH_DSA_SHA2_128S_SIG_BYTES}" in html
+    assert f"{full / 1000:.1f} KB" in html
+    assert "14 hashes" in html and 60 + 14 * MTL_SECURITY_PARAMETER_N == cond
+
+
+def test_companion_text_agrees_with_the_page():
+    text = (PAGE.parent / "README.md").read_text(encoding="utf-8")
+    assert "284 bytes" in text and "7,856" in text and "8.7 KB" in text and "why-dnssec-needs-mtl.html" in text
