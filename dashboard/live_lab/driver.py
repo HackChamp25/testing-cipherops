@@ -95,13 +95,44 @@ def active_suite_id() -> str | None:
     return None
 
 
+def jobs_dir() -> Path:
+    """Where background-job state lives. Not under work/ or results/: Docker creates those as root, and a
+    folder the dashboard cannot write to would stop Prepare from starting."""
+    return ECO / "jobs"
+
+
 def active_prepare_tags() -> list[str]:
     """Lab tags that have a signing job starting or running."""
-    work = ECO / "work"
-    if not work.is_dir():
+    root = jobs_dir()
+    if not root.is_dir():
         return []
-    return [d.parent.parent.name for d in sorted(work.glob("*/prepare-live/status.json"))
+    return [d.parent.parent.name for d in sorted(root.glob("*/prepare-live/status.json"))
             if effective_job_state(_read_json(d)).get("state") in ACTIVE_STATES]
+
+
+def remove_tree(path: Path, stack: str = "draft06") -> bool:
+    """Delete a folder under ecosystem/, including files Docker created as root.
+
+    A plain delete fails silently on those, so the folder would look removed while its contents stayed.
+    Falls back to ``rm`` inside the tools image, which runs as root. Returns True if the folder is gone.
+    """
+    import shutil
+
+    path = Path(path)
+    if not path.exists():
+        return True
+    shutil.rmtree(path, ignore_errors=True)
+    if not path.exists():
+        return True
+    try:
+        rel = path.resolve().relative_to(ECO.resolve())
+    except ValueError:
+        return False  # never delete outside ecosystem/
+    if not rel.parts:
+        return False
+    _run(["docker", "run", "--rm", "--network", "none", "--entrypoint", "rm", "-v", f"{ECO}:/eco:z",
+          f"cipherops-eco-tools:{stack}", "-rf", "--", f"/eco/{rel.as_posix()}"], check=False, timeout=300)
+    return not path.exists()
 
 
 def require_no_suite(*, force: bool = False) -> None:
@@ -1229,9 +1260,8 @@ def clear_demo_data(
     if suites:
         removed["suites"] = clear_suites()
     if benchmarks:
-        import shutil
         for run_dir in list_run_dirs(h):
-            shutil.rmtree(run_dir, ignore_errors=True)
+            remove_tree(run_dir, h.stack)
             removed["benchmarks"] += 1
     if session:
         p = session_path(h)
@@ -1262,11 +1292,11 @@ def clear_demo_data(
                 _run(compose_cmd(h, "down"), timeout=120, check=False)
         except Exception:  # noqa: BLE001
             pass
-        tag_dir = h.work
-        if tag_dir.is_dir():
-            import shutil
-            shutil.rmtree(tag_dir, ignore_errors=True)
+        if h.work.is_dir():
+            if not remove_tree(h.work, h.stack):
+                raise RuntimeError(f"could not delete {h.work}; remove it with: sudo rm -rf {h.work}")
             removed["work"] = 1
+        remove_tree(jobs_dir() / h.tag, h.stack)
     return removed
 
 
@@ -1289,13 +1319,12 @@ def suite_footprint() -> dict:
 
 def clear_suites() -> int:
     """Delete benchmark suites, their per-size runs and signed zones; returns the number of suites removed."""
-    import shutil
     require_no_suite()
     for compose in (ECO / "work").glob("eco-bench-*/compose.yml"):
         _run(["docker", "compose", "-f", str(compose), "down"], check=False, timeout=120)
     n = suite_footprint()["suites"]
     for p in _suite_dirs():
-        shutil.rmtree(p, ignore_errors=True)
+        remove_tree(p)
     for cfgf in (ECO / "configs").glob("_bench-*.yaml"):
         cfgf.unlink(missing_ok=True)
     return n

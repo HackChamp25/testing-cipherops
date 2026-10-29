@@ -4,7 +4,7 @@
 worker instead. The signer prints ``@@EVENT {json}`` lines as each zone starts and finishes
 (``ecolab.sign.emit``); the worker splits them out of the Docker output:
 
-    <lab work dir>/prepare-live/
+    ecosystem/jobs/<lab>/prepare-live/
         params.json    what was asked for
         status.json    state: starting | running | done | failed | cancelled | stopped
         events.jsonl   one event per line, in the order the signer printed them
@@ -35,7 +35,7 @@ ACTIVE_STATES = ("starting", "running")
 # ───────────────────────────── files ─────────────────────────────
 
 def job_dir(h: driver.LabHandle) -> Path:
-    return h.work / "prepare-live"
+    return driver.jobs_dir() / h.tag / "prepare-live"
 
 
 def _read_json(path: Path) -> dict:
