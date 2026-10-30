@@ -12,7 +12,7 @@
 
   <p>
     <a href="https://codespaces.new/aiori-hackathon/A3-PS036-TC161"><img alt="Open in GitHub Codespaces" src="https://github.com/codespaces/badge.svg"></a>
-    <a href="https://portal.aiori.in/aiori-3/hackathon-guideline/"><img alt="Problem statement PS-036" src="https://img.shields.io/static/v1?label=problem&message=PS-036&color=1E90FF&labelColor=0B1C2C&style=for-the-badge"></a>
+    <a href="https://drive.google.com/file/d/1025mrm1UuBOhKuyuvE1sQzOqRZOkVMDG/view"><img alt="Problem statement PS-036" src="https://img.shields.io/static/v1?label=problem&message=PS-036&color=1E90FF&labelColor=0B1C2C&style=for-the-badge"></a>
     <a href="https://youtu.be/FaVfeO5WTV8"><img alt="Project video" src="https://img.shields.io/static/v1?label=video&message=YouTube&color=3A7BD5&labelColor=0B1C2C&style=for-the-badge&logo=youtube&logoColor=white"></a>
   </p>
 </div>
