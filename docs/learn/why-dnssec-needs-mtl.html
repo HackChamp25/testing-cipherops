@@ -132,14 +132,22 @@ svg.instant *{transition:none!important}
 .chip rect{fill:var(--surface);stroke:var(--line)}
 .chip.warn rect{stroke:var(--warn)}
 .chip.bad rect{stroke:var(--bad);fill:var(--bad-soft)}
+.dcard rect{fill:var(--surface);stroke:var(--line);stroke-width:1.5;transition:stroke .3s}
+.dcard.hl rect{stroke:var(--accent);stroke-width:3}
+.dcard .dt{font:600 16px var(--f-display)}
+.dcard .dl{font:13px var(--f-body)}
+.dcard .ds{fill:var(--warn)!important}
+.dpanel rect{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.5}
+.dpanel text{font:13px var(--f-body)}
+.dpanel .dh{font:600 15px var(--f-display)}
 @media (prefers-reduced-motion: reduce){.fx,.bar,.node,.node rect{transition:none}}
 </style>
 
 <div class="wrap">
   <header>
-    <div class="eyebrow">PS-036 · CipherOps · demo explainer</div>
+    <div class="eyebrow">CipherOps · explainer</div>
     <h1>Why DNSSEC needs MTL</h1>
-    <p class="lede">How a DNS answer gets forged, how DNSSEC and its chain of trust stop it, why a quantum computer would undo that, and why the post-quantum fix runs into packet sizes.</p>
+    <p class="lede">How a DNS answer gets forged, how DNSSEC stops it, why a quantum computer would undo that, why the post-quantum fix runs into packet sizes, how MTL helps, and where the IETF drafts stand.</p>
   </header>
 
   <nav class="scenes" id="scenes" aria-label="Scenes"></nav>
@@ -166,6 +174,7 @@ svg.instant *{transition:none!important}
   <div class="hint">Keys: → next · ← back · space play/pause</div>
 
   <div class="foot">
+    <div>Draft status was checked on the IETF Datatracker on 30 October 2026. It changes, so check the Datatracker for the latest.</div>
     <div>Addresses are documentation ranges (192.0.2.0/24, 203.0.113.0/24); bank.example is a placeholder zone.</div>
     <div>Response sizes are approximate: one signed A answer ≈ 113 bytes of DNS overhead plus the signature. MTL sizes use the maximum-size formulas in draft-harvey-cfrg-mtl-mode for a 10,005-RRset zone (14 hashes at most, so 60 + 14 × 16 = 284 bytes). SLH-DSA signing time is the team harness's figure for one core. This page explains the problem; the benchmark's measured results are in the run report (<code>report.html</code>) and in the dashboard's Compare tile.</div>
   </div>
@@ -364,10 +373,10 @@ const scenes = [
     m:';; flags: qr rd ra ad    bank.example. A 203.0.113.66   ; "secure"',
     run: async c => { c.show('lq'); await c.send('fz',[300,380],[760,320],1000,true);
       c.show('rb'); c.text('rb','Secure ✓ (on a forgery)'); c.cls('rb','bad'); c.cls('res','bad'); } },
-  { h:'Why this has to start now', p:'Unlike encrypted traffic, signatures can\'t be broken in retrospect: the risk begins the day such a machine exists. But replacing the algorithm at the root, in every TLD, in signing tools and in millions of resolvers takes years, so the replacement has to be ready well before.',
+  { h:'Why this has to start now', p:'Encrypted traffic can be recorded now and decrypted later. A signature can\'t be attacked that way: the risk begins the day a capable machine exists (the IETF strategy draft calls it "trust now, forge later"). But replacing the algorithm at the root, in every TLD, in signing tools and in millions of resolvers takes years, so the replacement has to be ready well before.',
     m:'risk window = time to migrate − time until a quantum computer exists',
     run: async c => { c.show('why'); } },
-  { h:'Post-quantum signatures close the hole', p:'Post-quantum schemes rest on problems Shor\'s algorithm doesn\'t solve: lattices (ML-DSA, Falcon) or hash functions alone (SLH-DSA). Recovered keys are no longer possible and the forgery fails. The catch is their size.',
+  { h:'Post-quantum signatures close the hole', p:'Post-quantum schemes rest on problems Shor\'s algorithm doesn\'t solve: lattices (ML-DSA, Falcon) or hash functions alone (SLH-DSA). NIST has standardised ML-DSA (FIPS 204) and SLH-DSA (FIPS 205). A private key can no longer be recovered, so the forgery fails. The catch is size.',
     m:'ML-DSA (FIPS 204) · SLH-DSA (FIPS 205) · Falcon (FN-DSA, draft FIPS 206)',
     run: async c => { c.show('why',false); c.show('fz',false); c.show('lq',false);
       [['k0','SLH-DSA'],['k1','ML-DSA-44'],['k2','SLH-DSA']].forEach(([k,s])=>{c.cls(k,'bad',false); c.cls(k,'good'); c.text(k,s);});
@@ -399,10 +408,10 @@ const scenes = [
   { h:'Classical signatures are small', p:'Today\'s DNSSEC algorithms produce 64 to 256-byte signatures. A signed answer fits comfortably in one UDP packet.',
     m:'ECDSA P-256 · Ed25519 · RSA-2048  →  all under 400 bytes',
     run: async c => { [0,1,2].forEach(i=>{c.show('b'+i); c.show('v'+i);}); await c.wait(500); } },
-  { h:'Lattice signatures start to overflow', p:'Falcon-512 still fits for a single record. ML-DSA-44\'s 2,420-byte signature pushes one answer past the 1,232-byte UDP buffer that resolvers have used by default since DNS Flag Day 2020.',
+  { h:'Lattice signatures start to overflow', p:'Falcon-512 still fits for a single record. ML-DSA signatures are 2,420 to 4,627 bytes, so even the smallest pushes one answer past the 1,232-byte UDP buffer that resolvers have used by default since DNS Flag Day 2020.',
     m:'ML-DSA-44 answer ≈ 2,533 B  >  1,232 B',
     run: async c => { [3,4].forEach(i=>{c.show('b'+i); c.show('v'+i);}); await c.wait(500); } },
-  { h:'SLH-DSA is far over the limit', p:'SLH-DSA-SHA2-128s, the scheme in this benchmark, has 7,856-byte signatures. One signed answer is about 6.5 times the UDP limit, and bigger than five Ethernet frames.',
+  { h:'SLH-DSA is far over the limit', p:'SLH-DSA-SHA2-128s, the scheme in this benchmark, has 7,856-byte signatures (the SLH-DSA family goes up to 49,856). One signed answer is about 6.5 times the UDP limit, and bigger than five Ethernet frames.',
     m:'SLH-DSA-SHA2-128s answer ≈ 7,969 B  ≈ 6.5 × 1,232 B',
     run: async c => { c.show('b5'); c.show('v5'); await c.wait(600); } },
   { h:'What happens on the wire', p:'An oversized UDP answer comes back truncated (TC flag) and the resolver retries over TCP: a handshake plus extra round trips on every such lookup. Raising the buffer instead means IP fragmentation, about six fragments here, and fragments are often dropped by firewalls, so lookups time out.',
@@ -450,9 +459,39 @@ const scenes = [
   { h:'Back near classical sizes', p:'Per answer, MTL brings SLH-DSA down from about 8 KB to about 400 bytes, under the UDP limit. These are the draft\'s maximum-size formulas; the benchmark measures the real values.',
     m:'≈7,969 B  →  ≈397 B per signed answer',
     run: async c => { [0,1,2].forEach(i=>{c.show('b'+i); c.show('v'+i);}); await c.wait(600); } },
-  { h:'The trade-offs the benchmark measures', p:'A resolver without the ladder pays more than plain SLH-DSA, once. New or changed records only verify after a new ladder is signed. How often that happens and what it costs is what the benchmark\'s cache and evolving-zone results show.',
+  { h:'The trade-offs the benchmark measures', p:'A resolver without the ladder pays more than plain SLH-DSA, once. New or changed records only verify after a new ladder is signed. How often that happens and what it costs is what the benchmark\'s cache and zone-update results show.',
     m:'cache hit → condensed (small)    cache miss → full (≈8.7 KB)',
     run: async c => { c.show('miss'); } },
+]},
+{ id:'ietf', name:'Where the IETF stands', build:()=>{
+    const card=(id,x,y,title,draft,lines,status)=>`<g id="${id}" class="dcard fx" transform="translate(${x} ${y})"><rect width="440" height="150" rx="10"/><text class="dt" x="16" y="28">${title}</text><text class="mono muted" x="16" y="48">${draft}</text>${lines.map((l,i)=>`<text class="dl" x="16" y="${76+i*20}">${l}</text>`).join('')}<text class="mono ds" x="16" y="138">${status}</text></g>`;
+    const panel=(id,head,lines)=>`<g id="${id}" class="dpanel fx" transform="translate(30 352)"><rect width="900" height="130" rx="10"/><text class="dh" x="16" y="28">${head}</text>${lines.map((l,i)=>`<text x="16" y="${58+i*24}">${l}</text>`).join('')}</g>`;
+    return DEFS +
+      card('d0',30,20,'MTL mode','draft-harvey-cfrg-mtl-mode-09',['A mode of operation for any signature scheme:','sign a hash ladder once; each answer carries a short path.'],'Individual draft · Mar 2026 · expired') +
+      card('d1',490,20,'SLH-DSA-MTL in DNSSEC','draft-fregly-dnsop-slh-dsa-mtl-dnssec-06',['Publishing SLH-DSA-MTL keys and signatures in DNSSEC,','with EDNS(0) guidance for fetching the full signature.','This is the scheme CipherOps measures.'],'Individual draft · Mar 2026 · expired') +
+      card('d2',30,186,'ML-DSA-MTL in DNSSEC','draft-kaizer-dnsop-ml-dsa-mtl-dnssec-03',['MTL applied to ML-DSA-44 (SHAKE-128), described as a','conservative algorithm. Smaller signature: 2,420 B.'],'Individual draft · Oct 2026 · active') +
+      card('d3',490,186,'PQC strategy for DNSSEC','draft-sheth-pqc-dnssec-strategy-02',['A conservative algorithm run in MTL mode, paired with','a low-impact drop-in used like today\'s signatures.'],'Informational, individual · Oct 2026 · active') +
+      panel('open','What is still open',['Individual Internet-Drafts: none is adopted by a working group or published as an RFC yet.','No DNSSEC algorithm numbers are assigned for these schemes; IANA registration is future work.','Datatracker marks the first two as expired (last revised March 2026); the two newest are active.']) +
+      panel('meaning','What it means for this benchmark',['CipherOps measures MTL with SLH-DSA, the largest of the common signatures, so the effects are easy to see.','The same trade-offs (ladder fetch, cache use, update cost) should carry over to ML-DSA-MTL, with smaller numbers.','Measuring ML-DSA-MTL is a follow-up; it is not part of this benchmark.']);
+  }, steps:[
+  { h:'The mode: MTL', p:'MTL mode is specified in draft-harvey-cfrg-mtl-mode (revision 09, March 2026). It works with any signature scheme, and its security rests only on hash functions, so it is quantum-safe as long as the hash is.',
+    m:'draft-harvey-cfrg-mtl-mode-09 · individual draft',
+    run: async c => { ['d0','d1','d2','d3'].forEach(k=>c.cls(k,'hl',k==='d0')); c.show('d0'); } },
+  { h:'The DNSSEC profile this benchmark measures', p:'draft-fregly-dnsop-slh-dsa-mtl-dnssec (revision 06, March 2026) defines SLH-DSA-MTL keys and signatures in DNSSEC, with EDNS(0) guidance for fetching the full signature. CipherOps runs this scheme on the Verisign reference code.',
+    m:'draft-fregly-dnsop-slh-dsa-mtl-dnssec-06 · individual draft',
+    run: async c => { ['d0','d1','d2','d3'].forEach(k=>c.cls(k,'hl',k==='d1')); c.show('d0'); c.show('d1'); } },
+  { h:'The newest draft uses ML-DSA', p:'draft-kaizer-dnsop-ml-dsa-mtl-dnssec (revision 03, October 2026) applies MTL to ML-DSA-44 as a "conservative" algorithm. The signature underneath is smaller (2,420 bytes against 7,856), so the full signature a resolver fetches once is smaller too.',
+    m:'ML-DSA-44 + SHAKE-128 · signature 2,420 B',
+    run: async c => { ['d0','d1','d2','d3'].forEach(k=>c.cls(k,'hl',k==='d2')); ['d0','d1','d2'].forEach(k=>c.show(k)); } },
+  { h:'A strategy with two kinds of algorithm', p:'draft-sheth-pqc-dnssec-strategy (revision 02, October 2026, Informational) proposes a conservative algorithm in MTL mode as the resilient fallback, plus a low-impact "drop-in" algorithm used like today\'s signatures, such as MAYO or SNOVA from NIST\'s on-ramp. It asks for tests of truncation, TCP fallback and latency in BIND, NSD and CoreDNS.',
+    m:'conservative + MTL mode  ·  low-impact drop-in',
+    run: async c => { ['d0','d1','d2','d3'].forEach(k=>{c.cls(k,'hl',k==='d3'); c.show(k);}); } },
+  { h:'What is still open', p:'All four are individual drafts. None has been adopted by a working group or published as an RFC, and no DNSSEC algorithm number is assigned yet. Treat message formats and sizes as likely to change.',
+    m:'status: work in progress',
+    run: async c => { ['d0','d1','d2','d3'].forEach(k=>{c.cls(k,'hl',false); c.show(k);}); c.show('open'); } },
+  { h:'What it means for this benchmark', p:'CipherOps measures MTL on SLH-DSA, the largest of the common signatures, so truncation, TCP fallback, cache use and update cost are easy to see. The same trade-offs should apply to ML-DSA-MTL with smaller numbers; measuring that is a follow-up.',
+    m:'measured here: SLH-DSA-MTL · next: ML-DSA-MTL',
+    run: async c => { ['d0','d1','d2','d3'].forEach(k=>{c.cls(k,'hl',k==='d1'); c.show(k);}); c.show('open',false); c.show('meaning'); } },
 ]},
 ];
 

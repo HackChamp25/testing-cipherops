@@ -32,3 +32,20 @@ def test_size_figures_match_the_formulas():
 def test_companion_text_agrees_with_the_page():
     text = (PAGE.parent / "README.md").read_text(encoding="utf-8")
     assert "284 bytes" in text and "7,856" in text and "8.7 KB" in text and "why-dnssec-needs-mtl.html" in text
+
+
+def test_ops_walkthrough_is_self_contained():
+    html = (PAGE.parent / "mtl-dnssec-ops-walkthrough.html").read_text(encoding="utf-8")
+    assert not re.search(r"""<(?:link|script|img|iframe)[^>]+(?:src|href)\s*=\s*["']?https?://""", html)
+    assert "fonts.googleapis" not in html and "@import" not in html
+    assert "7,856" in html  # the SLH-DSA-SHA2-128s signature size, as in the main explainer
+    # external references are links to sources only, and open outside the dashboard frame
+    assert all('target="_blank"' in a for a in re.findall(r"<a [^>]*href=\"https?://[^>]*>", html))
+
+
+def test_explainer_has_the_ietf_status_scene_with_dated_drafts():
+    html = PAGE.read_text(encoding="utf-8")
+    for draft in ("draft-harvey-cfrg-mtl-mode-09", "draft-fregly-dnsop-slh-dsa-mtl-dnssec-06",
+                  "draft-kaizer-dnsop-ml-dsa-mtl-dnssec-03", "draft-sheth-pqc-dnssec-strategy-02"):
+        assert draft in html
+    assert "30 October 2026" in html and "individual" in html.lower()

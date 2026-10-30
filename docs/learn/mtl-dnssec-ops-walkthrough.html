@@ -1,0 +1,620 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>MTL DNSSEC Ops Walkthrough</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: control bar → network stage (animated packets) → step card + signer state/ledger, two columns on wide screens */
+:root{
+  --bg:#EDF0F4; --surface:#FFFFFF; --ink:#142030; --muted:#566377; --line:#C9D1DC; --node:#E4E9F0;
+  --heavy:#B0500A; --heavy-soft:#F7E4D3; --mtl:#0A6F7B; --mtl-soft:#D2EBEE;
+  --warn:#B42318; --ok:#1E7A3C; --code-bg:#14202E; --code-ink:#DCE5EF; --code-dim:#8FA0B5;
+  --f-display:"Archivo","Arial Narrow",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0D131B; --surface:#151E29; --ink:#E2E8EF; --muted:#94A1B3; --line:#2A3646; --node:#1C2734;
+  --heavy:#F2974D; --heavy-soft:#3A2515; --mtl:#4FC4D0; --mtl-soft:#103239;
+  --warn:#F4786C; --ok:#5DCB8B; --code-bg:#0A0F15; --code-ink:#DCE5EF; --code-dim:#7D8DA2; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0D131B; --surface:#151E29; --ink:#E2E8EF; --muted:#94A1B3; --line:#2A3646; --node:#1C2734;
+  --heavy:#F2974D; --heavy-soft:#3A2515; --mtl:#4FC4D0; --mtl-soft:#103239;
+  --warn:#F4786C; --ok:#5DCB8B; --code-bg:#0A0F15; --code-ink:#DCE5EF; --code-dim:#7D8DA2; color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.55}
+body[data-mode="plain"]{--acc:var(--heavy);--acc-soft:var(--heavy-soft)}
+body[data-mode="mtl"]{--acc:var(--mtl);--acc-soft:var(--mtl-soft)}
+.wrap{max-width:1180px;margin:0 auto;padding-block:24px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:18px}
+header{display:flex;flex-direction:column;gap:6px}
+.eyebrow{font-family:var(--f-mono);font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+h1{font-family:var(--f-display);font-stretch:80%;font-weight:750;font-size:clamp(28px,4.4vw,44px);line-height:1.05;margin:0;text-wrap:balance;letter-spacing:-.01em}
+h1 .vs{color:var(--muted);font-weight:500}
+h1 .a{color:var(--heavy)} h1 .b{color:var(--mtl)}
+.lede{margin:0;max-width:72ch;color:var(--muted)}
+
+.controls{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);padding-block:8px;border-bottom:1px solid var(--line)}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
+.seg button{font:500 13px/1 var(--f-body);color:var(--muted);background:none;border:0;padding:9px 12px;cursor:pointer}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{color:var(--ink);background:var(--node);font-weight:600}
+.seg.mode button[data-mode="plain"][aria-pressed="true"]{background:var(--heavy-soft);color:var(--heavy)}
+.seg.mode button[data-mode="mtl"][aria-pressed="true"]{background:var(--mtl-soft);color:var(--mtl)}
+.nav{display:flex;gap:6px;align-items:center;margin-left:auto}
+.btn{font:600 13px/1 var(--f-body);border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:8px;padding:9px 12px;cursor:pointer;min-width:40px}
+.btn.primary{background:var(--acc);border-color:var(--acc);color:var(--surface)}
+.btn:disabled{opacity:.4;cursor:default}
+button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.dots{display:flex;gap:4px;flex-wrap:wrap}
+.dots button{width:26px;height:26px;border-radius:6px;border:1px solid var(--line);background:var(--surface);color:var(--muted);font:500 11px/1 var(--f-mono);cursor:pointer;padding:0}
+.dots button.done{background:var(--acc-soft);color:var(--acc);border-color:transparent}
+.dots button[aria-current="step"]{background:var(--acc);color:var(--surface);border-color:var(--acc)}
+
+.stage{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow-x:auto}
+.stage svg{display:block;width:100%;min-width:560px;height:auto}
+.link{stroke:var(--line);stroke-width:1.5;fill:none}
+.link.deleg{stroke-dasharray:4 4}
+.linklabel{font:500 10px var(--f-mono);fill:var(--muted)}
+.nd rect{fill:var(--node);stroke:var(--line);stroke-width:1.2;transition:stroke .3s,fill .3s}
+.nd .t{font:700 14px var(--f-display);font-stretch:85%;fill:var(--ink)}
+.nd .s{font:400 10.5px var(--f-mono);fill:var(--muted)}
+.nd.on rect{stroke:var(--acc);stroke-width:2.2;fill:var(--acc-soft)}
+.pk circle{stroke:var(--surface);stroke-width:2}
+.pk rect{stroke:none}
+.pk text{font:500 11px var(--f-mono)}
+.legend{font:400 11px var(--f-mono);fill:var(--muted)}
+
+.grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:880px){.grid{grid-template-columns:minmax(0,1fr)}}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:14px;min-width:0}
+.stepnum{font:500 12px var(--f-mono);color:var(--acc);letter-spacing:.05em;text-transform:uppercase}
+h2{font-family:var(--f-display);font-stretch:85%;font-weight:700;font-size:24px;line-height:1.15;margin:0;text-wrap:balance}
+.do{margin:0;max-width:65ch}
+.diff{display:flex;gap:10px;align-items:baseline;font-size:13.5px;border-top:1px solid var(--line);padding-top:12px;color:var(--muted)}
+.diff b{font:600 11px var(--f-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--ink);white-space:nowrap}
+.code{background:var(--code-bg);color:var(--code-ink);border-radius:8px;overflow-x:auto;font:400 12.5px/1.6 var(--f-mono);margin:0}
+.code .hd{display:flex;justify-content:space-between;padding:7px 12px;border-bottom:1px solid #ffffff1a;color:var(--code-dim);font-size:11px;letter-spacing:.05em;text-transform:uppercase}
+.code pre{margin:0;padding:12px;white-space:pre}
+.code .c{color:var(--code-dim)}
+
+h3{font:600 11.5px var(--f-mono);letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin:0}
+.state svg{display:block;width:100%;height:auto}
+.tree-line{stroke:var(--line);stroke-width:1.3}
+.tree-line.hot{stroke:var(--acc);stroke-width:2.2}
+.tleaf{fill:var(--node);stroke:var(--line)}
+.tleaf.pending{fill:none;stroke:var(--muted);stroke-dasharray:3 3}
+.tleaf.new{fill:var(--acc-soft);stroke:var(--acc)}
+.tleaf.hot,.tnode.hot{fill:var(--acc);stroke:var(--acc)}
+.tnode{fill:var(--surface);stroke:var(--muted);stroke-width:1.2}
+.tnode.sib{fill:var(--surface);stroke:var(--acc);stroke-width:2;stroke-dasharray:3 2}
+.trung{fill:var(--acc-soft);stroke:var(--acc);stroke-width:1.6}
+.tlabel{font:400 10px var(--f-mono);fill:var(--muted)}
+.tlabel.hot{fill:var(--acc);font-weight:500}
+.tladder{fill:none;stroke:var(--acc);stroke-width:1.6}
+.tseal{font:600 10.5px var(--f-mono);fill:var(--acc)}
+.tcache{font:500 9.5px var(--f-mono);fill:var(--ok)}
+
+.sigs{display:flex;flex-direction:column;gap:4px}
+.sig{display:grid;grid-template-columns:96px minmax(0,1fr) 64px;gap:8px;align-items:center;font:400 11.5px var(--f-mono)}
+.sig .bar{height:12px;border-radius:3px;background:var(--heavy-soft);border:1px solid var(--heavy)}
+.sig.pending .bar{background:none;border:1px dashed var(--muted)}
+.sig.new .bar{background:var(--heavy)}
+.sig.hot .bar{outline:2px solid var(--ink);outline-offset:1px}
+.sig .n{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+.sig.pending .n{font-style:italic}
+
+.ledger{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.ledger div{background:var(--surface);padding:10px 12px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.ledger .k{font:400 11.5px var(--f-body);color:var(--muted)}
+.ledger .v{font:700 22px var(--f-display);font-stretch:85%;font-variant-numeric:tabular-nums}
+.ledger .v small{font:400 12px var(--f-mono);color:var(--muted)}
+.ledger .flash{animation:fl 1s ease}
+@keyframes fl{from{color:var(--acc)}to{color:var(--ink)}}
+.meter{display:flex;flex-direction:column;gap:6px}
+.meter .track{position:relative;height:16px;background:var(--node);border-radius:4px}
+.meter .fill{position:absolute;inset:0 auto 0 0;border-radius:4px;background:var(--acc);transition:width .6s ease}
+.meter .fill.over{background:var(--warn)}
+.meter .lim{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink)}
+.meter .row{display:flex;justify-content:space-between;gap:8px;font:400 11.5px var(--f-mono);color:var(--muted);flex-wrap:wrap}
+.meter .row b{color:var(--ink);font-weight:500}
+.notes{font-size:13px;color:var(--muted);display:flex;flex-direction:column;gap:6px;max-width:90ch}
+.notes p{margin:0}
+.notes a{color:var(--acc)}
+@media (prefers-reduced-motion:reduce){.meter .fill{transition:none}.ledger .flash{animation:none}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">CipherOps · DNS operator's view · lab zone example.in.</div>
+    <h1><span class="a">SLH-DSA</span> <span class="vs">vs</span> <span class="b">SLH-DSA-MTL</span>: what the operator actually does</h1>
+    <p class="lede">Follow a DNS operator bringing DNSSEC up for a zone under <b>in.</b>, then adding one record. Switch between SLH-DSA and SLH-DSA-MTL at any step to compare the work, the bytes on the wire and what the resolver does.</p>
+  </header>
+
+  <div class="controls">
+    <div class="seg scen" role="group" aria-label="Task">
+      <button id="sc-setup" data-scen="setup" aria-pressed="true">1 · Initial setup</button>
+      <button id="sc-add" data-scen="add" aria-pressed="false">2 · Add a record</button>
+    </div>
+    <div class="seg mode" role="group" aria-label="Signing mode">
+      <button id="md-plain" data-mode="plain" aria-pressed="true">SLH-DSA</button>
+      <button id="md-mtl" data-mode="mtl" aria-pressed="false">SLH-DSA-MTL</button>
+    </div>
+    <div class="dots" id="dots" aria-label="Steps"></div>
+    <div class="nav">
+      <button class="btn" id="prev" aria-label="Previous step">&larr;</button>
+      <button class="btn primary" id="play">Play</button>
+      <button class="btn" id="next" aria-label="Next step">&rarr;</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <svg id="net" viewBox="0 0 860 400" role="img" aria-label="DNS topology: root, TLD, authoritative server, signer, recursive resolver and client">
+      <g id="links"></g><g id="nodes"></g><g id="packets"></g>
+    </svg>
+  </div>
+
+  <div class="grid">
+    <section class="card" aria-live="polite">
+      <div class="stepnum" id="stepnum"></div>
+      <h2 id="title"></h2>
+      <p class="do" id="do"></p>
+      <div class="code"><div class="hd"><span id="cmdkind">shell</span><span>illustrative</span></div><pre id="cmd"></pre></div>
+      <div class="diff"><b id="difflabel">Difference</b><span id="diff"></span></div>
+    </section>
+
+    <section class="card">
+      <h3 id="statehd">Signer state</h3>
+      <div class="state" id="state"></div>
+      <h3>Running totals for example.in</h3>
+      <div class="ledger">
+        <div><span class="k">SLH-DSA signing operations</span><span class="v" id="l-signs">0</span></div>
+        <div><span class="k">Signature bytes produced</span><span class="v" id="l-bytes">0</span></div>
+        <div><span class="k">SLH-DSA verifications at resolver</span><span class="v" id="l-ver">0</span></div>
+        <div><span class="k">Transport for latest answer</span><span class="v" id="l-tr">&ndash;</span></div>
+      </div>
+      <div class="meter">
+        <div class="row"><span>Latest answer from ns1</span><b id="m-val">no query yet</b></div>
+        <div class="track"><div class="fill" id="m-fill" style="width:0"></div><div class="lim" id="m-lim"></div></div>
+        <div class="row"><span>0 B</span><span>| 1,232 B EDNS UDP limit</span><span>8.4 KB</span></div>
+      </div>
+    </section>
+  </div>
+
+  <div class="notes">
+    <p>Byte figures are approximate and use the draft's maximum-size formulas, the same as the <i>Why DNSSEC needs MTL</i> page. An SLH-DSA-SHA2-128s signature is 7,856 B and the public key 32 B (FIPS 205). A condensed signature is at most 76 B + 16 B × floor(log2 of the series length), so 124 B for the 8 to 15 leaves here. The signed ladder is the 7,856 B signature plus the rung hashes (about 8.1 KB here). A DNS answer adds about 113 B of overhead. Verification counts cover example.in only; each signed parent zone adds the same pattern. Measure exact values with the benchmark.</p>
+    <p>Commands follow the stock ldns, NSD and Unbound tools and the Verisign MTL forks; algorithm names and code points depend on the build, since IANA numbers for SLH-DSA-MTL are still TBD. Sources: <a href="https://datatracker.ietf.org/doc/draft-fregly-dnsop-slh-dsa-mtl-dnssec/" target="_blank" rel="noopener">draft-fregly-dnsop-slh-dsa-mtl-dnssec</a>, <a href="https://datatracker.ietf.org/doc/draft-harvey-cfrg-mtl-mode/" target="_blank" rel="noopener">draft-harvey-cfrg-mtl-mode</a>, <a href="https://datatracker.ietf.org/doc/draft-kaizer-dnsop-ml-dsa-mtl-dnssec/" target="_blank" rel="noopener">draft-kaizer-dnsop-ml-dsa-mtl-dnssec</a>, <a href="https://datatracker.ietf.org/doc/draft-sheth-pqc-dnssec-strategy/" target="_blank" rel="noopener">draft-sheth-pqc-dnssec-strategy</a>, <a href="https://github.com/verisign/MTL" target="_blank" rel="noopener">github.com/verisign/MTL</a>.</p>
+    <p><b>Where the standards stand</b> (IETF Datatracker, 30 Oct 2026). MTL mode (draft-harvey-cfrg-mtl-mode-09, March 2026), SLH-DSA-MTL for DNSSEC (draft-fregly-dnsop-slh-dsa-mtl-dnssec-06, March 2026), ML-DSA-MTL for DNSSEC (draft-kaizer-dnsop-ml-dsa-mtl-dnssec-03, October 2026) and the PQC strategy for DNSSEC (draft-sheth-pqc-dnssec-strategy-02, October 2026) are individual Internet-Drafts: work in progress, not yet adopted by a working group or published as RFCs, and the first two have not been updated since March. The newest draft applies MTL to ML-DSA-44, whose signature is 2,420 B instead of 7,856 B. The strategy draft proposes running a conservative algorithm in MTL mode next to a low-impact drop-in algorithm. The workflow above should carry over to ML-DSA-MTL; the algorithm name and the sizes change.</p>
+  </div>
+</div>
+
+<script>
+(function(){
+const NODES={
+  root:{x:130,y:58,t:"Root zone  .",s:"lab root servers"},
+  tld:{x:130,y:190,t:"TLD  in.",s:"registry servers"},
+  auth:{x:130,y:336,t:"ns1.example.in",s:"authoritative · NSD"},
+  signer:{x:430,y:336,t:"Signer",s:"ops workstation · ldns"},
+  resolver:{x:730,y:190,t:"Recursive resolver",s:"Unbound · validating"},
+  client:{x:730,y:336,t:"Client",s:"dig / stub resolver"}
+};
+const LINKS=[["root","tld","delegation",1],["tld","auth","delegation",1],["signer","auth","zone push"],["signer","tld","DS via registrar"],["resolver","root"],["resolver","tld"],["resolver","auth"],["resolver","client"]];
+
+const LEAVES_A=["SOA","NS","MX","TXT","ns1 A","www A","www AAAA","mail A"];
+const LEAVES_B=LEAVES_A.concat(["api A","SOA v2","NSEC api","NSEC @"]);
+
+const Z={signs:0,bytes:0,ver:0,resp:null};
+const P9={signs:9,bytes:70704}, M2={signs:2,bytes:16780};
+
+function L(o){return Object.assign({},Z,o)}
+
+const SCEN={
+setup:[
+ {title:"Write the unsigned zone",actors:["signer"],shared:true,
+  do:"On the signing workstation, write the zone file for example.in. It holds eight RRsets: SOA, NS, MX, TXT and address records for ns1, www and mail. Nothing about this file depends on the signing mode.",
+  cmd:{kind:"zone file",txt:`$ORIGIN example.in.
+$TTL 3600
+@     IN SOA  ns1 hostmaster 2026103001 7200 3600 1209600 3600
+@     IN NS   ns1
+@     IN MX   10 mail
+@     IN TXT  "v=spf1 mx -all"
+ns1   IN A    192.0.2.53
+www   IN A    192.0.2.10
+www   IN AAAA 2001:db8::10
+mail  IN A    192.0.2.25`},
+  state:{leaves:LEAVES_A,signed:0,rungs:[],cached:[],path:-1},
+  ledger:{plain:L(),mtl:L()}},
+
+ {title:"Generate the KSK and ZSK",actors:["signer"],
+  diff:"Same 32-byte SLH-DSA key either way. Only the algorithm differs: SLH-DSA signs RRsets, SLH-DSA-MTL signs ladders.",
+  plain:{do:"Generate a key-signing key and a zone-signing key with SLH-DSA-SHA2-128s. The public key is just 32 bytes, so the DNSKEY RRset stays small. The cost appears later, in the 7,856-byte signatures.",
+   cmd:{kind:"shell",txt:`<c># PQC-enabled ldns build; algorithm name depends on the build</c>
+$ ldns-keygen -k -a SLH-DSA-SHA2-128s example.in   <c># KSK</c>
+$ ldns-keygen    -a SLH-DSA-SHA2-128s example.in   <c># ZSK</c>
+Kexample.in.+NNN+20326        <c># public key: 32 B</c>
+Kexample.in.+NNN+41505`}},
+  mtl:{do:"Generate the same two keys for the SLH-DSA-MTL-SHA2-128s algorithm. The key is an ordinary 32-byte SLH-DSA key, but it will sign Merkle tree ladders instead of individual RRsets. The IANA algorithm number is still TBD, so the lab uses the build's experimental code point.",
+   cmd:{kind:"shell",txt:`<c># Verisign mtl-mode-ldns build</c>
+$ ldns-keygen -k -a SLH-DSA-MTL-SHA2-128s example.in   <c># KSK</c>
+$ ldns-keygen    -a SLH-DSA-MTL-SHA2-128s example.in   <c># ZSK</c>
+Kexample.in.+NNN+20326        <c># public key: 32 B</c>
+Kexample.in.+NNN+41505`}},
+  state:{leaves:LEAVES_A,signed:0,rungs:[],cached:[],path:-1},
+  ledger:{plain:L(),mtl:L()}},
+
+ {title:"Sign the zone",actors:["signer"],
+  diff:"9 full SLH-DSA signatures (≈70.7 KB) vs 2 SLH-DSA signatures plus 8 condensed signatures (≈16.8 KB).",
+  plain:{do:"ldns-signzone signs every RRset on its own: 8 signatures with the ZSK and 1 with the KSK over the DNSKEY RRset. That is 9 SLH-DSA signing operations, each producing a 7,856-byte RRSIG.",
+   cmd:{kind:"shell",txt:`$ ldns-signzone -o example.in example.in.zone \\
+      Kexample.in.+NNN+20326 Kexample.in.+NNN+41505
+<c>→ example.in.zone.signed</c>
+<c>  9 RRSIGs × 7,856 B = 70,704 B  (8 ZSK, 1 KSK)</c>`}},
+  mtl:{do:"The signer appends the 8 RRsets to a series as Merkle tree leaves, hashes them into a tree and computes the ladder, here a single rung covering leaves 1–8. It signs that ladder once with SLH-DSA. Each RRSIG carries a condensed signature: the leaf's authentication path, up to 124 bytes. The signed ladder is stored for full-format answers. The KSK signs the DNSKEY RRset in its own one-leaf series.",
+   cmd:{kind:"shell",txt:`$ ldns-signzone -o example.in example.in.zone \\
+      Kexample.in.+NNN+20326 Kexample.in.+NNN+41505
+<c>→ series leaves 1–8 → ladder [1–8]</c>
+<c>→ 1 SLH-DSA signature over the ladder (+1 for the KSK)</c>
+<c>→ 8 condensed RRSIGs, MTL-Type 0, ≤124 B each</c>`}},
+  state:{leaves:LEAVES_A,signed:8,rungs:[[0,7]],cached:[],path:-1},
+  ledger:{plain:L(P9),mtl:L(M2)}},
+
+ {title:"Load the signed zone on ns1",actors:["signer","auth"],
+  diff:"NSD must be MTL-aware to hand out full signatures when a resolver asks for them with the mtl-mode-full EDNS option.",
+  plain:{do:"Copy example.in.zone.signed to ns1, check it and reload NSD. Any NSD build that knows the algorithm can serve it. Every answer will carry the full 7,856-byte RRSIG.",
+   packets:[["signer","auth","signed zone · ≈71 KB sigs","acc"]],
+   cmd:{kind:"shell",txt:`<c># /etc/nsd/nsd.conf</c>
+zone:
+    name: "example.in"
+    zonefile: "/etc/nsd/zones/example.in.zone.signed"
+
+$ nsd-checkzone example.in /etc/nsd/zones/example.in.zone.signed
+$ nsd-control reload example.in`}},
+  mtl:{do:"Load the zone on an MTL-aware NSD (Verisign's mtl-mode-nsd). By default it answers with condensed signatures. When a query carries the mtl-mode-full EDNS(0) option, it returns the full signature, which adds the signed ladder.",
+   packets:[["signer","auth","signed zone · ≈17 KB sigs","acc"]],
+   cmd:{kind:"shell",txt:`<c># mtl-mode-nsd build · /etc/nsd/nsd.conf</c>
+zone:
+    name: "example.in"
+    zonefile: "/etc/nsd/zones/example.in.zone.signed"
+
+$ nsd-checkzone example.in /etc/nsd/zones/example.in.zone.signed
+$ nsd-control reload example.in`}},
+  state:{leaves:LEAVES_A,signed:8,rungs:[[0,7]],cached:[],path:-1},
+  ledger:{plain:L(P9),mtl:L(M2)}},
+
+ {title:"Send the DS record to the in. registry",actors:["signer","tld"],shared:true,
+  do:"Hash the KSK into a DS record and submit it through your registrar to the in. registry. The registry adds it to the in. zone and signs that DS RRset with the in. zone's own key. The DS is a SHA-256 digest of your key, so it is the same small record in both modes; only its algorithm field differs.",
+  packets:[["signer","tld","DS example.in (EPP)","acc"]],
+  cmd:{kind:"shell",txt:`$ ldns-key2ds -n -2 Kexample.in.+NNN+20326.key
+example.in. 3600 IN DS 20326 &lt;alg&gt; 2 &lt;sha-256 digest&gt;
+
+<c># submit via registrar → in. registry (EPP)</c>
+<c># registry publishes DS in in. and signs the DS RRset</c>`},
+  state:{leaves:LEAVES_A,signed:8,rungs:[[0,7]],cached:[],path:-1},
+  ledger:{plain:L(P9),mtl:L(M2)}},
+
+ {title:"Check the chain of trust up to the root",actors:["root","tld","auth"],shared:true,
+  do:"Validation works only if every zone above you is signed and holds the child's DS. The root holds a DS for in., and in. holds the DS for example.in. A resolver can follow the chain only if it understands each zone's algorithm, so a fully post-quantum chain needs the root and the TLD to sign with a PQC algorithm too. In a lab you run your own root and give the resolver its key.",
+  packets:[["root","tld","DS in.","acc"],["tld","auth","DS example.in","acc"]],
+  cmd:{kind:"shell",txt:`$ dig +dnssec DS in. @lab-root
+$ dig +dnssec DS example.in @ns.lab-tld
+<c># expect DS + RRSIG at each level</c>`},
+  state:{leaves:LEAVES_A,signed:8,rungs:[[0,7]],cached:[],path:-1},
+  ledger:{plain:L(P9),mtl:L(M2)}},
+
+ {title:"Configure the recursive resolver",actors:["resolver","root"],
+  diff:"The MTL-aware resolver adds a cache of verified ladders. That cache is what turns later checks into hash-only work.",
+  plain:{do:"Give Unbound the lab root key as its trust anchor. Keep the EDNS buffer at 1,232 bytes, the size recommended to avoid IP fragmentation. Any answer bigger than that comes back truncated and Unbound retries over TCP.",
+   packets:[["root","resolver","trust anchor: lab root KSK","acc"]],
+   cmd:{kind:"unbound.conf",txt:`server:
+    module-config: "validator iterator"
+    root-hints: "/etc/unbound/lab-root.hints"
+    trust-anchor-file: "/etc/unbound/lab-root.key"
+    edns-buffer-size: 1232`}},
+  mtl:{do:"Run an MTL-aware Unbound (mtl-mode-unbound) with the same trust anchor and buffer size. Besides the normal cache it keeps the ladders it has verified. A condensed signature whose authentication path ends at a cached rung is checked with hashes only.",
+   packets:[["root","resolver","trust anchor: lab root KSK","acc"]],
+   cmd:{kind:"unbound.conf",txt:`<c># mtl-mode-unbound build: also caches verified ladders</c>
+server:
+    module-config: "validator iterator"
+    root-hints: "/etc/unbound/lab-root.hints"
+    trust-anchor-file: "/etc/unbound/lab-root.key"
+    edns-buffer-size: 1232`}},
+  state:{leaves:LEAVES_A,signed:8,rungs:[[0,7]],cached:[],path:-1},
+  ledger:{plain:L(P9),mtl:L(M2)}},
+
+ {title:"First validated lookup: www.example.in",actors:["client","resolver","root","tld","auth"],
+  diff:"Both end on TCP the first time. MTL fetches the big signed ladder once per batch; plain SLH-DSA fetches a big signature for every RRset.",
+  plain:{do:"The client asks for www.example.in and the resolver walks root → in. → example.in. The answer from ns1 carries a 7,856-byte RRSIG, so the UDP reply is truncated (TC=1) and the resolver repeats the query over TCP. It then runs one SLH-DSA verification for the DNSKEY RRset and one for the A RRset.",
+   packets:[["client","resolver","www A?"],["resolver","root","query"],["root","resolver","referral + DS in."],["resolver","tld","query"],["tld","resolver","referral + DS"],["resolver","auth","A? +DO · UDP"],["auth","resolver","TC=1 · ≈8 KB won't fit","warn"],["resolver","auth","retry · TCP"],["auth","resolver","A + RRSIG ≈8 KB · TCP","acc"],["resolver","client","answer · AD=1","ok"]],
+   cmd:{kind:"shell",txt:`$ dig +dnssec www.example.in A @resolver
+<c>;; ns1 over UDP: TC=1  (≈8 KB > 1,232 B)</c>
+<c>;; resolver retries over TCP</c>
+<c>;; 2 SLH-DSA verifications: DNSKEY, A</c>
+;; flags: qr rd ra ad; ANSWER: 2`}},
+  mtl:{do:"The resolver first asks without the option. ns1 answers over UDP with a condensed signature, about 240 bytes in total. The resolver has no ladder for this series yet, so it asks again with mtl-mode-full over TCP and gets the signed ladder. It verifies the ladder once with SLH-DSA, caches it and checks the authentication path up to rung 1–8.",
+   packets:[["client","resolver","www A?"],["resolver","root","query"],["root","resolver","referral + DS in."],["resolver","tld","query"],["tld","resolver","referral + DS"],["resolver","auth","A? +DO · UDP"],["auth","resolver","condensed ≈240 B · UDP","acc"],["resolver","auth","mtl-mode-full · TCP"],["auth","resolver","full sig + ladder ≈8.3 KB","acc"],["resolver","client","answer · AD=1","ok"]],
+   cmd:{kind:"shell",txt:`$ dig +dnssec www.example.in A @resolver
+<c>;; ns1 over UDP: condensed RRSIG, ≈240 B</c>
+<c>;; ladder [1–8] not cached → re-query</c>
+<c>;; ns1 over TCP + EDNS mtl-mode-full: ≈8.3 KB</c>
+<c>;; ladder verified once (SLH-DSA), cached</c>
+;; flags: qr rd ra ad; ANSWER: 2`}},
+  state:{leaves:LEAVES_A,signed:8,rungs:[[0,7]],cached:[[0,7]],path:5},
+  ledger:{plain:L(Object.assign({ver:2,resp:7969,tr:"TCP"},P9)),mtl:L(Object.assign({ver:2,resp:8261,tr:"TCP",first:237},M2))}},
+
+ {title:"Next lookup in the zone: mail.example.in",actors:["client","resolver","auth"],
+  diff:"Plain: another ≈8 KB TCP answer and SLH-DSA verification. MTL: one small UDP packet and a few SHA-256 hashes.",
+  plain:{do:"The DNSKEY is cached, but the mail A record has its own full signature. The reply is truncated again, the resolver retries over TCP and runs one more SLH-DSA verification. This repeats for every new RRset it fetches.",
+   packets:[["client","resolver","mail A?"],["resolver","auth","A? +DO · UDP"],["auth","resolver","TC=1","warn"],["resolver","auth","retry · TCP"],["auth","resolver","A + RRSIG ≈8 KB","acc"],["resolver","client","answer · AD=1","ok"]],
+   cmd:{kind:"shell",txt:`$ dig +dnssec mail.example.in A @resolver
+<c>;; UDP truncated → TCP, ≈8 KB</c>
+<c>;; 1 SLH-DSA verification</c>
+;; flags: qr rd ra ad`}},
+  mtl:{do:"The condensed signature for mail A leads to the same rung as www, and that rung is cached. The answer fits in one UDP packet and the resolver verifies it with a few SHA-256 hashes along the authentication path. No SLH-DSA verification is needed.",
+   packets:[["client","resolver","mail A?"],["resolver","auth","A? +DO · UDP"],["auth","resolver","condensed ≈240 B · UDP","acc"],["resolver","client","answer · AD=1","ok"]],
+   cmd:{kind:"shell",txt:`$ dig +dnssec mail.example.in A @resolver
+<c>;; UDP, condensed RRSIG ≈240 B</c>
+<c>;; path ends at rung [1–8]: cached</c>
+<c>;; hashes only, no SLH-DSA verification</c>
+;; flags: qr rd ra ad`}},
+  state:{leaves:LEAVES_A,signed:8,rungs:[[0,7]],cached:[[0,7]],path:7},
+  ledger:{plain:L(Object.assign({ver:3,resp:7969,tr:"TCP"},P9)),mtl:L(Object.assign({ver:2,resp:237,tr:"UDP"},M2))}}
+],
+add:[
+ {title:"Add api.example.in and bump the serial",actors:["signer"],shared:true,
+  do:"Add the new record and raise the SOA serial from 2026103001 to 2026103002. One new name also changes the SOA and the NSEC chain, so four RRsets need signatures: api A, the new SOA, the new NSEC at api and the apex NSEC, whose next name is now api. NSEC records were left out of the earlier pictures to keep them readable.",
+  cmd:{kind:"zone file diff",txt:`  @    IN SOA ns1 hostmaster 2026103002 ...   <c>; was 2026103001</c>
++ api  IN A   192.0.2.50
+
+<c>; RRsets to (re)sign: api A, SOA, NSEC api (new), NSEC @</c>`},
+  state:{leaves:LEAVES_B,signed:8,rungs:[[0,7]],cached:[[0,7]],path:-1},
+  ledger:{plain:L(Object.assign({ver:3},P9)),mtl:L(Object.assign({ver:2},M2))}},
+
+ {title:"Re-sign the changed RRsets",actors:["signer"],
+  diff:"4 SLH-DSA signatures (≈31 KB) vs 1 ladder signature plus 4 condensed signatures of up to 124 B. Batching more edits into one ladder widens the gap.",
+  plain:{do:"Sign the four changed RRsets: four SLH-DSA signing operations and 31.4 KB of new RRSIG data. An incremental signer such as OpenDNSSEC or BIND inline-signing touches only these RRsets, but each one still costs a full signature.",
+   cmd:{kind:"pseudocode",txt:`signer> resign example.in --changed-only
+  api A, SOA, NSEC api, NSEC @
+  for each rrset: rrsig = SLH_DSA.sign(zsk, rrset)   <c># 7,856 B</c>
+  <c>→ 4 signing operations, 31,424 B</c>`}},
+  mtl:{do:"Append the four RRsets to the series as leaves 9–12. The ladder now has two rungs: 1–8 (unchanged) and 9–12. Sign the new ladder once with SLH-DSA and give each new leaf a condensed signature of up to 124 bytes. Existing RRSIGs stay as published. The draft suggests batching edits so one ladder signature covers many changes, at the cost of a short publication delay.",
+   cmd:{kind:"pseudocode",txt:`signer> resign example.in --changed-only
+  series.append(api A, SOA, NSEC api, NSEC @)   <c># leaves 9–12</c>
+  ladder = series.ladder()                      <c># rungs [1–8] [9–12]</c>
+  signed_ladder = SLH_DSA.sign(zsk, ladder)     <c># 1 operation</c>
+  for leaf in 9..12: rrsig = condensed(auth_path(leaf))  <c># ≤124 B</c>`}},
+  state:{leaves:LEAVES_B,signed:12,rungs:[[0,7],[8,11]],cached:[[0,7]],path:-1},
+  ledger:{plain:L({signs:13,bytes:102128,ver:3}),mtl:L({signs:3,bytes:25132,ver:2})}},
+
+ {title:"Push the update to ns1 and secondaries",actors:["signer","auth"],
+  diff:"The increment carries four full signatures in plain mode; in MTL mode it carries four condensed signatures and one signed ladder.",
+  plain:{do:"Reload the zone on ns1. Secondaries get a NOTIFY and pull an IXFR. The increment carries four full signatures, about 31 KB.",
+   packets:[["signer","auth","NOTIFY"],["signer","auth","IXFR ≈31 KB","acc"]],
+   cmd:{kind:"shell",txt:`$ nsd-control reload example.in
+$ nsd-control notify example.in     <c># secondaries pull IXFR</c>
+<c>  IXFR: 4 RRSIGs ≈ 31 KB</c>`}},
+  mtl:{do:"The IXFR carries four condensed signatures (up to 124 bytes each, about 0.5 KB) plus the new signed ladder of about 8.1 KB. Every secondary needs that signed ladder so it can answer mtl-mode-full queries. With a bigger batch the ladder cost is spread over more records.",
+   packets:[["signer","auth","NOTIFY"],["signer","auth","IXFR ≈8.6 KB","acc"]],
+   cmd:{kind:"shell",txt:`$ nsd-control reload example.in
+$ nsd-control notify example.in     <c># secondaries pull IXFR</c>
+<c>  IXFR: 4 condensed RRSIGs ≈ 0.5 KB + signed ladder ≈ 8.1 KB</c>`}},
+  state:{leaves:LEAVES_B,signed:12,rungs:[[0,7],[8,11]],cached:[[0,7]],path:-1},
+  ledger:{plain:L({signs:13,bytes:102128,ver:3}),mtl:L({signs:3,bytes:25132,ver:2})}},
+
+ {title:"Look up the new name: api.example.in",actors:["client","resolver","auth"],
+  diff:"Both need one SLH-DSA verification here. MTL pays it once for the whole batch; the next new record in leaves 9–12 is hash-only.",
+  plain:{do:"Same as any other lookup: the ≈8 KB answer is truncated over UDP, fetched over TCP and checked with one SLH-DSA verification.",
+   packets:[["client","resolver","api A?"],["resolver","auth","A? +DO · UDP"],["auth","resolver","TC=1","warn"],["resolver","auth","retry · TCP"],["auth","resolver","A + RRSIG ≈8 KB","acc"],["resolver","client","answer · AD=1","ok"]],
+   cmd:{kind:"shell",txt:`$ dig +dnssec api.example.in A @resolver
+<c>;; UDP truncated → TCP, ≈8 KB</c>
+<c>;; 1 SLH-DSA verification</c>
+;; flags: qr rd ra ad`}},
+  mtl:{do:"The condensed signature for api A ends at rung 9–12, which is not in the ladder the resolver cached earlier. It asks again with mtl-mode-full over TCP, verifies the new ladder once with SLH-DSA and caches it. Any other record in leaves 9–12 now verifies with hashes only.",
+   packets:[["client","resolver","api A?"],["resolver","auth","A? +DO · UDP"],["auth","resolver","condensed ≈240 B · UDP","acc"],["resolver","auth","mtl-mode-full · TCP"],["auth","resolver","full sig + new ladder ≈8.3 KB","acc"],["resolver","client","answer · AD=1","ok"]],
+   cmd:{kind:"shell",txt:`$ dig +dnssec api.example.in A @resolver
+<c>;; UDP condensed RRSIG, path ends at rung [9–12]</c>
+<c>;; rung not cached → re-query with mtl-mode-full (TCP)</c>
+<c>;; new ladder verified once, cached</c>
+;; flags: qr rd ra ad`}},
+  state:{leaves:LEAVES_B,signed:12,rungs:[[0,7],[8,11]],cached:[[0,7],[8,11]],path:8},
+  ledger:{plain:L({signs:13,bytes:102128,ver:4,resp:7969,tr:"TCP"}),mtl:L({signs:3,bytes:25132,ver:3,resp:8293,tr:"TCP",first:237})}},
+
+ {title:"Old records still validate: www.example.in",actors:["client","resolver","auth"],
+  diff:"Adding records never invalidates signatures already published. In MTL mode the old rung is still in the resolver's cache.",
+  plain:{do:"Once the cached www answer expires, fetching it again costs another ≈8 KB TCP answer and another SLH-DSA verification.",
+   packets:[["client","resolver","www A?"],["resolver","auth","A? +DO · UDP"],["auth","resolver","TC=1","warn"],["resolver","auth","retry · TCP"],["auth","resolver","A + RRSIG ≈8 KB","acc"],["resolver","client","answer · AD=1","ok"]],
+   cmd:{kind:"shell",txt:`$ dig +dnssec www.example.in A @resolver
+<c>;; UDP truncated → TCP, ≈8 KB</c>
+<c>;; 1 SLH-DSA verification</c>`}},
+  mtl:{do:"The www A signature still ends at rung 1–8, and the resolver still has that rung cached. One small UDP answer and a few hashes. The new ladder simply contains the old rung alongside the new one.",
+   packets:[["client","resolver","www A?"],["resolver","auth","A? +DO · UDP"],["auth","resolver","condensed ≈240 B · UDP","acc"],["resolver","client","answer · AD=1","ok"]],
+   cmd:{kind:"shell",txt:`$ dig +dnssec www.example.in A @resolver
+<c>;; UDP, path ends at rung [1–8]: cached</c>
+<c>;; hashes only</c>`}},
+  state:{leaves:LEAVES_B,signed:12,rungs:[[0,7],[8,11]],cached:[[0,7],[8,11]],path:5},
+  ledger:{plain:L({signs:13,bytes:102128,ver:5,resp:7969,tr:"TCP"}),mtl:L({signs:3,bytes:25132,ver:3,resp:237,tr:"UDP"})}},
+
+ {title:"Ongoing operator checklist",actors:["signer","auth","resolver"],
+  diff:"MTL adds three things to watch: batch interval, signed-ladder distribution to secondaries, and the mtl-mode-full rate. In exchange, most answers stay on UDP.",
+  plain:{do:"Verify the signed zone after every change, re-sign RRsets before their RRSIGs expire (each one is a full SLH-DSA signature), roll keys with a DS update at the registrar, and track how often resolvers fall back to TCP.",
+   cmd:{kind:"pseudocode",txt:`after every change:
+  ldns-verify-zone example.in.zone.signed
+daily:
+  re-sign RRSIGs nearing expiry      <c># 1 SLH-DSA sign each</c>
+  watch TC=1 / TCP fallback rate
+on KSK rollover:
+  new KSK → new DS → registrar → in.`}},
+  mtl:{do:"Do the same checks, plus three MTL tasks: choose a batch interval (more edits per ladder means fewer SLH-DSA signatures but a longer wait before they publish), make sure every secondary has the latest signed ladder, and watch how often resolvers send mtl-mode-full, which shows how well ladders are cached.",
+   cmd:{kind:"pseudocode",txt:`after every change:
+  ldns-verify-zone example.in.zone.signed
+daily:
+  re-sign before expiry               <c># batched into ladders</c>
+  tune batch interval vs publish delay
+  confirm secondaries hold latest signed ladder
+  watch mtl-mode-full query rate
+on KSK rollover:
+  new KSK → new DS → registrar → in.`}},
+  state:{leaves:LEAVES_B,signed:12,rungs:[[0,7],[8,11]],cached:[[0,7],[8,11]],path:-1},
+  ledger:{plain:L({signs:13,bytes:102128,ver:5,resp:7969,tr:"TCP"}),mtl:L({signs:3,bytes:25132,ver:3,resp:237,tr:"UDP"})}}
+]};
+
+const st={scen:"setup",mode:"plain",i:0,playing:false,token:0};
+try{const m=localStorage.getItem("mtlw-mode");if(m==="plain"||m==="mtl")st.mode=m}catch(e){}
+const $=id=>document.getElementById(id);
+const NS="http://www.w3.org/2000/svg";
+function el(tag,attrs,parent,text){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(text!=null)e.textContent=text;if(parent)parent.appendChild(e);return e}
+const reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* topology */
+(function(){
+  const g=$("links");
+  LINKS.forEach(([a,b,lab,dash])=>{
+    const A=NODES[a],B=NODES[b];
+    el("line",{x1:A.x,y1:A.y,x2:B.x,y2:B.y,class:"link"+(dash?" deleg":"")},g);
+    if(lab){const mx=(A.x+B.x)/2,my=(A.y+B.y)/2;el("text",{x:mx+(a==="signer"&&b==="tld"?18:8),y:my+(a==="signer"&&b==="auth"?-8:4),class:"linklabel"},g,lab)}
+  });
+  const n=$("nodes");
+  for(const k in NODES){const N=NODES[k];const gg=el("g",{class:"nd",id:"n-"+k},n);
+    el("rect",{x:N.x-82,y:N.y-26,width:164,height:52,rx:8},gg);
+    el("text",{x:N.x-70,y:N.y-3,class:"t"},gg,N.t);
+    el("text",{x:N.x-70,y:N.y+14,class:"s"},gg,N.s);}
+  el("text",{x:20,y:392,class:"legend"},n,"dashed = delegation (parent holds child DS)");
+})();
+
+function sleep(ms,tok){return new Promise(r=>setTimeout(()=>r(tok===st.token),ms))}
+function colorOf(k){const cs=getComputedStyle(document.body);return cs.getPropertyValue(k==="warn"?"--warn":k==="ok"?"--ok":k==="acc"?"--acc":"--muted").trim()}
+async function animatePacket(p,tok){
+  const [a,b,label,kind]=p;const A=NODES[a],B=NODES[b];const layer=$("packets");
+  const g=el("g",{class:"pk"},layer);const c=colorOf(kind);
+  const r=el("rect",{rx:4,fill:c},g);const t=el("text",{fill:getComputedStyle(document.body).getPropertyValue("--surface")},g,label);
+  const dot=el("circle",{r:7,fill:c},g);
+  const w=t.getComputedTextLength()+12;r.setAttribute("width",w);r.setAttribute("height",18);
+  const dur=reduce?0:900;const t0=performance.now();
+  await new Promise(res=>{
+    function f(now){
+      if(tok!==st.token){res();return}
+      let k=dur?Math.min(1,(now-t0)/dur):1;const e=k<.5?2*k*k:1-Math.pow(-2*k+2,2)/2;
+      const x=A.x+(B.x-A.x)*e,y=A.y+(B.y-A.y)*e;
+      dot.setAttribute("cx",x);dot.setAttribute("cy",y);
+      const lx=Math.max(4,Math.min(856-w,x-w/2)),ly=y-34;
+      r.setAttribute("x",lx);r.setAttribute("y",ly);t.setAttribute("x",lx+6);t.setAttribute("y",ly+13);
+      if(k<1)requestAnimationFrame(f);else res();
+    }requestAnimationFrame(f);
+  });
+  if(tok!==st.token){g.remove();return false}
+  const keep=await sleep(reduce?700:550,tok);g.remove();return keep;
+}
+async function runPackets(list,tok){
+  $("packets").innerHTML="";
+  for(const p of (list||[])){const ok=await animatePacket(p,tok);if(!ok)return false}
+  return true;
+}
+
+/* state panel */
+function renderTree(s){
+  const W=440,H=236,pad=24,leafY=150,dy=30;const n=s.leaves.length;
+  const step=(W-2*pad)/(n-1);const X=i=>pad+i*step;
+  const svg=document.createElementNS(NS,"svg");svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  svg.setAttribute("role","img");svg.setAttribute("aria-label","Merkle tree ladder over zone RRsets");
+  const gl=el("g",{},svg),gn=el("g",{},svg);
+  // path nodes
+  const hot=new Set(),sib=new Set();
+  let pathRung=null;
+  if(s.path>=0){for(const R of s.rungs){if(s.path>=R[0]&&s.path<=R[1]){pathRung=R;const size=R[1]-R[0]+1;const levels=Math.log2(size);let idx=s.path-R[0];
+    for(let l=0;l<=levels;l++){hot.add(`${R[0]}:${l}:${idx}`);if(l<levels)sib.add(`${R[0]}:${l}:${idx^1}`);idx=idx>>1}}}}
+  const rootPos=[];
+  s.rungs.forEach(R=>{
+    const size=R[1]-R[0]+1,levels=Math.log2(size);let prev=[];
+    for(let i=0;i<size;i++)prev.push(X(R[0]+i));
+    for(let l=1;l<=levels;l++){const cur=[];
+      for(let j=0;j<prev.length/2;j++){const x=(prev[2*j]+prev[2*j+1])/2;cur.push(x);const y=leafY-l*dy;
+        const kh=hot.has(`${R[0]}:${l}:${j}`);
+        [0,1].forEach(q=>{const ch=hot.has(`${R[0]}:${l-1}:${2*j+q}`);el("line",{x1:x,y1:y,x2:prev[2*j+q],y2:y+dy,class:"tree-line"+(kh&&ch?" hot":"")},gl)});
+        const isRoot=l===levels;
+        if(isRoot){el("rect",{x:x-9,y:y-9,width:18,height:18,rx:3,class:"trung"},gn);rootPos.push({x,y,R})}
+        else{let cls="tnode";if(kh)cls+=" hot";else if(sib.has(`${R[0]}:${l}:${j}`))cls+=" sib";el("circle",{cx:x,cy:y,r:5,class:cls},gn)}
+      }prev=cur}
+    if(levels===0){rootPos.push({x:prev[0],y:leafY,R})}
+  });
+  // ladder
+  if(rootPos.length){const ly=30;const x0=Math.min(...rootPos.map(p=>p.x))-14,x1=Math.max(...rootPos.map(p=>p.x))+14;
+    rootPos.forEach(p=>{el("line",{x1:p.x,y1:p.y-9,x2:p.x,y2:ly+8,class:"tree-line"+(pathRung===p.R?" hot":"")},gl);
+      el("text",{x:p.x+13,y:p.y+4,class:"tlabel"+(pathRung===p.R?" hot":"")},gn,`rung ${p.R[0]+1}–${p.R[1]+1}`);
+      if(s.cached.some(c=>c[0]===p.R[0]&&c[1]===p.R[1]))el("text",{x:p.x-13,y:p.y+4,class:"tcache","text-anchor":"end"},gn,"cached ✓");});
+    el("rect",{x:x0,y:ly-8,width:x1-x0,height:16,rx:8,class:"tladder"},gn);
+    el("text",{x:x0,y:ly-13,class:"tseal"},gn,"ladder: signed once with SLH-DSA");
+  }else{el("text",{x:pad,y:40,class:"tlabel"},gn,"No tree yet: RRsets are unsigned")}
+  // leaves
+  s.leaves.forEach((lab,i)=>{
+    const x=X(i);let cls="tleaf";if(i>=s.signed)cls+=" pending";else if(s.leaves.length>8&&i>=8)cls+=" new";
+    if(i===s.path)cls+=" hot";
+    const isSib=pathRung&&i!==s.path&&sib.has(`${pathRung[0]}:0:${i-pathRung[0]}`);
+    el("rect",{x:x-7,y:leafY-7,width:14,height:14,rx:2,class:cls},gn);
+    if(isSib)el("rect",{x:x-10,y:leafY-10,width:20,height:20,rx:3,fill:"none",class:"tnode sib"},gn);
+el("text",{x:x+3,y:leafY+16,class:"tlabel"+(i===s.path?" hot":""),transform:`rotate(-55 ${x+3} ${leafY+16})`,"text-anchor":"end"},gn,lab);
+  });
+  if(s.path>=0)el("text",{x:pad,y:H-4,class:"tlabel"},gn,"filled: queried leaf + path · dashed: auth-path siblings");
+  else el("text",{x:pad,y:H-4,class:"tlabel"},gn,"KSK signs DNSKEY in its own one-leaf series (not drawn)");
+  return svg;
+}
+function renderSigs(s){
+  const box=document.createElement("div");box.className="sigs";
+  const rows=[{lab:"DNSKEY (KSK)",signed:s.signed>0,i:-2}].concat(s.leaves.map((l,i)=>({lab:l,signed:i<s.signed,i})));
+  rows.forEach(r=>{const d=document.createElement("div");d.className="sig"+(r.signed?"":" pending")+(r.i>=8&&r.signed?" new":"")+(r.i===s.path?" hot":"");
+    d.innerHTML=`<span>${r.lab}</span><span class="bar"></span><span class="n">${r.signed?"7,856 B":"unsigned"}</span>`;box.appendChild(d)});
+  return box;
+}
+
+function fmt(n){return n.toLocaleString("en-US")}
+function setV(id,v){const e=$(id);if(e.innerHTML!==v){e.innerHTML=v;e.classList.remove("flash");void e.offsetWidth;e.classList.add("flash")}}
+
+function render(){
+  const steps=SCEN[st.scen],s=steps[st.i],m=st.mode;
+  document.body.dataset.mode=m;
+  document.querySelectorAll(".scen button").forEach(b=>b.setAttribute("aria-pressed",b.dataset.scen===st.scen));
+  document.querySelectorAll(".mode button").forEach(b=>b.setAttribute("aria-pressed",b.dataset.mode===m));
+  const dots=$("dots");dots.innerHTML="";
+  steps.forEach((x,i)=>{const b=document.createElement("button");b.textContent=i+1;b.id="dot-"+i;b.title=x.title;b.setAttribute("aria-label","Step "+(i+1)+": "+x.title);
+    if(i<st.i)b.className="done";if(i===st.i)b.setAttribute("aria-current","step");b.onclick=()=>go(i);dots.appendChild(b)});
+  const body=s.shared?s:s[m];
+  $("stepnum").textContent=`${st.scen==="setup"?"Initial setup":"Add a record"} · step ${st.i+1} of ${steps.length} · ${m==="plain"?"SLH-DSA":"SLH-DSA-MTL"}`;
+  $("title").textContent=s.title;$("do").textContent=body.do;
+  $("cmdkind").textContent=body.cmd.kind;
+  $("cmd").innerHTML=body.cmd.txt.replace(/<c>/g,'<span class="c">').replace(/<\/c>/g,"</span>");
+  $("difflabel").textContent=s.shared?"Both modes":"Difference";
+  $("diff").textContent=s.shared?"This step is identical for SLH-DSA and SLH-DSA-MTL.":s.diff;
+  // nodes
+  for(const k in NODES)$("n-"+k).classList.toggle("on",s.actors.includes(k));
+  // state
+  $("statehd").textContent=m==="mtl"?"Signer state · Merkle tree ladder":"Signer state · one RRSIG per RRset";
+  const sp=$("state");sp.innerHTML="";sp.appendChild(m==="mtl"?renderTree(s.state):renderSigs(s.state));
+  // ledger
+  const g=s.ledger[m];
+  setV("l-signs",fmt(g.signs));setV("l-bytes",g.bytes?`${fmt(g.bytes)} <small>B</small>`:"0");
+  setV("l-ver",String(g.ver));setV("l-tr",g.tr||"&ndash;");
+  const max=8400;$("m-lim").style.left=(1232/max*100)+"%";
+  const f=$("m-fill");
+  if(g.resp){f.style.width=Math.min(100,g.resp/max*100)+"%";f.classList.toggle("over",g.resp>1232);
+    $("m-val").textContent=(g.first?`≈${fmt(g.first)} B condensed, then `:"")+`≈${fmt(g.resp)} B over ${g.tr}`+(g.first?" (once per ladder)":"");}
+  else{f.style.width="0";$("m-val").textContent="no query yet"}
+  $("prev").disabled=st.i===0;$("next").disabled=st.i===steps.length-1;
+  $("play").textContent=st.playing?"Pause":"Play";
+  const tok=++st.token;
+  runPackets(body.packets,tok).then(async ok=>{
+    if(!ok||!st.playing||tok!==st.token)return;
+    if(await sleep(2600,tok)){
+      if(st.i<SCEN[st.scen].length-1){st.i++;render()}
+      else if(st.scen==="setup"){st.scen="add";st.i=0;render()}
+      else{st.playing=false;$("play").textContent="Play"}
+    }
+  });
+}
+function go(i){st.i=i;render()}
+$("prev").onclick=()=>{if(st.i>0)go(st.i-1)};
+$("next").onclick=()=>{if(st.i<SCEN[st.scen].length-1)go(st.i+1)};
+$("play").onclick=()=>{st.playing=!st.playing;if(st.playing&&st.scen==="add"&&st.i===SCEN.add.length-1){st.scen="setup";st.i=0}render()};
+document.querySelectorAll(".scen button").forEach(b=>b.onclick=()=>{st.scen=b.dataset.scen;st.i=0;render()});
+document.querySelectorAll(".mode button").forEach(b=>b.onclick=()=>{st.mode=b.dataset.mode;try{localStorage.setItem("mtlw-mode",st.mode)}catch(e){}render()});
+document.addEventListener("keydown",e=>{if(e.target.closest&&e.target.closest("input,textarea"))return;
+  if(e.key==="ArrowRight"){$("next").click()}else if(e.key==="ArrowLeft"){$("prev").click()}});
+render();
+})();
+</script>
+
+</body></html>

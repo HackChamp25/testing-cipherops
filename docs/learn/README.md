@@ -1,15 +1,21 @@
 # Learn: why DNSSEC needs MTL
 
-New to DNSSEC, post-quantum signatures or Merkle Tree Ciphersuite (MTL) mode? Start here. This takes about ten
+New to DNSSEC, post-quantum signatures or Merkle Tree Ladder (MTL) mode? Start here. This takes about ten
 minutes and needs no prior knowledge. Everything on this page is background; the measured results are in the
 run reports.
 
 ## The interactive walkthrough
 
-**[why-dnssec-needs-mtl.html](why-dnssec-needs-mtl.html)** is an animated, six-scene explainer. It is one
+**[why-dnssec-needs-mtl.html](why-dnssec-needs-mtl.html)** is an animated, seven-scene explainer (the last scene is where the IETF drafts stand). It is one
 self-contained file with no network access and no dependencies. Open it in a browser (on GitHub, download the file
 first, because GitHub shows HTML as source). Use the arrow keys to step, space to play. The dashboard shows the same
 page in its **Learn** tile.
+
+A second page, **[mtl-dnssec-ops-walkthrough.html](mtl-dnssec-ops-walkthrough.html)**, follows a DNS operator
+through bringing up a signed zone and then adding one record, with a switch between plain SLH-DSA and SLH-DSA with
+MTL at every step (commands, bytes on the wire and the resolver's work). It is also self-contained and is the
+dashboard's second **Learn** view. Its byte figures are illustrative for a small zone; the measured ones are in the
+run reports.
 
 ## The story in six steps
 
@@ -25,7 +31,7 @@ page in its **Learn** tile.
 ## What MTL does not solve
 
 MTL moves the cost; it does not remove it. This is what the benchmark measures rather than assumes (the
-*evolving zone* experiment, section 5.7 of a run's report and a view in the dashboard's Compare tile):
+*evolving zone* experiment, section 5.7 of a run's report and the **Zone updates** view in the dashboard's Compare tile):
 
 - A resolver without the ladder pays more than plain SLH-DSA, once.
 - New or changed records verify only after a new ladder is signed, so a zone that changes often signs more ladders
@@ -34,6 +40,27 @@ MTL moves the cost; it does not remove it. This is what the benchmark measures r
 - Condensed signatures published earlier can stop verifying against the newest ladder when rungs merge, and must be
   reissued.
 - The draft's size figures are maxima. Real values are measured, not taken from the formulas.
+
+## Where the IETF stands
+
+Checked on the IETF Datatracker on 30 October 2026. This changes, so check the links below for the latest.
+
+| Draft | What it covers | Status |
+|---|---|---|
+| [draft-harvey-cfrg-mtl-mode](https://datatracker.ietf.org/doc/draft-harvey-cfrg-mtl-mode/) | MTL mode for any signature scheme | Individual draft, revision 09 (March 2026), expired |
+| [draft-fregly-dnsop-slh-dsa-mtl-dnssec](https://datatracker.ietf.org/doc/draft-fregly-dnsop-slh-dsa-mtl-dnssec/) | SLH-DSA-MTL keys and signatures in DNSSEC (the scheme this project measures) | Individual draft, revision 06 (March 2026), expired |
+| [draft-kaizer-dnsop-ml-dsa-mtl-dnssec](https://datatracker.ietf.org/doc/draft-kaizer-dnsop-ml-dsa-mtl-dnssec/) | The same idea with ML-DSA-44, as a "conservative" algorithm | Individual draft, revision 03 (October 2026), active |
+| [draft-sheth-pqc-dnssec-strategy](https://datatracker.ietf.org/doc/draft-sheth-pqc-dnssec-strategy/) | Run a conservative algorithm in MTL mode next to a low-impact "drop-in" algorithm | Informational individual draft, revision 02 (October 2026), active |
+
+What this means:
+
+- All four are work in progress. None is adopted by a working group or published as an RFC, and no DNSSEC
+  algorithm number is assigned for these schemes yet.
+- The newest drafts centre on ML-DSA-MTL, whose underlying signature is smaller (2,420 bytes for ML-DSA-44 against
+  7,856 for SLH-DSA-SHA2-128s). This project measures SLH-DSA-MTL, the largest-signature case, so the effects are
+  easy to see. The same trade-offs should apply to ML-DSA-MTL with smaller numbers; measuring it is a follow-up.
+- The strategy draft asks for exactly this kind of testing: truncation, TCP fallback and latency in BIND, NSD and
+  CoreDNS.
 
 ## Where each question is answered in this repository
 
@@ -45,7 +72,7 @@ MTL moves the cost; it does not remove it. This is what the benchmark measures r
 | What each output file and column means | [outputs reference](../outputs-reference.md) |
 | How the code fits together, and the MTL formulas | [architecture](../architecture.md) |
 | A run's real numbers | `report.html` in `results/runs/<run>/` (run `bash scripts/run_benchmark.sh configs/quick.yaml`) |
-| To see it live, with real packets | the dashboard (`streamlit run dashboard/live_lab/app.py`), tiles **Live** and **Compare** |
+| To see it live, with real packets | the dashboard (`streamlit run dashboard/live_lab/app.py`), tiles **Live**, **Benchmark** and **Compare** |
 
 ## Honest limits of the explainer
 
@@ -53,11 +80,14 @@ MTL moves the cost; it does not remove it. This is what the benchmark measures r
   and about 113 bytes of DNS overhead per answer.
 - The documentation address ranges (192.0.2.0/24, 203.0.113.0/24) and `bank.example` are placeholders.
 - The algorithm numbers and the EDNS option used for the full signature are lab placeholders, not IANA assignments.
-- Nothing here is a security proof or a statement of compliance with PS-036.
+- Nothing here is a security proof or a standards-compliance claim.
 
 ## Further reading
 
 - [draft-harvey-cfrg-mtl-mode](https://datatracker.ietf.org/doc/draft-harvey-cfrg-mtl-mode/): the MTL mode itself
 - [draft-fregly-dnsop-slh-dsa-mtl-dnssec](https://datatracker.ietf.org/doc/draft-fregly-dnsop-slh-dsa-mtl-dnssec/): how it is carried in DNSSEC
+- [draft-kaizer-dnsop-ml-dsa-mtl-dnssec](https://datatracker.ietf.org/doc/draft-kaizer-dnsop-ml-dsa-mtl-dnssec/): MTL with ML-DSA
+- [draft-sheth-pqc-dnssec-strategy](https://datatracker.ietf.org/doc/draft-sheth-pqc-dnssec-strategy/): the two-algorithm strategy
+- [FIPS 204](https://csrc.nist.gov/pubs/fips/204/final): ML-DSA
 - [FIPS 205](https://csrc.nist.gov/pubs/fips/205/final): SLH-DSA
 - [RFC 4033](https://www.rfc-editor.org/rfc/rfc4033), [RFC 4034](https://www.rfc-editor.org/rfc/rfc4034), [RFC 4035](https://www.rfc-editor.org/rfc/rfc4035): DNSSEC
