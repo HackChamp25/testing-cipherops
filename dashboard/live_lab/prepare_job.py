@@ -105,6 +105,7 @@ def start(h: driver.LabHandle, *, jobs: int, scenarios: list[str]) -> None:
     if is_running(h):
         raise RuntimeError("Signing is already running for this lab.")
     driver.require_no_suite()
+    driver.require_no_offline()
     driver.require_no_build(h.stack)
     d = job_dir(h)
     d.mkdir(parents=True, exist_ok=True)

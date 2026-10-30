@@ -163,6 +163,7 @@ def create(params: dict) -> tuple[str, Path]:
 def start(params: dict) -> str:
     """Write the parameters and launch the suite as a detached process. Returns the suite id."""
     with _start_lock():
+        driver.require_no_offline()
         live = running_suite()
         if live:
             raise driver.LabBusy(f"Benchmark {live['id']} is already {live['state']}.")

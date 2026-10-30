@@ -70,8 +70,8 @@ def test_headline_ratios_from_a_merged_frame():
     })
     cards = {c["label"]: c["value"] for c in compare.headline(df, "slh-dsa", "mtl")}
     assert cards["Signing time"] == "20× faster"
-    assert cards["Signed size"] == "10× smaller"
-    assert cards["Resolver cache"] == "10× less memory"
+    assert cards["Signed zone size"] == "10× smaller"
+    assert cards["Cache size"] == "10× less memory"
 
 
 def test_suite_report_writes_md_html_when_suite_present(tmp_path):

@@ -62,6 +62,7 @@ def mark_handled() -> None:
 def start(stack: str) -> None:
     """Launch the build as a detached worker. Returns at once."""
     driver.require_no_suite()
+    driver.require_no_offline()
     live = driver.active_build_stack()
     if live:
         raise driver.LabBusy(f"Images for {live} are already being built. Wait for them to finish or cancel first.")

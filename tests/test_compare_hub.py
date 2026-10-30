@@ -59,7 +59,7 @@ def test_algorithm_table_reports_the_paired_ratio_for_timings_and_ratios_of_valu
     t = hub.algorithm_table(frame, "slh-dsa", paired).set_index("Algorithm")
     mtl = t.loc["SLH-DSA + MTL"]
     assert "lower" in mtl["Signing time: vs SLH-DSA"] and "[" in mtl["Signing time: vs SLH-DSA"]
-    assert mtl["Bytes on the wire: vs SLH-DSA"] == "30× lower"
+    assert mtl["Response size: vs SLH-DSA"] == "30× lower"
     assert t.loc["SLH-DSA  (baseline)", "Signing time: vs SLH-DSA"] == ""
 
 
@@ -117,7 +117,7 @@ def test_live_facts_read_the_suite_provenance():
         "cpu_model": "X", "git_commit": "abcdef1234567890", "git_dirty": True, "cpu_governor": "powersave"}}
     f = hub.live_facts(suite)
     assert f["Stack profile"] == "draft06" and f["MTL commit"] == "93b05ef73d" and f["liboqs"] == "0.14.0"
-    assert f["Code version"].endswith("(dirty)") and f["Dataset sizes"] == "50, 500"
+    assert f["Code version"].endswith("(dirty)") and f["Zone sizes"] == "50, 500"
 
 
 def test_catalogue_lists_offline_runs_newest_first(tmp_path):
@@ -182,7 +182,7 @@ def test_live_suite_reduces_to_the_same_frame_and_table_as_an_offline_run(tmp_pa
     assert row.loc["mtl", "cold_ms"] == 9.0 and set(f.sign_basis) == {"estimated"}
     t = hub.algorithm_table(f, "slh-dsa").set_index("Algorithm")
     assert t.loc["SLH-DSA + MTL", "Signing time: vs SLH-DSA"].endswith("lower")
-    assert "Resolver cache" in t.columns
+    assert "Cache size" in t.columns
 
 
 def test_two_live_suites_on_different_stacks_are_flagged(tmp_path, monkeypatch):

@@ -35,10 +35,10 @@ STD_COLUMNS = ["key", "label", "sign_s", "sign_lo", "sign_hi", "sign_basis", "ve
 METRICS = {
     "sign_s": ("Signing time", "s"),
     "verify_s": ("Verification time", "s"),
-    "size_bytes": ("Signature material", "B"),
-    "wire_bytes": ("Bytes on the wire", "B"),
-    "truncations": ("Truncated answers", "n"),
-    "cache_bytes": ("Resolver cache", "B"),
+    "size_bytes": ("Signature size", "B"),
+    "wire_bytes": ("Response size", "B"),
+    "truncations": ("Truncated (TC) responses", "n"),
+    "cache_bytes": ("Cache size", "B"),
 }
 
 # What the same column means in each source, so a label never claims more than the number is.
@@ -105,8 +105,8 @@ def offline_facts(config: dict, env: dict) -> dict[str, str]:
         "OpenSSL": str(sw.get("openssl_tag") or "—"),
         "CPU": str(hw.get("cpu_model") or "—"),
         "Cores used": str(hw.get("cpu_affinity") or "—"),
-        "Measured trials": str(config.get("trials", "—")),
-        "Dataset sizes": ", ".join(f"{d['name']} ({d['n_names']:,})" for d in config.get("datasets", [])) or "—",
+        "Runs": str(config.get("trials", "—")),
+        "Zone sizes": ", ".join(f"{d['name']} ({d['n_names']:,})" for d in config.get("datasets", [])) or "—",
         "Seed": str(config.get("seed", "—")),
         "Code version": str(env.get("git_sha") or "—")[:14],
     }
@@ -223,8 +223,8 @@ def live_facts(suite: dict) -> dict[str, str]:
         "OpenSSL": str(pins.get("OPENSSL_TAG") or "—"),
         "CPU": str(prov.get("cpu_model") or "—"),
         "Cores used": str(prov.get("cpu_isolation") or "—"),
-        "Measured trials": str(suite.get("trials", "—")),
-        "Dataset sizes": ", ".join(f"{n:,}" for n in sizes) or "—",
+        "Runs": str(suite.get("trials", "—")),
+        "Zone sizes": ", ".join(f"{n:,}" for n in sizes) or "—",
         "Seed": "—",
         "Code version": str(prov.get("git_commit") or "—")[:12] + (" (dirty)" if prov.get("git_dirty") else ""),
         "CPU governor": str(prov.get("cpu_governor") or "—"),
@@ -342,7 +342,7 @@ def algorithm_table(frame: pd.DataFrame, baseline: str, paired: pd.DataFrame | N
 
 # ─────────────────────────── comparing two runs ───────────────────────────
 
-IMPORTANT_FACTS = ("Stack profile", "MTL commit", "liboqs", "CPU", "Measured trials", "Cores used")
+IMPORTANT_FACTS = ("Stack profile", "MTL commit", "liboqs", "CPU", "Runs", "Cores used")
 
 
 def facts_diff(a: dict[str, str], b: dict[str, str]) -> pd.DataFrame:
@@ -363,7 +363,7 @@ def comparability_notes(a: dict[str, str], b: dict[str, str]) -> list[str]:
         notes.append("The MTL or liboqs version differs between the runs.")
     if a.get("CPU") != b.get("CPU"):
         notes.append("**Different CPUs:** absolute times are not comparable. Ratios between algorithms may still hold.")
-    if a.get("Measured trials") != b.get("Measured trials"):
+    if a.get("Runs") != b.get("Runs"):
         notes.append("The number of trials differs, so the intervals have different coverage.")
     if a.get("Code version") != b.get("Code version"):
         notes.append("The code version differs.")

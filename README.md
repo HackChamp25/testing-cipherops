@@ -147,8 +147,8 @@ streamlit run dashboard/live_lab/app.py
 | --- | --- |
 | **Setup** | step 1 build or pull the images; step 2 choose zone size and scenarios, then **Prepare** (signs the hierarchy); step 3 **Start** the lab |
 | **Live** | send queries or `dig`, switch scenario, capture packets, view the packet sequence |
-| **Benchmark** | one press runs the PS-036 benchmark: three dataset sizes, repeated signing and measurement trials; needs only the built images |
-| **Compare** | two views. *Algorithms side by side*: every algorithm of an offline-harness run or a live-lab benchmark, with the ratio to a baseline (paired per-trial intervals for the offline timings). *Run against run*: two saved runs (stack profiles, repeats, machines) with what differs between them spelled out. *Evolving zone*: the offline evolving-zone experiment, with a round slider that draws the ladder's rungs, the cached-ladder coverage, cost per update, bytes per answer and growth. Offline and live-lab data are never drawn together |
+| **Benchmark** | two modes. *Offline (harness)*: one press runs the harness on a dedicated core (a quick check or the full run), with no Setup needed. *Simulated (Verisign stack)*: the three-size benchmark on the Docker lab, with repeated signing and measurement trials; needs only the built images |
+| **Compare** | two views. *Algorithms side by side*: every algorithm of an offline-harness run or a live-lab benchmark, with the ratio to a baseline (paired per-trial intervals for the offline timings). *Run against run*: two saved runs (stack profiles, repeats, machines) with what differs between them spelled out. *Zone updates*: the offline evolving-zone experiment in operations terms (re-sign cost per update, response size, stale resolver cache, earlier signatures, zone growth), with the MTL ladder and rungs under *MTL internals*. Offline and simulated data are never drawn together |
 | **Reset** | remove sessions, captures, runs or signed zones |
 
 Use the **`draft06`** image version (the live lab default) for the MTL-versus-non-MTL comparison. A first image build takes tens of minutes;

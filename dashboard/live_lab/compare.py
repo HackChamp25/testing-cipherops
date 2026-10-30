@@ -304,12 +304,12 @@ def headline(df: pd.DataFrame, base: str, cand: str) -> list[dict]:
     """The five 'candidate vs baseline' cards."""
     spec = [
         ("Signing time", "sign_s", "faster", "slower", fmt_seconds, "Whole-zone signing during Prepare"),
-        ("Zone verification", "verify_s", "faster", "slower", fmt_seconds,
+        ("Verification time", "verify_s", "faster", "slower", fmt_seconds,
          "ldns-verify-zone over every signed zone (offline check, not the resolver)"),
-        ("Signed size", "signed_bytes", "smaller", "larger", fmt_bytes, "Total size of the signed zone files"),
-        ("Bytes on the wire", "upstream_bytes", "less data", "more data", fmt_bytes,
+        ("Signed zone size", "signed_bytes", "smaller", "larger", fmt_bytes, "Total size of the signed zone files"),
+        ("Response size", "upstream_bytes", "less data", "more data", fmt_bytes,
          "Resolver ↔ authoritative traffic, cold pass"),
-        ("Resolver cache", "cache_rrset", "less memory", "more memory", fmt_bytes,
+        ("Cache size", "cache_rrset", "less memory", "more memory", fmt_bytes,
          "Measured: RRset cache memory in Unbound after the cold pass"),
     ]
     out = []
@@ -329,23 +329,23 @@ def table(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     t = pd.DataFrame({
-        "Scenario": df.scenario,
-        "Sign zones": df.sign_s.map(fmt_seconds),
-        "Verify zones": df.verify_s.map(fmt_seconds),
+        "Algorithm": df.scenario,
+        "Signing time": df.sign_s.map(fmt_seconds),
+        "Verification time": df.verify_s.map(fmt_seconds),
         "Sign / RRSIG (ms)": df.sign_ms_per_rrsig,
-        "Signed size": df.signed_bytes.map(fmt_bytes),
+        "Signed zone size": df.signed_bytes.map(fmt_bytes),
         "RRSIGs": df.rrsigs,
-        "Cold median (ms)": df.cold_ms.round(2),
-        "Warm median (ms)": df.warm_ms.round(2),
-        "Upstream bytes (cold)": df.upstream_bytes.map(fmt_bytes),
-        "Upstream queries": df.upstream_queries,
-        "Truncated": df.truncated,
+        "Latency p50, cold cache (ms)": df.cold_ms.round(2),
+        "Latency p50, warm cache (ms)": df.warm_ms.round(2),
+        "Resolver→authoritative bytes (cold)": df.upstream_bytes.map(fmt_bytes),
+        "Resolver→authoritative queries": df.upstream_queries,
+        "Truncated (TC) responses": df.truncated,
         "TCP connections": df.tcp_conns,
         "Root": df.root_bytes.map(fmt_bytes),
         "TLD": df.tld_bytes.map(fmt_bytes),
         "Leaf": df.sld_bytes.map(fmt_bytes),
-        "RRset cache (measured)": df.cache_rrset.map(fmt_bytes),
-        "Message cache (measured)": df.cache_message.map(fmt_bytes),
+        "Cache size, RRsets (measured)": df.cache_rrset.map(fmt_bytes),
+        "Cache size, messages (measured)": df.cache_message.map(fmt_bytes),
         "Signature storage, whole zone (analytical)": df.analytic_sig_bytes.map(fmt_bytes),
     })
     return t

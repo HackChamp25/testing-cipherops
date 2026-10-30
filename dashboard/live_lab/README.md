@@ -11,13 +11,13 @@ Needs Docker. Use **Small** zone size for a first visit and the **`draft06`** im
 
 ## Home
 
-The app opens on a hub of five tiles. **Setup** builds the images (and, for Live, signs and starts a lab); **Benchmark** needs only the images and runs by itself.
+The app opens on a hub of five tiles. **Setup** builds the images (and, for Live, signs and starts a lab); **Benchmark** runs by itself: *Offline (harness)* needs nothing built beforehand, *Simulated (Verisign stack)* needs only the images.
 
 | Tile | What it is for | Sidebar | Results view |
 |------|----------------|---------|--------------|
 | **Setup** | Images, then zone size and scenarios, sign zones, start / stop the lab (for Live) | Step 1 **Images** (**Image version** `draft06` or `latest`, build or pull), step 2 **Prepare** (zone design, sign), step 3 **Start**. Prepare, Start and the benchmark run inside the images, so they wait until step 1 is done | Signing summary and timings |
 | **Live** | Switch scenario, send a lookup or `dig`, cold vs warm. A progress panel lists each step of a query with its duration; the last result is labelled with its query, path and scenario and is cleared when the scenario changes | Active scenario, capture name | Queries (newest first), packet decode, sequence diagram. Results open on the current query's capture, or the newest capture if no query was run |
-| **Benchmark** | The PS-036 benchmark: several dataset sizes, repeated trials | Name, dataset sizes, scenarios, trials, queries, networks, workload | Per-size tables, CSVs, and a reproducible `report.html` like the main Cipherops report |
+| **Benchmark** | *Offline (harness)*: quick check or full run on a dedicated core. *Simulated (Verisign stack)*: several zone sizes, repeated trials on the Docker lab | Mode; run size (offline); or name, zone sizes, scenarios, trials, queries, networks, workload (simulated) | Per-size tables, CSVs, and a reproducible `report.html` like the main Cipherops report |
 | **Compare** | MTL vs SLH-DSA and the other modes, side by side | Benchmark, dataset size, network, candidate and baseline | Cards, scaling across sizes, signing, bytes per tier, cache, latency, CSV |
 | **Reset** | Clear only the scopes you pick | Notes on what is kept | What the last reset removed |
 

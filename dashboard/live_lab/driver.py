@@ -195,6 +195,22 @@ def require_no_build(stack: str | None = None) -> None:
         raise LabBusy(f"Images for {live} are still being built. Wait for the build to finish or cancel it first.")
 
 
+def offline_status() -> dict:
+    """Status of the background offline-harness run ({} if none ever ran); a vanished worker reads as 'stopped'."""
+    return effective_job_state(_read_json(jobs_dir() / "_offline" / "status.json"))
+
+
+def active_offline() -> bool:
+    return offline_status().get("state") in ACTIVE_STATES
+
+
+def require_no_offline() -> None:
+    """The offline harness times on one dedicated core; anything else CPU-heavy would distort it."""
+    if active_offline():
+        raise LabBusy("An offline benchmark is running on a dedicated core. Wait for it to finish or cancel it "
+                      "first: running anything else now would distort its timings.")
+
+
 def remove_tree(path: Path, stack: str = "draft06") -> bool:
     """Delete a folder under ecosystem/, including files Docker created as root.
 
@@ -969,6 +985,7 @@ def _reclaim_fixed_lab_names() -> str:
 
 def up(h: LabHandle) -> str:
     require_no_suite()
+    require_no_offline()
     require_no_build(h.stack)
     require_not_signing(h)
     stopped = stop_other_labs(h)
