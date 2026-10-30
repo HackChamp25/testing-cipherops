@@ -1,0 +1,72 @@
+{
+  "verdict": "GO",
+  "algorithm": "SLH-DSA-SHA2-128s-MTL-SHA2-128",
+  "checks": [
+    {
+      "check": "reference_library_installed",
+      "ok": true,
+      "critical": true,
+      "detail": "ok"
+    },
+    {
+      "check": "reference_unit_tests_and_vectors",
+      "ok": true,
+      "critical": true,
+      "detail": "exit=0, 89 tests passed, 0 failed"
+    },
+    {
+      "check": "reference_fixture_scheme",
+      "ok": true,
+      "critical": false,
+      "detail": "bundled known-answer vectors cover ML-DSA-44-MTL-SHAKE-128; SLH-DSA-SHA2-128s-MTL-SHA2-128 is validated by the tool round trip"
+    },
+    {
+      "check": "reference_tools_roundtrip",
+      "ok": true,
+      "critical": true,
+      "detail": "16 messages, condensed+full verify failures=[], tampered rejected=True"
+    },
+    {
+      "check": "harness_smoke_slh-dsa-mtl",
+      "ok": true,
+      "critical": true,
+      "detail": "exit=0 failures={'ladder': 0, 'verify_condensed': 0, 'verify_full': 0} tamper={'message_rejected': True, 'signature_rejected': True, 'ladder_rejected': True, 'cross_message_rejected': True, 'truncated_signature_rejected': True, 'series_id_rejected': True, 'wrong_key_rejected': True, 'full_signature_rejected': True}"
+    },
+    {
+      "check": "harness_smoke_slh-dsa",
+      "ok": true,
+      "critical": true,
+      "detail": "exit=0 failures={'verify': 0} tamper={'message_rejected': True, 'signature_rejected': True, 'cross_message_rejected': True, 'truncated_signature_rejected': True, 'wrong_key_rejected': True}"
+    },
+    {
+      "check": "harness_smoke_ed25519",
+      "ok": true,
+      "critical": false,
+      "detail": "exit=0 failures={'verify': 0, 'verify_wire': 0} tamper={'message_rejected': True, 'signature_rejected': True, 'cross_message_rejected': True, 'truncated_signature_rejected': True, 'wrong_key_rejected': True}"
+    },
+    {
+      "check": "harness_smoke_ecdsa-p256",
+      "ok": true,
+      "critical": false,
+      "detail": "exit=0 failures={'verify': 0, 'verify_wire': 0} tamper={'message_rejected': True, 'signature_rejected': True, 'cross_message_rejected': True, 'truncated_signature_rejected': True, 'wrong_key_rejected': True}"
+    },
+    {
+      "check": "harness_smoke_rsa-2048",
+      "ok": true,
+      "critical": false,
+      "detail": "exit=0 failures={'verify': 0, 'verify_wire': 0} tamper={'message_rejected': True, 'signature_rejected': True, 'cross_message_rejected': True, 'truncated_signature_rejected': True, 'wrong_key_rejected': True}"
+    },
+    {
+      "check": "mtl_artifacts_verified_by_reference_tool",
+      "ok": true,
+      "critical": true,
+      "detail": "mtlverify accepted 8/8 harness signatures, tampered message rejected=True; note: the reference library does not authenticate the first 2 byte(s) of a condensed signature"
+    },
+    {
+      "check": "slh_dsa_artifacts_verified_by_openssl",
+      "ok": true,
+      "critical": true,
+      "detail": "OpenSSL accepted 8/8 liboqs SLH-DSA-SHA2-128s signatures, tampered message rejected=True (interop check, not a NIST KAT)"
+    }
+  ]
+}

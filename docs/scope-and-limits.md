@@ -1,6 +1,6 @@
 # Scope and limits
 
-What CipherOps claims, what it does not, and how the requirements of the problem statement (PS-036) are covered.
+What CipherOps claims and what it does not. How the requirements of the problem statement (PS-036) are covered: [DELIVERABLES.md](../DELIVERABLES.md#ps-036-requirements).
 
 ## Scope
 
@@ -80,16 +80,4 @@ not confirmed from source and not yet reported upstream. Evidence and rejected a
 
 ## PS-036 coverage
 
-| Requirement | Where it is met |
-| --- | --- |
-| One supported PQC algorithm | SLH-DSA-SHA2-128s |
-| One MTL reference implementation | Verisign MTL, pinned by commit (stack profile) |
-| Three dataset sizes | 50 / 500 / 5,000 names by default; quick run 20 / 60 / 200 |
-| With and without MTL | `slh-dsa-mtl` vs `slh-dsa`, plus classical references |
-| Repeated trials, pinned environment | pinned image, dedicated core, seeded order, discarded warm-up (offline); the simulated lab is not core-pinned |
-| Signing time, verification time, transmitted bytes | `trials.csv`, `responses.csv`, `workload.csv`; simulated-lab captures |
-| MTL on a changing zone (beyond the minimum) | `evolution.csv` and the dashboard's **Zone updates** view |
-| Record configuration and workload parameters | `config.yaml`, `environment.json`, `suite.json` in each run |
-| Cache: measured vs analytical, kept apart | `cache.csv` has a `kind` column; the report never mixes them |
-| Defer if implementation or fixtures are missing | the go/no-go gate (`preflight`) blocks the run |
-| No new cryptography, resolver or deployment | the harness only calls libraries; the lab uses stock servers |
+The requirements and where each is met are in [DELIVERABLES.md](../DELIVERABLES.md#ps-036-requirements).

@@ -163,6 +163,9 @@ Three layers, each with one job:
 ```
 Cipherops/
 ├── .devcontainer/          GitHub Codespaces setup (Python, Docker-in-Docker, port 8501)
+├── hackathon/              submission material: project page, readout, feedback, frozen results, decks
+├── DELIVERABLES.md         what is submitted; the PS-036 requirements
+├── THIRD_PARTY_NOTICES.md  licences of the software built on
 ├── configs/
 │   ├── scenarios.yaml      full PS-036 run (50 / 500 / 5000 names, 10 trials)
 │   └── quick.yaml          fast demo run (20 / 60 / 200 names, 3 trials)

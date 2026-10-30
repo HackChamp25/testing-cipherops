@@ -29,12 +29,13 @@ CipherOps measures what that changes, against classical DNSSEC and against plain
 
 | | |
 | :--- | :--- |
-| **Presentation** | [revised, 30 Oct 2026](A3-PS036-TC161_2026-10-30.pdf) · [original, 13 Oct 2026](A3-PS036-TC161_2026-10-13.pdf) |
+| **Submission** | [Deliverables](DELIVERABLES.md) · [project page and readout](hackathon/README.md) · [frozen results](hackathon/results/README.md) |
+| **Presentation** | [revised, 30 Oct 2026](hackathon/presentation/A3-PS036-TC161_2026-10-30.pdf) · [original, 13 Oct 2026](hackathon/presentation/A3-PS036-TC161_2026-10-13.pdf) |
 | **Project video** | [YouTube](https://youtu.be/FaVfeO5WTV8) |
 | **Working demo** | [Run it in your browser with Codespaces](docs/codespaces.md), or [locally](docs/getting-started.md) |
 | **How we measure** | [Methodology](docs/methodology.md) · [Architecture](docs/architecture.md) |
 
-Numbers live in each run's `report.html` under `results/runs/`, not in the documentation, so they cannot go stale.
+Numbers live in each run's `report.html` (a frozen run is in [hackathon/results](hackathon/results/README.md)), not in the documentation, so they cannot go stale.
 
 ## What it measures
 
@@ -81,7 +82,7 @@ Details: [dashboard guide](dashboard/live_lab/README.md).
 
 Empirical timings and wire sizes on pinned stacks; not a security proof and not a production DNSSEC product. Offline
 and simulated results use different library versions and are never mixed; simulated timings are indicative, not
-core-pinned; the MTL drafts are not RFCs yet. Full list, software stacks and PS-036 coverage:
+core-pinned; the MTL drafts are not RFCs yet. Full list and software stacks:
 [Scope and limits](docs/scope-and-limits.md).
 
 ## Documentation
