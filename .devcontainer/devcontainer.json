@@ -1,7 +1,13 @@
 {
   "name": "CipherOps",
-  "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bookworm",
+  // Plain Debian base, with Python added as a feature. The Microsoft language images ship a Yarn apt source whose
+  // signing key Yarn has rotated, which makes the apt-get update of every later feature fail with NO_PUBKEY.
+  "image": "mcr.microsoft.com/devcontainers/base:bookworm",
   "features": {
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.12",
+      "installTools": false
+    },
     // Docker runs inside the codespace, so the compose files' bind mounts (results/, configs/) resolve as written.
     "ghcr.io/devcontainers/features/docker-in-docker:2": {}
   },
