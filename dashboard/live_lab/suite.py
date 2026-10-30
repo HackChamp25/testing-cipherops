@@ -16,6 +16,7 @@ import csv
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -202,6 +203,32 @@ def _signing_rows(h: driver.LabHandle, size: int) -> list[dict]:
              "rrsig_count", "signed_bytes", "sign_seconds", "verify_seconds")}} for r in rows]
 
 
+def _check_reusable(h: driver.LabHandle, size: int, scenarios: list[str], reuse: str) -> Path:
+    """Make sure the zones on disk are still the ones ``reuse`` signed. Returns its signing-trials file.
+
+    Signing is not repeatable to the second, so the per-zone sign times stored with the zones must equal
+    the ones that run recorded; if another run re-signed this size since, they will not.
+    """
+    old = SUITES / reuse
+    trials = old / f"signing_trials_{size}.csv"
+    full = old / "signing_full.csv"
+    fix = ". Run it once without --reuse."
+    missing = [s for s in scenarios if driver.load_manifest(h, s) is None]
+    if missing:
+        raise RuntimeError(f"cannot reuse {reuse} for {size} names: no signed zones for {', '.join(missing)}{fix}")
+    if not trials.is_file() or not full.is_file():
+        raise RuntimeError(f"cannot reuse {reuse}: its signing files for {size} names are missing{fix}")
+    with full.open(encoding="utf-8") as f:
+        before = {(r["scenario"], r["origin"]): float(r["sign_seconds"])
+                  for r in csv.DictReader(f) if int(r["size"]) == size}
+    now = {(r["scenario"], r["origin"]): float(r["sign_seconds"]) for r in _signing_rows(h, size)}
+    changed = sorted({s for (s, o), t in now.items() if s in scenarios and abs(before.get((s, o), -1) - t) > 0.0005})
+    if changed:
+        raise RuntimeError(f"the zones for {size} names were signed again after {reuse} ({', '.join(changed)}), "
+                           f"so its signing numbers no longer match{fix}")
+    return trials
+
+
 def _write_csv(path: Path, rows: list[dict]) -> None:
     if not rows:
         return
@@ -228,16 +255,24 @@ def run_suite(p: dict) -> None:
             h = driver.LabHandle(config=cfgpath, stack=p["stack"])
             r.st.update(size=n, config=cfgpath, stack=p["stack"])
 
-            r.step(f"{tag}: signing every zone with {', '.join(scenarios)}")
-            r.log(driver.prepare(h, jobs=int(p.get("jobs", 1)), scenarios=scenarios)[-1500:])
-            r.tick()
+            reuse = p.get("reuse")
+            if reuse:
+                src = _check_reusable(h, n, scenarios, reuse)
+                r.step(f"{tag}: reusing the zones already signed in {reuse}")
+                shutil.copyfile(src, r.dir / src.name)
+                r.tick()
+                r.tick()
+            else:
+                r.step(f"{tag}: signing every zone with {', '.join(scenarios)}")
+                r.log(driver.prepare(h, jobs=int(p.get("jobs", 1)), scenarios=scenarios)[-1500:])
+                r.tick()
 
-            sample = sample_sizes(n, int(p["sample_names"]))
-            r.step(f"{tag}: repeating sign and verify {p['sign_trials']} times on samples of "
-                   f"{' and '.join(str(s) for s in sample)} names")
-            out = f"/eco/results/suites/{p['suite_id']}/signing_trials_{n}.csv"
-            r.log(driver.sign_trials(h, scenarios, int(p["sign_trials"]), sample, out)[-1500:])
-            r.tick()
+                sample = sample_sizes(n, int(p["sample_names"]))
+                r.step(f"{tag}: repeating sign and verify {p['sign_trials']} times on samples of "
+                       f"{' and '.join(str(s) for s in sample)} names")
+                out = f"/eco/results/suites/{p['suite_id']}/signing_trials_{n}.csv"
+                r.log(driver.sign_trials(h, scenarios, int(p["sign_trials"]), sample, out)[-1500:])
+                r.tick()
 
             r.step(f"{tag}: starting the lab")
             driver.up(h)
@@ -322,6 +357,9 @@ def _cli_parser():
     p.add_argument("--jobs", type=int, default=1, help="zones signed in parallel (1 = clean timings)")
     p.add_argument("--stack", default=driver.DEFAULT_STACK)
     p.add_argument("--name", default="", help="name shown in the dashboard")
+    p.add_argument("--reuse", default="", metavar="SUITE", help="measure again on the zones an earlier run "
+                   "already signed (name of its folder under ecosystem/results/suites); skips signing. "
+                   "Needs the same sizes and algorithms, and nothing else must have re-signed them since")
     p.add_argument("--yes", action="store_true", help="allow a run that needs more than 12 hours")
     p.add_argument("--plan", action="store_true", help="only show what would run and the time estimate")
     return p
@@ -344,18 +382,23 @@ def main(argv: list[str] | None = None) -> None:
     bad = [n for n in networks if n not in driver.PROFILE_DEFAULTS]
     if bad:
         raise SystemExit(f"unknown network(s) {bad}; choose from {', '.join(driver.PROFILE_DEFAULTS)}")
-    est = estimate_seconds(sizes, scenarios, args.jobs, args.sign_trials, args.sample)
+    if args.reuse and not (SUITES / args.reuse / "suite.json").is_file():
+        raise SystemExit(f"--reuse: no finished run named {args.reuse!r} in {SUITES}")
+    est = 0.0 if args.reuse else estimate_seconds(sizes, scenarios, args.jobs, args.sign_trials, args.sample)
     print(f"Benchmark: sizes {sizes} · {', '.join(scenarios)} · {args.trials} measurement trial(s), "
           f"{args.sign_trials} signing trial(s) · networks {', '.join(networks)}")
-    print(f"Signing and sign trials about {driver.format_duration(est)}, plus measuring a few minutes per size.")
+    if args.reuse:
+        print(f"Reusing the zones signed in {args.reuse}: no signing, just measuring (a few minutes per network).")
+    else:
+        print(f"Signing and sign trials about {driver.format_duration(est)}, plus measuring a few minutes per size.")
     if args.plan:
         return
     if est > LONG_RUN_S and not args.yes:
         raise SystemExit(f"That is more than {LONG_RUN_S // 3600} hours of signing alone. If you really mean it, "
                          "add --yes (use --plan to preview).")
     params = {
-        "label": args.name, "stack": args.stack, "sizes": sizes, "scenarios": scenarios, "trials": args.trials,
-        "sign_trials": args.sign_trials, "sample_names": args.sample, "n_queries": args.queries,
+        "label": args.name, "stack": args.stack, "reuse": args.reuse, "sizes": sizes, "scenarios": scenarios,
+        "trials": args.trials, "sign_trials": args.sign_trials, "sample_names": args.sample, "n_queries": args.queries,
         "networks": networks, "udp": args.udp, "jobs": args.jobs,
         "workload": dict(driver.WORKLOAD_DEFAULTS),
         "profiles": {k: dict(v) for k, v in driver.PROFILE_DEFAULTS.items() if k != "lan"},
