@@ -204,7 +204,8 @@ def test_dig_presets_are_all_accepted(eco):
 
 # ───────────── Prepare must start even when Docker left work/ owned by root ─────────────
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root can write anywhere")
+# POSIX permissions: os.geteuid() does not exist on Windows, and read-only directories do not block writes there
+@pytest.mark.skipif(os.name == "nt" or os.geteuid() == 0, reason="needs POSIX permissions and a non-root user")
 def test_prepare_starts_when_work_dir_is_not_writable(eco, monkeypatch):
     root, _ = eco
     h = _handle(root)
