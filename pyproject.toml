@@ -18,4 +18,5 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 markers = ["harness: requires the compiled C harness and reference library (run inside Docker)"]

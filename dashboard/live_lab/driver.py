@@ -23,12 +23,231 @@ DEFAULT_STACK = "draft06"
 # Prefer this order in the UI; only stacks with ecosystem/stacks/<name>.env are shown.
 STACK_CHOICES = ("draft06", "latest")
 STACK_BLURBS = {
-    "draft06": "Condensed MTL by default; full ladder on EDNS 65050 (MTL v1.2 / liboqs 0.14)",
-    "latest": "Always-full MTL RRSIGs; same MTL commit as main Cipherops (liboqs 0.16)",
+    "draft06": "Condensed MTL by default; full ladder on EDNS 65050 (MTL v1.2 / liboqs 0.14). "
+               "Signs with SPHINCS+-SHA2-128s-simple, the pre-standard form of SLH-DSA; all scenarios validate",
+    "latest": "Always-full MTL RRSIGs; FIPS 205 SLH-DSA (liboqs 0.16), same MTL commit as the offline harness. "
+              "Plain SLH-DSA is not validated by its Unbound (SERVFAIL)",
+}
+# What the stack's signer, MTL library and resolver actually call in liboqs (read from the built binaries).
+STACK_PRIMITIVE = {
+    "draft06": "SPHINCS+-SHA2-128s-simple (pre-standard form of SLH-DSA, liboqs 0.14), in ldns, MTL and Unbound",
+    "latest": "SLH_DSA_PURE_SHA2_128S (FIPS 205, liboqs 0.16) in ldns and MTL; Unbound still names SPHINCS+",
 }
 MTL_FULL = 65050
+# Scenarios whose zones the stack's Unbound cannot validate. Seen on `latest`: Unbound logs "verify: Using PQ /
+# PQ-MTL Algorithms 246 ... Failed to match any usable anchor" and answers SERVFAIL, while ldns-verify-zone accepts
+# the same signed zone and the same scenario validates (AD) on draft06. Strong indication of the cause: liboqs 0.16
+# removed the SPHINCS+ names, ldns signs with SLH_DSA_PURE_SHA2_128S, but the Unbound binary at this commit contains only
+# the SPHINCS+ name. Not confirmed from source and not yet reported upstream. This records the observation so that a
+# MTL vs non-MTL comparison is not run on a stack that cannot.
+UNVALIDATED_SCENARIOS = {"latest": ("slh-dsa",)}
+
+
+def unvalidated_scenarios(stack: str, scenarios) -> list[str]:
+    return [s for s in scenarios if s in UNVALIDATED_SCENARIOS.get(stack, ())]
 UNBOUND_IP = "10.53.0.53"
 DASHBOARD_CONFIG = "configs/_dashboard.yaml"
+
+# ─────────────────────────── single-user guard ───────────────────────────
+# The lab uses fixed container names and one subnet, and the benchmark measures timing, so nothing else may
+# touch the lab, the signed zones or the CPU while a benchmark suite runs. The suite process names itself
+# through this variable; every other process is "someone else" and is refused.
+SUITES_DIR = ECO / "results" / "suites"
+SUITE_OWNER_ENV = "CIPHEROPS_SUITE_OWNER"
+ACTIVE_STATES = ("starting", "running")
+STARTING_GRACE_S = 60
+
+
+class LabBusy(RuntimeError):
+    """The lab is in use by a running benchmark suite or signing job."""
+
+
+def pid_alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    if os.name == "nt":
+        cp = subprocess.run(["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"], capture_output=True, text=True,
+                            creationflags=NO_WINDOW)
+        return str(int(pid)) in cp.stdout
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True  # exists but belongs to another user
+    return True
+
+
+def effective_job_state(st: dict, *, now: float | None = None) -> dict:
+    """Normalise a job's status: a worker that vanished, or never appeared, reads as 'stopped'.
+
+    'starting' has no worker pid for a moment after launch, so it counts as active for a short grace period.
+    """
+    st = dict(st)
+    if st.get("state") in ACTIVE_STATES:
+        now = time.time() if now is None else now
+        if st.get("pid"):
+            if not pid_alive(st["pid"]):
+                st["state"] = "stopped"
+                st["error"] = st.get("error") or "The process ended before finishing."
+        elif now - float(st.get("started") or 0) > STARTING_GRACE_S:
+            st["state"] = "stopped"
+            st["error"] = st.get("error") or "The process never started."
+    return st
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def active_suite_id() -> str | None:
+    """Id of a benchmark suite that is starting or running, if any."""
+    if not SUITES_DIR.is_dir():
+        return None
+    for d in sorted(SUITES_DIR.iterdir()):
+        if d.is_dir() and effective_job_state(_read_json(d / "status.json")).get("state") in ACTIVE_STATES:
+            return d.name
+    return None
+
+
+def _out(cmd: list[str], cwd: Path | None = None) -> str:
+    try:
+        cp = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=30, creationflags=NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return "unavailable"
+    return cp.stdout.strip() if cp.returncode == 0 else "unavailable"
+
+
+def _read_text(path: str) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8").strip()
+    except OSError:
+        return "unavailable"
+
+
+def provenance(stack: str) -> dict:
+    """What a reader needs to repeat or audit a benchmark: code version, host, Docker and the exact images.
+
+    Everything is read from the machine at the time of the run. A value that cannot be read is recorded as
+    ``unavailable`` rather than guessed, so a missing field is visible in the report.
+    """
+    import platform
+
+    cpu = next((ln.split(":", 1)[1].strip() for ln in _read_text("/proc/cpuinfo").splitlines()
+                if ln.startswith("model name")), platform.processor() or "unavailable")
+    mem = next((ln for ln in _read_text("/proc/meminfo").splitlines() if ln.startswith("MemTotal")), "unavailable")
+    images = {}
+    for repo in ECO_IMAGE_REPOS:
+        info = _out(["docker", "image", "inspect", f"{repo}:{stack}", "--format", "{{.Id}} {{.Created}}"])
+        image_id, _, created = info.partition(" ")
+        images[repo] = {"id": image_id, "created": created}
+    return {
+        "git_commit": _out(["git", "rev-parse", "HEAD"], cwd=REPO),
+        "git_dirty": bool(_out(["git", "status", "--porcelain"], cwd=REPO)),
+        "platform": platform.platform(),
+        "kernel": platform.release(),
+        "cpu_model": cpu,
+        "cpus": os.cpu_count(),
+        "mem_total": mem,
+        "cpu_governor": _read_text("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"),
+        "python": platform.python_version(),
+        "docker_server": _out(["docker", "version", "--format", "{{.Server.Version}}"]),
+        "stack": stack,
+        "stack_pins": stack_pins(stack),
+        "images": images,
+        # The live lab is NOT pinned to dedicated cores (the offline harness is): containers share every host CPU.
+        "cpu_isolation": "none (lab containers share all host CPUs)",
+    }
+
+
+def jobs_dir() -> Path:
+    """Where background-job state lives. Not under work/ or results/: Docker creates those as root, and a
+    folder the dashboard cannot write to would stop Prepare from starting."""
+    return ECO / "jobs"
+
+
+def active_prepare_tags() -> list[str]:
+    """Lab tags that have a signing job starting or running."""
+    root = jobs_dir()
+    if not root.is_dir():
+        return []
+    return [d.parent.parent.name for d in sorted(root.glob("*/prepare-live/status.json"))
+            if effective_job_state(_read_json(d)).get("state") in ACTIVE_STATES]
+
+
+def build_status() -> dict:
+    """Status of the background image build ({} if none ever ran); a vanished worker reads as 'stopped'."""
+    return effective_job_state(_read_json(jobs_dir() / "_build" / "status.json"))
+
+
+def active_build_stack() -> str | None:
+    st = build_status()
+    return (st.get("stack") or "?") if st.get("state") in ACTIVE_STATES else None
+
+
+def require_no_build(stack: str | None = None) -> None:
+    """Refuse to start containers or sign with images that are still being built."""
+    live = active_build_stack()
+    if live and (stack is None or stack == live):
+        raise LabBusy(f"Images for {live} are still being built. Wait for the build to finish or cancel it first.")
+
+
+def offline_status() -> dict:
+    """Status of the background offline-harness run ({} if none ever ran); a vanished worker reads as 'stopped'."""
+    return effective_job_state(_read_json(jobs_dir() / "_offline" / "status.json"))
+
+
+def active_offline() -> bool:
+    return offline_status().get("state") in ACTIVE_STATES
+
+
+def require_no_offline() -> None:
+    """The offline harness times on one dedicated core; anything else CPU-heavy would distort it."""
+    if active_offline():
+        raise LabBusy("An offline benchmark is running on a dedicated core. Wait for it to finish or cancel it "
+                      "first: running anything else now would distort its timings.")
+
+
+def remove_tree(path: Path, stack: str = "draft06") -> bool:
+    """Delete a folder under ecosystem/, including files Docker created as root.
+
+    A plain delete fails silently on those, so the folder would look removed while its contents stayed.
+    Falls back to ``rm`` inside the tools image, which runs as root. Returns True if the folder is gone.
+    """
+    import shutil
+
+    path = Path(path)
+    if not path.exists():
+        return True
+    shutil.rmtree(path, ignore_errors=True)
+    if not path.exists():
+        return True
+    try:
+        rel = path.resolve().relative_to(ECO.resolve())
+    except ValueError:
+        return False  # never delete outside ecosystem/
+    if not rel.parts:
+        return False
+    _run(["docker", "run", "--rm", "--network", "none", "--entrypoint", "rm", "-v", f"{ECO}:/eco:z",
+          f"cipherops-eco-tools:{stack}", "-rf", "--", f"/eco/{rel.as_posix()}"], check=False, timeout=300)
+    return not path.exists()
+
+
+def require_no_suite(*, force: bool = False) -> None:
+    """Refuse an operation that would disturb a running benchmark suite (the suite's own process passes)."""
+    if force:
+        return
+    sid = active_suite_id()
+    if sid and sid != os.environ.get(SUITE_OWNER_ENV):
+        raise LabBusy(f"Benchmark {sid} is running and is using the lab. Wait for it to finish or cancel it first.")
+
+
+def require_not_signing(h: "LabHandle") -> None:
+    if h.tag in active_prepare_tags():
+        raise LabBusy(f"Signing is still running for lab {h.tag}. Wait for it to finish or cancel it first.")
 
 
 def list_stacks() -> list[str]:
@@ -423,22 +642,19 @@ def status(h: LabHandle) -> dict:
 ECO_IMAGE_REPOS = ("cipherops-eco-nsd", "cipherops-eco-unbound", "cipherops-eco-tools")
 
 
-def build_images(h: LabHandle) -> str:
-    """Build cipherops-eco-{nsd,unbound,tools}:<stack> (same as eco.ps1 build).
+def build_command(stack: str) -> list[str]:
+    """``docker compose build`` for cipherops-eco-{nsd,unbound,tools}:<stack> (same as eco.ps1 build).
 
-    First build can take a long time (OpenSSL / liboqs / MTL from source).
+    A first build compiles OpenSSL, liboqs and MTL from source and takes a long time, so the dashboard runs
+    it as a background job (``build_job``).
     """
-    env_file = ECO / "stacks" / f"{h.stack}.env"
+    env_file = ECO / "stacks" / f"{stack}.env"
     compose = ECO / "docker" / "build.yml"
     if not env_file.is_file():
         raise RuntimeError(f"missing stack env {env_file}")
     if not compose.is_file():
         raise RuntimeError(f"missing {compose}")
-    cp = _run(
-        ["docker", "compose", "-f", str(compose), "--env-file", str(env_file), "build"],
-        timeout=None,
-    )
-    return (cp.stdout or "") + (cp.stderr or "")
+    return ["docker", "compose", "-f", str(compose), "--env-file", str(env_file), "build"]
 
 
 def pull_images(h: LabHandle, registry: str) -> str:
@@ -446,6 +662,8 @@ def pull_images(h: LabHandle, registry: str) -> str:
 
     Expects remote tags like ``{registry}/cipherops-eco-nsd:{stack}`` (and unbound, tools).
     """
+    require_no_suite()
+    require_no_build()
     registry = (registry or "").strip().rstrip("/")
     if not registry:
         raise RuntimeError("registry is empty — set a host like ghcr.io/org/cipherops")
@@ -619,6 +837,7 @@ def prepare(h: LabHandle, jobs: int = 2, scenarios: list[str] | None = None) -> 
 
 def sign_trials(h: LabHandle, scenarios: list[str], trials: int, names: list[int], out_container_path: str) -> str:
     """Repeat sign + verify of sample leaf zones in the tools image; CSV goes to ``out_container_path``."""
+    require_no_suite()
     img = f"cipherops-eco-tools:{h.stack}"
     cp = _run([
         "docker", "run", "--rm", "--network", "none",
@@ -765,6 +984,10 @@ def _reclaim_fixed_lab_names() -> str:
 
 
 def up(h: LabHandle) -> str:
+    require_no_suite()
+    require_no_offline()
+    require_no_build(h.stack)
+    require_not_signing(h)
     stopped = stop_other_labs(h)
     # Own project may also have exited containers holding names after a failed up
     _run(compose_cmd(h, "down", "--remove-orphans"), check=False, timeout=120)
@@ -778,17 +1001,20 @@ def up(h: LabHandle) -> str:
     return note + cp.stdout + cp.stderr
 
 
-def down(h: LabHandle) -> str:
+def down(h: LabHandle, *, force: bool = False) -> str:
+    require_no_suite(force=force)
     cp = _run(compose_cmd(h, "down"), timeout=120, check=False)
     return cp.stdout + cp.stderr
 
 
 def client_exec(h: LabHandle, inner: str, timeout: int | None = 120) -> str:
+    require_no_suite()
     cp = _run(compose_cmd(h, "exec", "-T", "client", "bash", "-lc", inner), timeout=timeout)
     return cp.stdout
 
 
 def activate(h: LabHandle, scenario: str, udp: int = 1232) -> str:
+    require_not_signing(h)
     return client_exec(h, f"python3 -m ecolab activate {h.config} --scenario {scenario} --udp {udp}", timeout=180)
 
 
@@ -816,6 +1042,11 @@ def probe(h: LabHandle, qname: str, qtype: str = "A", *, server: str = "10.53.0.
     raise RuntimeError(f"no JSON from probe:\n{out[-2000:]}")
 
 
+DIG_PLAIN_FLAGS = frozenset({"-4", "-6", "-x"})
+DIG_VALUE_FLAGS = frozenset({"-t", "-q", "-c", "-p"})   # the next argument is the value
+DIG_MAX_ARGS = 40
+
+
 def dig_argv(line: str) -> list[str]:
     """Parse a user-typed dig command into dig's arguments; defaults the server to Unbound."""
     parts = shlex.split(line)
@@ -823,9 +1054,21 @@ def dig_argv(line: str) -> list[str]:
         parts = parts[1:]
     if not parts:
         raise ValueError("Enter a dig command, e.g. dig host000000.zone00.test A +dnssec")
-    # -f / -k make dig read files from the client container.
-    if any(p.startswith(("-f", "-k")) for p in parts):
-        raise ValueError("dig -f and -k are not allowed here")
+    if len(parts) > DIG_MAX_ARGS:
+        raise ValueError(f"Too many dig arguments (max {DIG_MAX_ARGS}).")
+    # dig bundles single-letter flags (-4f reads a file), so a deny-list on "-f"/"-k" is not enough:
+    # only an explicit allow-list of dash options is accepted.
+    i = 0
+    while i < len(parts):
+        p = parts[i]
+        if p in DIG_VALUE_FLAGS:
+            i += 1
+            if i >= len(parts) or parts[i].startswith("-"):
+                raise ValueError(f"dig {p} needs a value, e.g. {p} A")
+        elif p.startswith("-") and p not in DIG_PLAIN_FLAGS:
+            raise ValueError(f"dig option {p!r} is not allowed here "
+                             f"(allowed: {', '.join(sorted(DIG_PLAIN_FLAGS | DIG_VALUE_FLAGS))}, and +options)")
+        i += 1
     if not any(p.startswith("@") for p in parts):
         parts.insert(0, f"@{UNBOUND_IP}")
     return parts
@@ -834,6 +1077,7 @@ def dig_argv(line: str) -> list[str]:
 def dig(h: LabHandle, line: str, timeout: int = 30) -> dict:
     """Run dig inside the client container (no shell); returns the command, exit code and output."""
     argv = dig_argv(line)
+    require_no_suite()
     cp = _run(compose_cmd(h, "exec", "-T", "client", "dig", *argv), timeout=timeout, check=False)
     out = (cp.stdout + cp.stderr).rstrip()
     if cp.returncode in (126, 127) and "executable file not found" in out:
@@ -1114,15 +1358,18 @@ def clear_demo_data(
     (the live-dashboard folder is handled by the other scopes).
     Does not remove Docker images.
     """
+    if work or benchmarks or suites:
+        require_no_suite()
+    if work:
+        require_not_signing(h)
     d = h.capture_dir
     d.mkdir(parents=True, exist_ok=True)
     removed = {"session": 0, "activity": 0, "pcaps": 0, "work": 0, "benchmarks": 0, "suites": 0}
     if suites:
         removed["suites"] = clear_suites()
     if benchmarks:
-        import shutil
         for run_dir in list_run_dirs(h):
-            shutil.rmtree(run_dir, ignore_errors=True)
+            remove_tree(run_dir, h.stack)
             removed["benchmarks"] += 1
     if session:
         p = session_path(h)
@@ -1153,11 +1400,11 @@ def clear_demo_data(
                 _run(compose_cmd(h, "down"), timeout=120, check=False)
         except Exception:  # noqa: BLE001
             pass
-        tag_dir = h.work
-        if tag_dir.is_dir():
-            import shutil
-            shutil.rmtree(tag_dir, ignore_errors=True)
+        if h.work.is_dir():
+            if not remove_tree(h.work, h.stack):
+                raise RuntimeError(f"could not delete {h.work}; remove it with: sudo rm -rf {h.work}")
             removed["work"] = 1
+        remove_tree(jobs_dir() / h.tag, h.stack)
     return removed
 
 
@@ -1180,12 +1427,12 @@ def suite_footprint() -> dict:
 
 def clear_suites() -> int:
     """Delete benchmark suites, their per-size runs and signed zones; returns the number of suites removed."""
-    import shutil
+    require_no_suite()
     for compose in (ECO / "work").glob("eco-bench-*/compose.yml"):
         _run(["docker", "compose", "-f", str(compose), "down"], check=False, timeout=120)
     n = suite_footprint()["suites"]
     for p in _suite_dirs():
-        shutil.rmtree(p, ignore_errors=True)
+        remove_tree(p)
     for cfgf in (ECO / "configs").glob("_bench-*.yaml"):
         cfgf.unlink(missing_ok=True)
     return n
@@ -1223,12 +1470,6 @@ def reset_preview(h: LabHandle) -> dict:
         "work_exists": h.work.is_dir(),
         "work_bytes": _dir_size(h.work) if h.work.is_dir() else 0,
     }
-
-
-def set_show_prepare_metrics(h: LabHandle, visible: bool) -> None:
-    sess = load_session(h)
-    sess["show_prepare_metrics"] = bool(visible)
-    save_session(h, sess)
 
 
 def session_queries(h: LabHandle, ui_log: list | None) -> list:

@@ -11,10 +11,11 @@ import json
 import re
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import yaml
 
-from . import results
+from . import evolution, results, stats
 from .codepoints import EDNS_MTL_MODE_FULL, MODES
 from .results import fmt_bytes, fmt_seconds
 
@@ -144,7 +145,7 @@ def figures(run: results.Run, out: Path) -> dict[str, str]:
         fig, ax = plt.subplots(figsize=(9, 4.8))
         grouped(ax, t, col, col + "_lo", col + "_hi", 1e-9)
         ax.set_ylabel("seconds (log scale)")
-        ax.set_title(f"{title}: median of {run.config['trials']} trials, 95% bootstrap CI")
+        ax.set_title(f"{title}: median of {run.config['trials']} trials, bars = {stats.ci_label(int(run.config['trials']))}")
         hatch = [Patch(facecolor="#d64545", hatch="///", edgecolor="white",
                        label="extrapolated from a measured sample")] if t.limited.any() else []
         save(fig, [ax], key, hatch)
@@ -177,6 +178,43 @@ def figures(run: results.Run, out: Path) -> dict[str, str]:
         ax.set_title(f"Resolver cache signature material: {kind.upper()}")
     axes[0].set_ylabel("bytes (log scale)")
     save(fig, axes, "cache")
+
+    if len(run.frames.get("evolution", [])) and len(run.frames.get("evolution_direct", [])):
+        mtl_e, dir_e = run.frames["evolution"], run.frames["evolution_direct"]
+        cost = evolution.update_cost(mtl_e, dir_e)
+        cov = evolution.coverage_table(mtl_e)
+        ks = sorted(cost.k.unique())
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4.6))
+        ax = axes[0]
+        width = 0.8 / (1 + len(ds))
+        series = [("Direct SLH-DSA (k signatures)", cost[cost.dataset == ds[0]].set_index("k").direct_round_ns, colors["slh-dsa"])]
+        shade = ["#7fcf8f", "#2f9e44", "#1b6b2e"]
+        series += [(f"MTL, {d} zone (1 ladder signature)", cost[cost.dataset == d].set_index("k").mtl_round_ns,
+                    shade[min(i, 2)]) for i, d in enumerate(ds)]
+        for j, (name, vals, col) in enumerate(series):
+            xs = [i + (j - (len(series) - 1) / 2) * width for i in range(len(ks))]
+            ax.bar(xs, [vals.get(k, np.nan) / 1e9 for k in ks], width, label=name, color=col)
+        ax.set_xticks(range(len(ks)), [f"k = {k}" for k in ks])
+        ax.set_yscale("log")
+        ax.grid(axis="y", which="both", alpha=0.25)
+        ax.set_ylabel("seconds per update round (log scale)")
+        ax.set_title("Cost of one update round", fontsize=10)
+        ax.legend(fontsize=7, frameon=False)
+        ax = axes[1]
+        d0 = cov[cov.dataset == ds[-1]]
+        for k, g in d0.groupby("k"):
+            ax.plot(g.age, g.share * 100, marker="o", label=f"k = {k}")
+        ax.set_xticks(sorted(d0.age.unique()))
+        ax.set_xlabel("age of the resolver's cached ladder (rounds)")
+        ax.set_ylabel("answers still verifying (%)")
+        ax.set_ylim(0, 102)
+        ax.set_title(f"Condensed signatures against an older ladder, {ds[-1]} zone", fontsize=10)
+        ax.grid(alpha=0.25)
+        ax.legend(fontsize=8, frameon=False)
+        fig.tight_layout()
+        fig.savefig(out / "evolution.png", dpi=150)
+        plt.close(fig)
+        made["evolution"] = "figures/evolution.png"
 
     live = live_summary(run)
     if live is not None:
@@ -221,6 +259,28 @@ def _fit_by_mode(run: results.Run, ds: str) -> pd.Series:
     return (f.fit_pct * f.responses).groupby(f["mode"]).sum() / f.responses.groupby(f["mode"]).sum()
 
 
+def fmt_ratio(r: pd.Series) -> str:
+    """'123× [118×, 130×]': median of the per-trial ratios and its interval."""
+    if r is None or pd.isna(r.ratio):
+        return "–"
+    digits = 0 if r.ratio >= 100 else (1 if r.ratio >= 10 else 2)
+    f = lambda v: f"{v:,.{digits}f}×"  # noqa: E731
+    return f"{f(r.ratio)} [{f(r.ratio_lo)}, {f(r.ratio_hi)}]"
+
+
+def _floor(run: results.Run) -> pd.DataFrame:
+    mode = run.config.get("control")
+    if not mode or "control" not in run.frames:
+        return pd.DataFrame()
+    return results.noise_floor_table(run.frames["trials"], run.frames["control"], mode)
+
+
+def _paired(run: results.Run, ds: str, metric: str) -> pd.Series | None:
+    t = results.paired_ratio_table(run.frames["trials"], "slh-dsa", "slh-dsa-mtl")
+    t = t[(t.dataset == ds) & (t.metric == metric)] if len(t) else t
+    return t.iloc[0] if len(t) else None
+
+
 def _headline(run: results.Run, timing: pd.DataFrame) -> list[str]:
     big = run.dataset_order[-1]
     if _pair(timing, big) is None:
@@ -230,10 +290,11 @@ def _headline(run: results.Run, timing: pd.DataFrame) -> list[str]:
     if measured:
         ds = measured[-1]
         d, m = _pair(timing, ds)
+        sp = _paired(run, ds, "signing")
         out += [
             f"- **Signing ({ds} zone, {int(m.dataset_rrsets):,} RRsets, fully measured).** MTL signed the zone in "
-            f"{ci(m, 'sign_total_ns')}; direct SLH-DSA took {ci(d, 'sign_total_ns')}. That is "
-            f"{d.sign_total_ns / m.sign_total_ns:,.0f} times faster (median, 95% CI in brackets).",
+            f"{ci(m, 'sign_total_ns')}; direct SLH-DSA took {ci(d, 'sign_total_ns')}. MTL was "
+            f"{fmt_ratio(sp)} faster (median of the per-trial ratios, interval in brackets).",
             f"- **Verification ({ds} zone, warm).** MTL took {fmt_seconds(m.verify_warm_total_ns)} for every RRSIG in "
             f"the zone; direct SLH-DSA took {fmt_seconds(d.verify_warm_total_ns)}.",
         ]
@@ -256,6 +317,146 @@ def _headline(run: results.Run, timing: pd.DataFrame) -> list[str]:
         f"full-signature fetch.",
     ]
     return out
+
+
+def _noise_section(run: results.Run, floor: pd.DataFrame) -> str:
+    out: list[str] = []
+    if not floor.empty:
+        mode = run.config["control"]
+        out.append(f"#### Measurement noise: the A/A control\n\n"
+                   f"`{mode}` ran twice inside every trial, on the same input, as if it were two different modes. "
+                   "The true ratio is 1, so the table below is the measurement's own noise. A difference between "
+                   "two modes that is smaller than this band must not be reported as a difference.\n")
+        fl = floor.assign(order=floor.dataset.map({d: i for i, d in enumerate(run.dataset_order)})).sort_values(["metric", "order"])
+        out.append(md_table(pd.DataFrame({
+            "dataset": fl.dataset, "metric": fl.metric, "trials": fl.trials,
+            "A/A ratio, median [interval]": [f"{r.ratio:.3f} [{r.ratio_lo:.3f}, {r.ratio_hi:.3f}]" for _, r in fl.iterrows()],
+            "noise band": [f"±{b * 100:.1f}%" for b in fl.band]})))
+        out.append("\n*Table 4c: A/A control (one mode against its own copy).*\n")
+    tm = run.environment.get("timer") or {}
+    if tm.get("operations"):
+        er = tm["empty_region"]
+        out.append("#### Measurement noise: the timer\n\n"
+                   f"Every library call is timed with `{tm['clock']}`. An empty timed region cost "
+                   f"{er['median_ns']} ns (median; p99 {er['p99_ns']} ns), and the smallest step the clock was seen "
+                   f"to take is {tm['smallest_observed_step_ns']} ns. The two fastest operations were timed both "
+                   "one call at a time (as in the benchmark) and as 1,000 calls in one region divided by 1,000:\n")
+        rows = [{"operation": name.replace("_", " "), "per call, median": fmt_seconds(o["per_call_median_ns"]),
+                 "batch of 1,000, per call": fmt_seconds(o["batch_per_call_median_ns"]),
+                 "difference": f"{o['per_call_vs_batch_pct']:+.1f}%",
+                 "timer cost as share of the operation": f"{o['timer_share_of_operation'] * 100:.1f}%"}
+                for name, o in tm["operations"].items()]
+        out.append(md_table(pd.DataFrame(rows)))
+        verdict = ("Per-call timing is reliable for these operations (timer cost at most "
+                   f"{tm['max_timer_share'] * 100:.0f}% of the operation)." if tm["per_call_timing_reliable"]
+                   else "**The timer cost is a large share of the fastest operation; read their per-call times with care.**")
+        out.append(f"\n*Table 4d: timer calibration.* {verdict}\n")
+    return "\n".join(out)
+
+
+def _evolution_section(run: results.Run, figs: dict[str, str]) -> str:
+    F = run.frames
+    if "evolution" not in F or F["evolution"].empty or "evolution_direct" not in F:
+        return ""
+    mtl, direct = F["evolution"], F["evolution_direct"]
+    ev = run.config["evolution"]
+    out: list[str] = []
+    out.append("### 5.7 Evolving zone: updates and cached ladders\n")
+    out.append("MTL is built for a series that keeps growing, so a single signed zone is its best case. Here each "
+               f"series starts from the full dataset and runs rounds in which **k** RRsets change (k = {', '.join(map(str, ev['k']))}; "
+               f"{', '.join(map(str, ev['rounds']))} rounds). Every change appends a new leaf, old leaves never "
+               "leave the series, and each round signs one new ladder. The baseline signs every changed RRset with "
+               "plain SLH-DSA. All figures in Tables 12 to 15 are measured with the reference library; an RRset "
+               "'change' is modelled as the same-size message with its last 8 bytes replaced, chosen uniformly at "
+               "random, so the cost of an update is real but its content is synthetic.\n")
+    def by_zone(df: pd.DataFrame) -> pd.DataFrame:
+        rank = {d: i for i, d in enumerate(run.dataset_order)}
+        return df.assign(_o=df.dataset.map(rank)).sort_values(["_o", "k"]).drop(columns="_o").reset_index(drop=True)
+
+    cost = by_zone(evolution.update_cost(mtl, direct))
+    out.append("#### Cost of one update round\n")
+    rows = []
+    for _, r in cost.iterrows():
+        rows.append({"dataset": r.dataset, "k": int(r.k), "MTL: append k leaves + 1 ladder signature": f"{fmt_seconds(r.mtl_round_ns)} [{fmt_seconds(r.mtl_lo_ns)}–{fmt_seconds(r.mtl_hi_ns)}]",
+                     "direct: k signatures": fmt_seconds(r.direct_round_ns),
+                     "direct ÷ MTL (per-trial, interval)": fmt_ratio(pd.Series({"ratio": r.ratio, "ratio_lo": r.ratio_lo, "ratio_hi": r.ratio_hi})),
+                     "resolver verifies, MTL (1 ladder)": fmt_seconds(r.mtl_resolver_ns),
+                     "resolver verifies, direct (k signatures)": fmt_seconds(r.direct_resolver_ns)})
+    out.append(md_table(pd.DataFrame(rows)))
+    out.append("\n*Table 12: cost of one update round, median over rounds and trials. 'Resolver verifies' is the work to "
+               "take in the update: one ladder signature against k signatures.*\n")
+    if "evolution" in figs:
+        cap = ("Figure 6: cost of one update round (left) and how long a cached ladder keeps covering the "
+               "current answers (right)")
+        out.append(f"\n![{cap}]({figs['evolution']})\n\n*{cap}*\n")
+    one = cost[cost.k == cost.k.min()]
+    if len(one):
+        r = one.iloc[0]
+        verdict = ("MTL is not faster at k = 1: it still signs one ladder per round, the same SLH-DSA signature "
+                   "direct signing needs for one changed RRset"
+                   if r.ratio_lo <= 1.5 and r.ratio_hi >= 0.67 else
+                   f"MTL is {fmt_ratio(pd.Series({'ratio': r.ratio, 'ratio_lo': r.ratio_lo, 'ratio_hi': r.ratio_hi}))} "
+                   "faster even at k = 1")
+        out.append(f"**Reading.** {verdict}. As k grows, direct signing pays k signatures per round and MTL still "
+                   "pays one, so the advantage grows roughly with k. At small k, MTL's gain is in bytes and in "
+                   "verification, not in signing time.\n")
+    out.append("#### How long a cached ladder stays useful\n")
+    cov = evolution.coverage_table(mtl)
+    cov = cov[cov.age > 0]
+    piv = by_zone(cov.pivot_table(index=["dataset", "k"], columns="age", values="share").reset_index())
+    piv.columns = [c if isinstance(c, str) else f"ladder {int(c)} round(s) old" for c in piv.columns]
+    for c in piv.columns[2:]:
+        piv[c] = (piv[c] * 100).map(lambda v: f"{v:.1f}%")
+    out.append(md_table(piv))
+    out.append("\n*Table 13: share of the current zone's RRsets whose condensed signature verifies against the cached "
+               "ladder of that age (measured by the library, every RRset, every round in which that age exists). "
+               "A leaf appended after the cached ladder was signed has no rung in it and is rejected; every other "
+               "RRset verifies. The rejected share is therefore the share of RRsets changed since that ladder, and "
+               "it is the share of answers that need a full signature (about 8 KB over TCP) from a resolver that "
+               "does not refresh.*\n")
+    g = evolution.growth(mtl)
+    last = by_zone(g.sort_values("round").groupby(["dataset", "k"]).tail(1).merge(
+        g[g["round"] == 0][["dataset", "k", "ladder_bytes", "condensed_bytes_max", "leaf_count"]],
+        on=["dataset", "k"], suffixes=("", "_start")))
+    out.append("#### Growth of the series\n")
+    out.append(md_table(pd.DataFrame({
+        "dataset": last.dataset, "k": last.k, "rounds": last["round"],
+        "leaves": [f"{int(a):,} → {int(b):,}" for a, b in zip(last.leaf_count_start, last.leaf_count)],
+        "rungs at the end": last.rung_count.astype(int),
+        "signed ladder": [f"{fmt_bytes(a)} → {fmt_bytes(b)}" for a, b in zip(last.ladder_bytes_start, last.ladder_bytes)],
+        "largest condensed signature": [f"{int(a)} B → {int(b)} B" for a, b in zip(last.condensed_bytes_max_start, last.condensed_bytes_max)],
+        "signer RSS": last.rss_bytes.map(fmt_bytes)})))
+    out.append("\n*Table 14: the series only grows. Rungs follow the binary breakdown of the leaf count (11 leaves = "
+               "8 + 2 + 1), so the ladder size moves up and down while the leaf count rises; the condensed signature "
+               "grows by 16 bytes whenever the leaf count reaches a power of two.*\n")
+    st = evolution.stale_by_round(mtl)
+    if st.stale_tested.sum():
+        worst = by_zone(st.groupby(["dataset", "k"]).share.min().reset_index())
+        out.append("#### Published signatures when the ladder changes\n")
+        out.append(md_table(pd.DataFrame({
+            "dataset": worst.dataset, "k": worst.k,
+            "lowest share still valid": [f"{v * 100:.1f}%" if pd.notna(v) else "–" for v in worst.share],
+            "rounds with any signature invalidated": [int(((st.dataset == d) & (st.k == k) & (st.share < 1)).sum())
+                                                       for d, k in zip(worst.dataset, worst.k)]})))
+        out.append("\n*Table 15: condensed signatures issued when a leaf was created, verified against the newest "
+                   "ladder. When rungs merge as the series grows, the path of an earlier signature no longer ends at "
+                   "a rung of the new ladder: it still verifies against the older ladder, but the signature has to be "
+                   "reissued for resolvers that hold the new one. At a power-of-two leaf count every earlier "
+                   "signature is affected.*\n")
+    eb = evolution.effective_bytes(mtl)
+    if len(eb):
+        e = eb[(eb.dataset == run.dataset_order[-1]) & (eb.age > 0)]
+        piv = e.pivot_table(index="k", columns="age", values="effective_bytes").reset_index()
+        piv.columns = [c if isinstance(c, str) else f"ladder {int(c)} old" for c in piv.columns]
+        for c in piv.columns[1:]:
+            piv[c] = piv[c].map(lambda v: f"{v:,.0f} B")
+        out.append(f"#### Signature bytes per answer, {run.dataset_order[-1]} zone (derived)\n")
+        out.append(md_table(piv))
+        out.append("\n*Table 16: derived, not measured. Measured condensed size, plus the measured uncovered share "
+                   "times a full signature (condensed + ladder). It is an upper bound: it assumes every uncovered "
+                   "answer fetches a full signature, while a real resolver refreshes its ladder once and then "
+                   "covers the rest. Compare with 7,856 B for plain SLH-DSA.*\n")
+    return "\n".join(out)
 
 
 def _discussion(run: results.Run) -> str:
@@ -301,9 +502,10 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
             add(f"\n![{caption}]({figs[key]})\n\n*{caption}*\n")
 
     add("# Benchmarking MTL Mode for Post-Quantum DNSSEC Signatures")
-    add("### PS-036 · PQC DNSSEC MTL Benchmark Using a Reference Implementation · IETF 126 Hackathon\n")
+    add("### PS-036 · PQC DNSSEC MTL Benchmark Using a Reference Implementation · AIORI Hackathon 3\n")
     add(f"Run `{run.root.name}` · go/no-go gate: **{run.preflight.get('verdict', 'missing')}** · "
-        f"{cfg['trials']} trials · seed {cfg['seed']} · git `{env.get('git_sha', 'unknown')}`\n")
+        f"{cfg['trials']} trials · seed {cfg['seed']} · stack `{env.get('stack', 'unknown')}` · "
+        f"git `{env.get('git_sha', 'unknown')}`\n")
 
     add("## Abstract\n")
     add("Post-quantum signatures such as SLH-DSA-SHA2-128s are 7,856 bytes long. A DNSSEC response that carries "
@@ -350,6 +552,8 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
         ("CPU", hw.get("cpu_model")), ("CPU affinity (cpuset)", str(hw.get("cpu_affinity"))),
         ("Memory", hw.get("mem_total")), ("Kernel", sw.get("kernel")),
         ("OS", "; ".join(sw.get("os_release", []))[:120]), ("Compiler", sw.get("gcc")),
+        ("Stack profile", env.get("stack")),
+        ("SLH-DSA call (liboqs name)", MODES["slh-dsa"].harness_algo),
         ("OpenSSL", sw.get("openssl")), ("liboqs", sw.get("liboqs_tag")),
         ("MTL reference commit", sw.get("mtl_reference_commit")),
         ("MTL compile flags", sw.get("mtl_reference_cflags")), ("Python", sw.get("python")),
@@ -362,7 +566,10 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
         "2. Its own unit tests and test vectors pass.\n"
         "3. Its key-generation, signing and verification tools round-trip with SLH-DSA-SHA2-128s-MTL, and a "
         "tampered message is rejected.\n"
-        "4. Every harness mode verifies its own output and rejects tampering.\n\n"
+        "4. Every harness mode verifies its own output and rejects tampering, wrong keys, truncated signatures "
+        "and signatures presented for another message.\n"
+        "5. The harness output is verified by a different program: `mtlverify` for MTL and OpenSSL for the "
+        "non-MTL SLH-DSA signatures (an interoperability check, not a known-answer test).\n\n"
         "The run aborts with `NO-GO` otherwise. The outcome of each check is listed in Appendix C.\n")
     add("### 4.3 Workloads\n")
     add("Each dataset is a deterministic synthetic zone `bench.example.`:\n\n"
@@ -396,10 +603,14 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
         f"verifier is built from the exported public key only.\n"
         f"- **MTL cold verification** = full signature without a cached ladder, on "
         f"{cfg['full_verify_sample']} RRsets.\n"
+        f"- **Noise.** The clock's own cost and resolution are measured at the start of the run (Table 4d)"
+        + (f", and `{cfg['control']}` runs twice inside every trial as an A/A control (Table 4c)."
+           if cfg.get("control") else ".") + "\n"
         f"- **Correctness.** A trial counts only if every signature verifies and tampered messages, "
         f"signatures and ladders are rejected.\n"
-        f"- **Statistics.** We report the median across trials with a bootstrap 95% confidence interval "
-        f"(2,000 resamples).\n"
+        f"- **Statistics.** We report the median across trials with a distribution-free confidence interval "
+        f"of the median (order statistics). With {cfg['trials']} trials it is the "
+        f"{stats.ci_label(int(cfg['trials']))}.\n"
         f"- **Transmitted bytes.** Measured on real DNS messages encoded by dnspython, using the signatures "
         f"from trial 0.\n")
 
@@ -409,7 +620,7 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
     rows = []
     for _, r in timing.iterrows():
         rows.append({"dataset": r.dataset, "mode": label(r["mode"]), "RRsets signed": f"{r.n_signed:,}/{r.dataset_rrsets:,}",
-                     "sign zone, median [95% CI]": ci(r, "sign_total_ns"),
+                     "sign zone, median [CI]": ci(r, "sign_total_ns"),
                      "per RRset": fmt_seconds(r.sign_per_rrset_ns),
                      "zone total (extrapolated)": fmt_seconds(r.get("sign_total_extrapolated_ns")) if r.limited else "",
                      "keygen": fmt_seconds(r.get("keygen_ns"))})
@@ -430,7 +641,7 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
     rows = []
     for _, r in timing.iterrows():
         rows.append({"dataset": r.dataset, "mode": label(r["mode"]),
-                     "verify zone (warm), median [95% CI]": ci(r, "verify_warm_total_ns"),
+                     "verify zone (warm), median [CI]": ci(r, "verify_warm_total_ns"),
                      "per RRset (warm)": fmt_seconds(r.verify_per_rrset_ns),
                      "one signature, cold": fmt_seconds(r.get("verify_full_median_ns")),
                      "checks passed": "yes" if r.checks_passed else "**NO**"})
@@ -438,6 +649,24 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
     add("\n*Table 4: verification time. For MTL, \"cold\" means a full signature verified without a cached "
         "ladder; for other modes it is the median single-signature verification.*\n")
 
+    floor = _floor(run)
+    pr = results.paired_ratio_table(F["trials"], "slh-dsa", "slh-dsa-mtl", floor=floor)
+    if len(pr):
+        add("#### Paired ratios: direct SLH-DSA divided by MTL\n")
+        add("Every mode runs inside each trial, so each trial gives one ratio. The table shows the median of those "
+            "per-trial ratios and its distribution-free interval; it is what supports a statement such as "
+            "\"N times faster\".\n")
+        pr = pr.assign(order=pr.dataset.map({d: i for i, d in enumerate(run.dataset_order)})).sort_values(["metric", "order"])
+        add(md_table(pd.DataFrame({
+            "dataset": pr.dataset, "metric": pr.metric, "trials": pr.trials,
+            "ratio, median [interval]": [fmt_ratio(r) for _, r in pr.iterrows()],
+            "interval covers": [f"{c * 100:.0f}%" for c in pr.coverage],
+            "basis": ["extrapolated direct total" if e else "measured" for e in pr.extrapolated],
+            **({"against the A/A noise floor": [
+                ("clearly outside" if a else "**not distinguishable from noise**") + f" (±{b * 100:.1f}%)"
+                for a, b in zip(pr.above_noise, pr.noise_band)]} if "above_noise" in pr else {})})))
+        add("\n*Table 4b: paired per-trial ratios.*\n")
+    add(_noise_section(run, floor))
     add("### 5.3 Transmitted bytes\n")
     sz = F["trials"].groupby(["dataset", "mode"]).agg(sig_median=("signature_bytes_median", "median"),
                                                       sig_max=("signature_bytes_max", "max"),
@@ -515,6 +744,7 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
     add(md_table(s.assign(bytes=s["bytes"].map(lambda v: f"{int(v):,}"))))
     add("\n*Table 11: measured MTL sizes next to the section 12 maxima.*\n")
 
+    add(_evolution_section(run, figs))
     add("## 6. Discussion\n")
     add("- **Signing.** Direct SLH-DSA performs one expensive hash-based signature per RRset. MTL performs one "
         "per zone, for the ladder, plus hashing per RRset. The gap therefore grows with zone size.\n"
@@ -554,11 +784,9 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
         "with the commands below.\n")
     add("## 9. Reproducing this report\n")
     add("```bash\n"
-        "docker compose -f docker/compose.yml build              # pinned image\n"
-        "scripts/run_benchmark.sh preflight                     # go/no-go gate\n"
+        "scripts/run_benchmark.sh preflight                     # build the image from the stack profile, go/no-go gate\n"
         "scripts/run_benchmark.sh configs/scenarios.yaml        # full run -> results/runs/<id>/\n"
         f"python -m cipherops.runner report --run results/runs/{run.root.name}\n"
-        "streamlit run dashboard/app.py                         # interactive dashboard / demo\n"
         "```\n")
     add("### Demonstration pseudocode\n")
     add("```python\n" + PSEUDOCODE + "```\n")

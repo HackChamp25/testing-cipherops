@@ -1,11 +1,11 @@
 """Correctness gates on the compiled harness + reference library (run in Docker)."""
 
 import os
-from pathlib import Path
+import shutil
 
 import pytest
 
-from cipherops import analytical
+from cipherops import analytical, crossverify
 from cipherops.codepoints import MODES, MTL_TYPE_CONDENSED, SLH_DSA_SHA2_128S_SIG_BYTES
 from cipherops.harness import HARNESS, load_signatures, run_trial
 from cipherops.workload import build_zone, read_blob_set, signing_messages, write_messages
@@ -64,3 +64,97 @@ def test_artifacts_round_trip(zone, tmp_path):
     assert len(sigs.signed_ladder) == res["signed_ladder_bytes"]
     assert sigs.rrsig_field(0)[0] == MTL_TYPE_CONDENSED
     assert [len(s) for s in read_blob_set(tmp_path / "slh-dsa-mtl" / "condensed.bin")] == res["condensed_bytes"]
+
+
+NEGATIVE_CHECKS = {
+    "slh-dsa-mtl": {"message_rejected", "signature_rejected", "ladder_rejected", "cross_message_rejected",
+                    "truncated_signature_rejected", "series_id_rejected", "wrong_key_rejected",
+                    "full_signature_rejected"},
+    "slh-dsa": {"message_rejected", "signature_rejected", "cross_message_rejected",
+                "truncated_signature_rejected", "wrong_key_rejected"},
+}
+NEGATIVE_CHECKS.update({k: NEGATIVE_CHECKS["slh-dsa"] for k in ("ed25519", "ecdsa-p256", "rsa-2048")})
+
+
+@pytest.mark.parametrize("key", list(MODES))
+def test_every_negative_check_runs_and_is_rejected(zone, key, tmp_path):
+    """Signature for message i must not verify another message; truncated, damaged and wrong-key input fails."""
+    _, res = _run(zone, key, tmp_path)
+    assert set(res["tamper"]) == NEGATIVE_CHECKS[key]
+    assert all(res["tamper"].values()), res["tamper"]
+
+
+def test_ecdsa_wire_format_verifies(zone, tmp_path):
+    """ECDSA goes on the wire as r||s; converting it back must verify, not only the DER form that was signed."""
+    _, res = _run(zone, "ecdsa-p256", tmp_path)
+    assert res["failures"] == {"verify": 0, "verify_wire": 0}
+    assert set(res["signature_bytes"]) == {64}
+
+
+def test_mtl_reports_unauthenticated_header_bytes(zone, tmp_path):
+    """The reference library ignores the first two condensed-signature bytes; this is recorded, not hidden."""
+    _, res = _run(zone, "slh-dsa-mtl", tmp_path)
+    assert res["observations"]["condensed_header_bytes_unauthenticated"] in (0, 1, 2)
+
+
+@pytest.mark.skipif(shutil.which("mtlverify") is None, reason="mtlverify not installed")
+def test_mtl_artifacts_verify_with_the_reference_tool():
+    r = crossverify.mtl_with_reference_tool()
+    assert r["harness_exit"] == 0 and r["checked"] > 0
+    assert r["failed"] == [] and r["tampered_rejected"]
+
+
+@pytest.mark.skipif(not crossverify.openssl_supports_slh_dsa(), reason="openssl without SLH-DSA")
+def test_slh_dsa_signatures_verify_with_openssl():
+    r = crossverify.slh_dsa_with_openssl()
+    assert r["harness_exit"] == 0 and r["checked"] > 0
+    assert r["failed"] == [] and r["tampered_rejected"]
+
+
+def test_calibration_reports_a_plausible_clock_and_both_timings():
+    from cipherops import timer
+    from cipherops.harness import run_calibrate
+
+    s = timer.summarise(run_calibrate(MODES["slh-dsa-mtl"].harness_algo))
+    er = s["empty_region"]
+    assert 0 < er["median_ns"] < 5_000 and er["min_ns"] <= er["median_ns"] <= er["p99_ns"]
+    assert set(s["operations"]) == {"ed25519_verify", "mtl_condensed_verify"}
+    for op in s["operations"].values():
+        assert op["calls"] == 1000 and op["per_call_median_ns"] > 0 and op["batch_per_call_median_ns"] > 0
+
+
+def test_evolving_zone_gate_and_growth(zone, tmp_path):
+    from cipherops.harness import run_evolve
+
+    msgs, _ = signing_messages(zone, MODES["slh-dsa-mtl"])
+    path = tmp_path / "evo.bin"
+    write_messages(path, msgs)
+    n = len(msgs)
+    res = run_evolve(MODES["slh-dsa-mtl"], path, [1, 5], [3, 3], [0, 1, 2], seed=3)
+    assert res["exit_code"] == 0 and res["failures"] == {"ladder": 0, "leaf_index_mismatch": 0}
+    assert res["tamper"]["message_rejected"]
+    for series in res["series"]:
+        k = series["k"]
+        for row in series["rows"]:
+            r = row["round"]
+            assert row["leaf_count"] == n + r * k and row["rung_count"] == bin(row["leaf_count"]).count("1")
+            for a in row["ages"]:
+                # an unchanged RRset verifies against an older ladder, a leaf appended since then does not
+                assert a["mismatch"] == 0 and a["tested"] == n
+                if a["age"] == 0:
+                    assert a["ok"] == n
+                else:  # at most age * k distinct RRsets changed since that ladder (a round may re-pick one)
+                    assert n - min(a["age"] * k, n) <= a["ok"] < n
+        assert series["rows"][-1]["condensed_bytes_max"] >= series["rows"][0]["condensed_bytes_max"]
+
+
+def test_evolving_zone_direct_baseline_signs_every_changed_rrset(zone, tmp_path):
+    from cipherops.harness import run_evolve
+
+    msgs, _ = signing_messages(zone, MODES["slh-dsa"])
+    path = tmp_path / "evo-direct.bin"
+    write_messages(path, msgs)
+    res = run_evolve(MODES["slh-dsa"], path, [2], [2], [0], seed=3)
+    assert res["exit_code"] == 0 and res["failures"]["verify"] == 0
+    assert [r["signed"] for r in res["series"][0]["rows"]] == [2, 2]
+    assert res["signature_bytes"] == SLH_DSA_SHA2_128S_SIG_BYTES

@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use CipherOps or its results, please cite it as below, and name the run id and stack profile."
+title: "CipherOps: a PQC DNSSEC MTL benchmark using a reference implementation"
+type: software
+license: MIT
+repository-code: "https://github.com/aiori-hackathon/A3-PS036-TC161"
+version: 0.1.0
+authors:
+  - given-names: "Akash"
+    family-names: "Joshi"
+  - given-names: "Anitha"
+    family-names: "Natarajan"
+  - given-names: "Indu"
+    family-names: "Radhakrishnan"
+keywords:
+  - DNSSEC
+  - post-quantum cryptography
+  - SLH-DSA
+  - Merkle Tree Ladder
+  - benchmark

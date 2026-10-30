@@ -1,65 +1,111 @@
-# Cipherops · MTL DNSSEC Lab
+# Dashboard guide
 
-Public lab UI for a multi-zone DNSSEC hierarchy (root → TLD → leaf) with a validating resolver and MTL mode.
+The CipherOps dashboard is one Streamlit app for building the lab, querying it, benchmarking, comparing results and
+learning the background. Hover the ⓘ icons for what each setting and measurement means.
 
-```powershell
+```bash
 pip install -r requirements-dashboard.txt
 streamlit run dashboard/live_lab/app.py
 ```
 
-Needs Docker. Use **Small** zone size for a first visit.
+Needs Docker (except for **Learn** and for viewing saved results). In Codespaces: [Codespaces](../../docs/codespaces.md).
+For a first visit use the **Small** zone size, and use the **`draft06`** image version for any MTL-versus-plain
+comparison: on `latest` the lab's Unbound answers SERVFAIL for plain SLH-DSA (the dashboard warns about it).
 
-## Home
+## Tiles
 
-The app opens on a hub of five tiles. **Setup** builds the images (and, for Live, signs and starts a lab); **Benchmark** needs only the images and runs by itself.
-
-| Tile | What it is for | Sidebar | Results view |
-|------|----------------|---------|--------------|
-| **Setup** | Zone size, scenarios, images, sign zones, start / stop the lab (for Live) | Settings and steps 1–3; **Image version** `draft06` or `latest` | Signing summary and timings |
-| **Live** | Switch scenario, send a lookup, cold vs warm | Active scenario, capture name | Queries, packet decode, sequence diagram |
-| **Benchmark** | The PS-036 benchmark: several dataset sizes, repeated trials | Name, dataset sizes, scenarios, trials, queries, networks, workload | Per-size tables, CSVs, and a reproducible `report.html` like the main Cipherops report |
-| **Compare** | MTL vs SLH-DSA and the other modes, side by side | Benchmark, dataset size, network, candidate and baseline | Cards, scaling across sizes, signing, bytes per tier, cache, latency, CSV |
-| **Reset** | Clear only the scopes you pick | Notes on what is kept | What the last reset removed |
-
-## Signing replay
-
-After **Prepare**, Setup opens an animated replay of how the hierarchy was signed (also under Setup → **Signing replay**, any time the lab is prepared). It plays bottom-up: leaf zones, then TLDs, then the root, with the DS record travelling up to each parent and the root DS ending as the trust anchor. Pick a scenario to compare the stories:
-
-- **mtl:** the zone's RRsets become leaves, the leaves are hashed into a Merkle tree, the rungs form the ladder, the ladder is signed once, and each RRset keeps only a short condensed path.
-- **slh-dsa, ecdsa, rsa, ed25519:** every RRset is signed on its own, with a bar per signature drawn to the same scale so the sizes compare.
-
-It is a normal animation: play, pause, restart, speed, and a timeline you can drag. Story time is compressed (each tier takes the same few seconds) and the real signing times are on the labels. Counts, timings and bytes are **measured** from the Prepare manifest. Signature and ladder sizes are **analytical** (draft section 12). The tree shape is **illustrative**: it is drawn from each zone's real RRSIG count (one leaf per RRSIG, one rung per 1-bit of that count), because the signing library does not report its tree. Code: `prepare_story.py` (scene builder, tested in `tests/test_prepare_story.py`) and `assets/prepare_player.html` (the player).
-
-### Live while Prepare runs
-
-**Prepare** no longer blocks the page. It starts a background job (`prepare_job.py`) and Setup shows the signing as it happens: an overall progress bar, a chip per scenario, leaf/TLD/root counters, the hierarchy coloured by state (grey waiting, amber signing, green signed, with the measured RRSIG count and time on each zone) and a zone table with a live clock. The signer prints one `@@EVENT {json}` line per zone start and finish when `ECOLAB_EVENTS=1` is set (`ecolab.sign.emit`); the job writes them to `ecosystem/work/<lab>/prepare-live/events.jsonl`, so the page can be reloaded or closed and picked up again. When signing ends the page opens the replay by itself. **Cancel signing** stops the job and its container. The job signs from a private copy of the config, so changing Zone size in the sidebar while it runs cannot redirect its output. Tests: `tests/test_prepare_job.py`.
-
-### RRSIG counts
-
-An RRSIG count is the number of real RRSIG records in the signed zone: a leaf zone has 2 per name (its record and its NSEC3 proof) plus 7 of its own, a TLD 2 per child plus 7, the root 2 per TLD plus 8 (Small = 55, Medium = 353). Earlier versions also counted NSEC3 records (their type bitmap lists RRSIG), about 1.5x too many. The signer now counts exactly, and manifests written before the fix are recounted from the signed files when the dashboard loads them (the stored figure is kept as `rrsig_count_manifest`). The planned-lab estimate uses the same exact formula.
+| Tile | What it is for | Needs |
+| --- | --- | --- |
+| **Setup** | 1. build or pull the images; 2. choose zone size and algorithms, then **Sign zones**; 3. **Start** the lab | Docker |
+| **Live** | switch algorithm, send a query or `dig`, compare cold and warm cache, flush the cache, capture and decode packets | a started lab |
+| **Benchmark** | **Offline (harness)** or **Simulated (Verisign stack)**, see below | Offline: Docker. Simulated: the built images |
+| **Compare** | *Algorithms side by side*, *Run against run*, and *Zone updates* | a finished benchmark |
+| **Learn** | why DNSSEC needs MTL; what an operator does | nothing |
+| **Reset** | clear only the scopes you pick (session, captures, runs, signed zones, cache) | nothing |
 
 ## Benchmark
 
-One press of **Run benchmark** does, for each dataset size (default 50, 500 and 5,000 data names): build the hierarchy, sign it with every chosen scenario (timed), repeat signing and verification on sample zones (several trials), start the lab, replay the same seeded workload with repeated cold and warm trials, and stop the lab. It needs only the built images: no Prepare and no running lab. It runs in the background, so you can leave the page; Results fills in when it finishes.
+### Offline (harness)
 
-- **Algorithm and implementation:** SLH-DSA-SHA2-128s, with MTL (mtl) and without (slh-dsa), using Verisign's MTL-mode ldns, NSD and Unbound. ecdsa is an optional classical reference.
-- **Signing and verification time:** each trial signs two sample zones; a straight line through them gives a fixed cost per zone and a cost per RRSIG, applied to every zone of the dataset. This is an extrapolation and is labelled as one. The full zones are also signed once and that time is shown next to it.
-- **Transmitted bytes, truncation, cache memory, latency:** measured in the resolver run, per tier (root, TLD, leaf), cold and warm.
-- **Recorded:** every setting, the workload numbers, the network profiles, the pinned images and the host are stored in ecosystem/results/suites/<id>/ and shown under *Settings and environment recorded*.
-- **Report:** when a suite finishes it writes `report.md`, `report.html` and `figures/` (same role as the main Cipherops library report). Regenerate with `python -m live_lab.suite_report <suite-id>` from a shell that has `dashboard` on `PYTHONPATH`.
+Times every signing and verification call on one dedicated core with no network, and counts DNS message bytes. Choose a
+**Quick check** (20 / 60 / 200 names, 3 runs) or the **Full run** (50 / 500 / 5,000 names, 10 runs, about 5 hours) and
+press **Run offline benchmark**. It builds the pinned image on first use, then runs as a background job: you can leave
+the page, and **Results** fills in when it finishes. While it runs, image builds, signing and the simulated benchmark
+are refused, because anything else on the CPU would distort the timings.
 
-Compare reads a finished benchmark (or, for older single-lab runs, a lab you pick). Every figure is badged **Measured**, **Estimated** or **Analytical**; the analytical ones (signature storage from the draft section 12 formulas) have their own section and are never mixed with measured cache.
+It is the same harness as `scripts/run_benchmark.sh`; the output is `results/runs/<id>/`
+([outputs reference](../../docs/outputs-reference.md)).
 
-## Numbers you can change
+### Simulated (Verisign stack)
 
-| Where | Numbers | Needs re-Prepare |
-|-------|---------|------------------|
-| Setup → Zone size → **Custom…** | TLDs, leaf zones, names per leaf zone, leaf servers, seed (Live lab only) | Yes |
-| Benchmark → **Workload mix** | NXDOMAIN share, zone and name popularity skew, lookup timeout | No |
-| Benchmark → **Network profiles** | Delay to client, root, TLD and leaf, and loss, for `wan` and `lossy` | No |
+For each zone size (default 50, 500 and 5,000 names) one press of **Run benchmark** builds the hierarchy, signs it with
+every chosen algorithm (timed), repeats signing and verification on sample zones, starts the lab, replays the same
+seeded query workload with repeated cold-cache and warm-cache runs, and stops the lab. It needs only the built images,
+runs in the background, and writes `ecosystem/results/suites/<id>/`.
 
-Setup shows a **Planned lab** card (zones, names, containers, rough Prepare time) and the exact YAML the lab will use. A Custom shape gets its own lab folder named after a hash of its numbers (`eco-ui-custom-<hash>`), so signed zones and results from different shapes never mix. Only one lab runs at a time: Start stops any other. Each benchmark records the numbers it used.
+- **Algorithms:** SLH-DSA-SHA2-128s with MTL (`mtl`) and without (`slh-dsa`), using Verisign's MTL-mode ldns, NSD and
+  Unbound. `ecdsa` is an optional classical reference.
+- **Signing and verification time:** each signing repeat signs two sample zones; a straight line through them gives a
+  fixed cost per zone and a cost per signature, applied to every zone of the size. This is an extrapolation and is
+  labelled as one. The full zones are also signed once, and that time is shown next to it.
+- **Response size, truncation, cache size, latency:** measured in the resolver run, per tier (root, TLD, leaf), cold and
+  warm. Latency is reported as p50 and p95.
+- **Runs and statistics:** default 5 runs and 5 signing repeats, each preceded by one discarded warm-up. The bracketed
+  interval is a distribution-free interval of the median; its real coverage is 94% for 5 runs (75% for 3; at least 6
+  are needed for 95%). See [methodology §6.2](../../docs/methodology.md#62-statistics).
+- **Failed queries are not data.** Latency counts answered queries only (NOERROR, NXDOMAIN). A run with any SERVFAIL,
+  timeout or other failure is marked invalid and left out of every figure; its failures stay counted and a warning is
+  shown. An algorithm the resolver cannot validate therefore shows no numbers.
+- **Not core-pinned.** Lab containers share all host CPUs and the CPU governor is recorded, not changed. Use bytes and
+  relative comparisons; treat absolute milliseconds as indicative.
+- **Recorded.** Every setting, the workload, network profiles, pinned images and host are stored in `suite.json` (git
+  commit and whether the tree was modified, CPU, memory, kernel, governor, Docker version, component versions, image
+  IDs) and shown under *Settings and environment recorded*. A finished benchmark also writes `report.md`, `report.html`
+  and `figures/`; regenerate with `python -m live_lab.suite_report <suite-id>` from a shell with `dashboard` on
+  `PYTHONPATH`.
 
-## Naming runs
+Every figure in Compare is badged **Measured**, **Estimated** or **Analytical**. The analytical ones (signature storage
+from the draft's size formulas) are kept apart and never mixed with measured cache.
 
-Give a benchmark a name in the Benchmark sidebar; it is stored with the date and time (`<YYYYMMDD-HHMMSS>_<name>`). Live captures take an optional name the same way (`live-<name>-<date>-<time>.pcap`). Names keep letters, digits, `-` and `_`.
+### Numbers you can change
+
+| Where | Numbers | Needs signing again |
+| --- | --- | --- |
+| Setup → Zone size → **Custom…** | TLDs, leaf zones, names per leaf zone, leaf servers, seed (Live only) | yes |
+| Benchmark (Simulated) → **Workload mix** | NXDOMAIN share, zone and name popularity skew, query timeout | no |
+| Benchmark (Simulated) → **Network profiles** | delay to client, root, TLD and leaf, and loss, for WAN and lossy | no |
+
+Setup shows a **Planned lab** card (zones, names, containers, rough signing time) and the exact YAML. A custom shape
+gets its own lab folder named after a hash of its numbers (`eco-ui-custom-<hash>`), so results from different shapes
+never mix. Only one lab runs at a time: Start stops any other.
+
+Name a benchmark in the sidebar; it is stored with the date and time (`<YYYYMMDD-HHMMSS>_<name>`). Live captures take an
+optional name the same way. Names keep letters, digits, `-` and `_`.
+
+## Compare
+
+- **Algorithms side by side:** every algorithm of one run, with the ratio to a baseline (paired per-run intervals for
+  the offline timings).
+- **Run against run:** two saved runs (stack profiles, repeats, machines) with what differs between them spelled out.
+- **Zone updates:** what a zone change costs, from the offline zone-update experiment
+  ([methodology §6.4](../../docs/methodology.md#64-evolving-zone-mtl-on-a-series-that-keeps-growing)): re-sign time per
+  update, response size, stale resolver cache, and MTL internals (ladder and rungs) for readers of the draft.
+
+Offline and simulated data are never drawn together.
+
+## Signing replay and live progress
+
+After **Sign zones**, Setup opens an animated replay of how the hierarchy was signed (also under Setup → **Signing
+replay**). It plays bottom-up: leaf zones, TLDs, then the root, with each DS record travelling to its parent. For `mtl`
+the RRsets become leaves of a Merkle tree, the ladder is signed once and each RRset keeps a short path; for the other
+algorithms every RRset is signed on its own, with a bar per signature on one scale. Counts, times and bytes are
+**measured** from the signing manifest, signature and ladder sizes are **analytical**, and the tree shape is
+**illustrative** (drawn from each zone's real signature count, because the signing library does not report its tree).
+Code: `prepare_story.py`, `assets/prepare_player.html`.
+
+Building images, signing and the offline run are background jobs (`build_job.py`, `prepare_job.py`, `offline_job.py`;
+state in `ecosystem/jobs/`). The page shows their progress and log live, offers **Cancel**, and can be reloaded or
+closed and picked up again.
+
+A signature count is the number of real RRSIG records in the signed zone: a leaf zone has 2 per name (its record and its
+NSEC3 proof) plus 7 of its own, a TLD 2 per child plus 7, the root 2 per TLD plus 8 (Small = 55, Medium = 353).

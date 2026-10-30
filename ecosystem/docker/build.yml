@@ -7,6 +7,7 @@ x-build: &build
   dockerfile: Dockerfile
   args:
     STACK: ${STACK}
+    OPENSSL_TAG: ${OPENSSL_TAG}
     LIBOQS_TAG: ${LIBOQS_TAG}
     MTL_COMMIT: ${MTL_COMMIT}
     LDNS_COMMIT: ${LDNS_COMMIT}

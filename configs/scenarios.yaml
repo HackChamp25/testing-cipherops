@@ -6,7 +6,7 @@ seed: 20261005
 
 # Repeated trials. Modes are interleaved in a seeded random order inside each
 # trial so slow drift (thermal, background load) does not favour one mode.
-trials: 5
+trials: 10
 warmup_trials: 1
 
 # One supported PQC algorithm, with and without MTL, plus a classical reference.
@@ -16,6 +16,11 @@ modes:
   - ed25519
   - ecdsa-p256
   - rsa-2048
+
+# A/A control: this mode also runs as a second, identical copy inside every trial. The true ratio between the two
+# is 1, so any difference measured is the noise floor; a difference between two modes smaller than that band is
+# not reported. Use the fastest mode (ed25519), where the clock matters most. null = no control.
+control: ed25519
 
 # Three dataset sizes. Each data name holds one RRset (60% small A/AAAA,
 # 30% medium MX/AAAA sets, 10% large 1-2 KB TXT); the zone also has
@@ -43,6 +48,16 @@ direct_sign_limit:
   small: null
   medium: null
   large: 1000
+
+# Evolving zone (MTL's real use: an authenticated series that keeps growing). Each series starts from the full
+# dataset, then runs rounds in which k RRsets change; every change appends a leaf, and each round signs one new
+# ladder. `k` and `rounds` are paired lists. `ages` are how many rounds old the ladder a resolver holds is (0 = the
+# newest). The direct SLH-DSA baseline signs every changed RRset one by one: sum(k * rounds) signatures per trial,
+# about 0.6 s each. Remove the block to skip the experiment.
+evolution:
+  k: [1, 10, 100]
+  rounds: [10, 10, 5]
+  ages: [0, 1, 2, 4, 8]
 
 wire:
   nx_sample: 200

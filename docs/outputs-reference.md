@@ -1,10 +1,11 @@
 # Cipherops outputs reference
 
-Every file a run writes, every column in it, what unit it is in, how it is calculated and a real
-example value. Examples come from the quick demo run `results/runs/20261007T045213Z-quick-demo`
-(`configs/quick.yaml`: zones of 20 / 60 / 200 names, 3 trials) unless a row says otherwise.
+Every file a run writes, every column in it, what unit it is in, how it is calculated and an
+example value. The examples are illustrative values from one earlier quick demo run
+(`configs/quick.yaml`: zones of 20 / 60 / 200 names, 3 trials) on one machine. They show the shape of the data
+and are **not results**; every run's own numbers are in its `report.html`.
 
-To watch these values being produced one by one, run `own.py` (see its header).
+To watch these values being produced one by one, run `scripts/own.py` (see its header).
 
 ## Units and words used everywhere
 
@@ -23,14 +24,14 @@ To watch these values being produced one by one, run `own.py` (see its header).
 | full signature | MTL: condensed signature + signed ladder. What a resolver needs when it has no ladder yet. |
 | warm / cold verify | warm: the resolver already holds a verified ladder, so only hashes are checked. cold: first contact, the ladder's SLH-DSA signature is checked too. |
 | limited | direct SLH-DSA signs only a sample of RRsets on medium/large (`direct_sign_limit`: 60 and 100); the zone total is extrapolated. |
-| median, 95% CI | middle value over the trials; bootstrap confidence interval: resample the trial values 2,000 times, take the median of each, keep the 2.5th–97.5th percentile. |
+| median, CI | middle value over the trials; confidence interval of the median from order statistics (exact, any distribution): the widest pair of sorted trial values that covers the median with at least 95% probability, or the full range if there are too few trials. Coverage depends only on the trial count: 75% for 3, 93.8% for 5, 96.9% for 6. |
 
 ## Where each file comes from
 
 | File | Stage | Written by |
 |---|---|---|
 | `config.yaml` | 1 | `runner.cmd_run` (the loaded config) |
-| `environment.json` | 1 | `envinfo.collect` |
+| `environment.json` | 1 | `envinfo.collect`, `timer.calibrate` |
 | `preflight.json` | 2 | `preflight.run` |
 | `datasets/<ds>/zone.txt` | 3 | `workload.zone_text` |
 | `datasets/<ds>/<mode>/messages.bin`, `messages_sample.bin`, `manifest.csv` | 3 | `workload.signing_messages`, `write_messages` |
@@ -38,6 +39,8 @@ To watch these values being produced one by one, run `own.py` (see its header).
 | `raw/<ds>__<mode>__t<n>.json.gz` | 4 | `runner.run_trials` (the JSON `mtlbench` printed) |
 | `artifacts/<ds>/<mode>/*.bin` | 4 | `mtlbench` (trial 0 only) |
 | `trials.csv` / `.parquet` | 4 | `runner.trial_metrics` |
+| `control.csv` / `.parquet` | 4 | `runner.cmd_run` (the A/A copy's rows, split from `trials`) |
+| `evolution.csv`, `evolution_direct.csv` (+ `.parquet`) | 4 | `evolution.run` (`mtlbench evolve`, `evolve-direct`) |
 | `ops.parquet` | 4 | `runner.op_rows` |
 | `responses.csv`, `workload.csv`, `cache.csv`, `sizes.csv` (+ `.parquet`) | 5 | `runner.analyse` |
 | `summary.json` | 6 | `runner.summarise` |
@@ -57,6 +60,8 @@ The configuration actually used, after command-line overrides (`--trials`, `--mo
 | `seed` | 20261005 | seeds zone content (`seed + dataset index`), trial order and the query workload |
 | `trials` / `warmup_trials` | 3 / 1 | measured trials per (dataset, mode); unmeasured warm-up runs per mode |
 | `modes` | all 5 | |
+| `control` | ed25519 | the mode that also runs as an A/A copy inside every trial; `null` = none |
+| `evolution` | k 1 and 10, 4 rounds each | evolving-zone experiment (**Zone updates** in the dashboard): `k` (changed RRsets per round), `rounds`, cached-ladder `ages`; absent = skipped |
 | `datasets` | small 20, medium 60, large 200 | names per zone |
 | `full_verify_sample` | 16 | MTL cold verifications per trial (`--full-verify`) |
 | `direct_sign_limit` | small none, medium 60, large 100 | SLH-DSA direct signs this many evenly spaced RRsets |
@@ -74,10 +79,11 @@ Proof of what the numbers were measured on.
 | `hardware.cpu_affinity` | `[2]` – the one core every trial ran on |
 | `hardware.mem_total` | memory visible to the container |
 | `software.kernel` | `6.18.33.2-microsoft-standard-WSL2` (Docker Desktop on Windows) |
-| `software.openssl`, `openssl_tag`, `liboqs_tag` | OpenSSL 3.6.0, liboqs 0.16.0 |
-| `software.mtl_reference_commit`, `mtl_reference_cflags` | `7cef0191…`, `-fPIC -Wall -Wextra -O2` |
+| `software.openssl`, `openssl_tag`, `liboqs_tag` | OpenSSL 3.6.0, liboqs 0.16.0 (profile `latest`) |
+| `software.mtl_reference_commit`, `mtl_reference_cflags` | `7cef0191…` (profile `latest`), `-fPIC -Wall -Wextra -O2` |
 | `software.harness_sha256` | hash of the compiled `mtlbench`, so a changed harness is visible |
 | `software.python_packages` | dnspython, numpy, pandas, … versions |
+| `timer` | timer calibration written at the start of the run (`timer.calibrate`, from `mtlbench calibrate`): the cost of an empty timed region, the smallest clock step, and per-call versus 1,000-call batch timing of Ed25519 verification and one condensed MTL verification. `per_call_timing_reliable` is true when an empty timed region costs at most 5% of the fastest operation. Absent or `error` if the calibration could not run. |
 
 ### `preflight.json`
 `verdict` (`GO` or `NO-GO (defer per PS-036)`), `algorithm`, and `checks`: a list of
@@ -90,6 +96,8 @@ Proof of what the numbers were measured on.
 | `reference_fixture_scheme` | no | reads the scheme of the bundled test vectors | ML-DSA-44-MTL-SHAKE-128 |
 | `reference_tools_roundtrip` | yes | `mtlkeygen` → `mtlsign` → `mtlverify` on 16 messages + 1 tampered | all verified, tamper rejected |
 | `harness_smoke_<mode>` × 5 | MTL and direct only | `mtlbench` on a 6-name zone | exit 0, no failures |
+| `mtl_artifacts_verified_by_reference_tool` | yes | `mtlverify` on the harness's own MTL signatures; a changed message must fail | accepted, tamper rejected |
+| `slh_dsa_artifacts_verified_by_openssl` | if OpenSSL has SLH-DSA | OpenSSL on the harness's own non-MTL signatures; a changed message must fail (interoperability, not a known-answer test) | accepted, tamper rejected |
 
 ---
 
@@ -152,7 +160,9 @@ Exactly what `mtlbench` printed, plus `exit_code`, `stderr_tail` and `command` a
 | `sign_ns[]`, `verify_ns[]`, `signature_bytes[]` | direct, classical | one sign and one verify per message | Ed25519: 26.9 µs, 90.3 µs, 64 B |
 | `public_key_bytes` | all | DNSKEY public key field size | 32 (64 ECDSA, 260 RSA) |
 | `failures` | all | verifications that failed (must be 0) | `{ladder: 0, verify_condensed: 0, verify_full: 0}` |
-| `tamper` | all | flipped one bit in message / signature / ladder; each must be rejected | all `true` |
+| `tamper` | all | negative cases, each must be rejected: changed message, damaged and truncated signature, signature for another message, wrong key; MTL also a damaged ladder, changed series id, full signature with damaged ladder. Cases that do not apply are omitted | all present values `true` |
+| `observations` | MTL | measured library behaviour, not pass/fail: `condensed_header_bytes_unauthenticated` = leading condensed-signature bytes the library does not authenticate (0 to 2) | 2 |
+| `failures.verify_wire` | classical | ECDSA verified again in the r‖s form sent on the wire | 0 |
 | `memory` | all | `rss_*` from `/proc/self/statm`, `maxrss` from `VmHWM` in `/proc/self/status` | see note below |
 | `stderr_tail` | all | last 2,000 chars of stderr. For MTL it holds library `ERROR` lines from the tamper tests: expected | |
 
@@ -203,6 +213,14 @@ the extrapolated columns.
 
 Columns that do not apply to a mode are empty (NaN).
 
+### `control.csv` (the A/A control)
+Same columns as `trials.csv`, for the control copy of one mode (`control:` in `config.yaml`, e.g. `ed25519-aa`). The
+copy runs the same harness call on the same input as its mode, in a random position inside every trial, so the true
+ratio between the two is 1. `results.noise_floor_table` takes the per-trial ratio of the two and reports the widest
+deviation from 1 inside its interval as the noise `band`. The report uses it to mark a paired ratio as clearly
+outside the noise, or not distinguishable from it. The control never enters `responses`, `workload`, `cache` or
+`sizes`, and not `ops.parquet`.
+
 ### `ops.parquet` (16,899 rows)
 One row per individual timed library call, for distribution plots.
 
@@ -212,6 +230,25 @@ One row per individual timed library call, for distribution plots.
 | `op` | `append`, `condensed`, `verify_condensed`, `verify_full` (MTL) or `sign`, `verify` (others) |
 | `index` | message index inside the trial |
 | `ns` | the time of that one call |
+
+### `evolution.csv` and `evolution_direct.csv` (the evolving zone, section 6.4 of the methodology)
+Written when the config has an `evolution:` block. Every row is `kind = measured`.
+
+`evolution.csv`: one row per trial, dataset, k and round (round 0 is the initial full-zone ladder).
+
+| Column | Meaning |
+|---|---|
+| `trial`, `dataset`, `k`, `round` | identifiers; `changed` is k (the whole zone in round 0) |
+| `leaf_count`, `rung_count`, `ladder_bytes` | the series after the round: leaves, rungs (the 1 bits of the leaf count) and the signed ladder's size |
+| `append_ns`, `ladder_sign_ns`, `ladder_verify_ns` | total time to append the changed leaves; the one SLH-DSA ladder signature; one ladder verification (what a resolver pays to take in the update) |
+| `condensed_extract_ns` | time to extract a fresh condensed signature for every RRset of the zone (a serving cost, not part of the update) |
+| `condensed_bytes_median`, `_max`, `_mean` | condensed signature size over the zone |
+| `tested_age_<a>`, `ok_age_<a>` | RRsets tested and RRsets whose fresh condensed signature verifies against the ladder `a` rounds old; empty when no ladder that old exists yet |
+| `stale_tested`, `stale_ok` | signatures issued when each leaf was created, and how many still verify against the newest ladder |
+| `rss_bytes`, `leaf_index_mismatch`, `exit_code` | signer memory; times the library disagreed with the leaf-index expectation (must be 0); harness exit code |
+
+`evolution_direct.csv`: one row per trial, k and round: `signed` (= k), `sign_ns` and `verify_ns` for signing and
+verifying the k changed RRsets with plain SLH-DSA.
 
 ---
 
@@ -317,7 +354,7 @@ MTL sizes measured against the draft's maximum formulas (16-byte hashes, N = RRs
 ## Stage 6: `summary.json`
 
 ```
-trials[dataset][mode][metric] = {n, mean, median, std, p05, p95, min, max, median_ci95: [lo, hi]}
+trials[dataset][mode][metric] = {n, mean, median, std, p05, p95, min, max, median_ci: [lo, hi], ci_coverage}
     metrics: sign_total_ns, sign_per_rrset_ns, verify_warm_total_ns, verify_per_rrset_ns,
              verify_full_median_ns, keygen_ns
 trials[dataset][mode].all_checks_passed     every trial exit 0, no failures, tamper rejected
@@ -325,10 +362,12 @@ trials[dataset][mode].limited               signing sample used
 transmitted[dataset][mode][udp_limit]       dns_bytes, response_bytes, rrsig_signature_bytes, truncations,
                                             tcp_exchanges, mtl_full_fetches, transmitted_responses
 response_fit[dataset][mode][record_class]   fit_1232_pct, median_bytes   (default answers at 1232)
+evolution                                   checks_passed, update_cost[], coverage[], stale_min_share{}
+paired_ratios[]                             one row per dataset and metric: direct SLH-DSA / MTL taken per trial
+                                            (ratio = median, ratio_lo, ratio_hi, coverage, extrapolated)
 ```
 
-Example: `trials.large.slh-dsa-mtl.sign_total_ns.median` = 515,744,810 (0.516 s), `median_ci95` =
-[472,079,179, 575,446,920]; `n` = 3.
+`ci_coverage` is the real coverage of `median_ci` for `n` trials (0.9375 for 5).
 
 ## Stage 7: report
 

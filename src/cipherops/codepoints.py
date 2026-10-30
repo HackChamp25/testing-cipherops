@@ -7,7 +7,7 @@ Internet. Value 50 for SLH-DSA-MTL-SHA2-128s mirrors the illustration in
 draft-fregly-dnsop-slh-dsa-mtl-dnssec-05 Appendix A.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 EDNS_MTL_MODE_FULL = 65001  # RFC 6891 local/experimental range 65001-65534
 
@@ -41,3 +41,27 @@ MTL_TYPE_FULL = 0x01
 
 SLH_DSA_SHA2_128S_SIG_BYTES = 7856
 MTL_SECURITY_PARAMETER_N = 16
+
+CONTROL_SUFFIX = "-aa"
+
+
+def control_key(mode_key: str) -> str:
+    return mode_key + CONTROL_SUFFIX
+
+
+def is_control(mode_key: str) -> bool:
+    return mode_key.endswith(CONTROL_SUFFIX)
+
+
+def mode_for(key: str) -> Mode:
+    """A configured mode, or its A/A copy (same harness call on the same input, run as if it were another mode)."""
+    if key in MODES:
+        return MODES[key]
+    if is_control(key) and key[:-len(CONTROL_SUFFIX)] in MODES:
+        base = MODES[key[:-len(CONTROL_SUFFIX)]]
+        return replace(base, key=key, label=f"{base.label}, A/A copy")
+    raise KeyError(key)
+
+
+def base_key(key: str) -> str:
+    return key[:-len(CONTROL_SUFFIX)] if is_control(key) else key

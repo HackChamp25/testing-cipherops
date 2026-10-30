@@ -11,7 +11,7 @@ Contents
 2. Background you need (DNS, DNSSEC, MTL) in plain words
 3. Architecture at a glance
 4. Repository map
-5. The main flow, step by step (`run_benchmark.ps1` to report)
+5. The main flow, step by step (`run_benchmark.sh` or `.ps1` to report)
 6. File-by-file reference
 7. Live mode flow (real server, real packets, Wireshark)
 8. NSD cross-check flow
@@ -120,9 +120,9 @@ How the DNS draft (draft-fregly) carries this:
 ## 3. Architecture at a glance
 
 ```
-            YOU (Windows PowerShell)
+            YOU (shell or PowerShell)
                  |
-                 |  .\scripts\run_benchmark.ps1   (or docker compose run ...)
+                 |  scripts/run_benchmark.sh  or  .\scripts\run_benchmark.ps1   (or docker compose run ...)
                  v
  +------------------------------------------------------------------+
  |  Docker container  (Fedora 42, pinned libraries, no network)    |
@@ -138,13 +138,12 @@ How the DNS draft (draft-fregly) carries this:
  |        |  4. dnswire.py     build real DNS answers, count bytes  |
  |        |  5. cache.py       cache memory: measured + analytical  |
  |        |     analytical.py  draft section 12 size formulas       |
- |        |  6. stats.py       medians, bootstrap 95% CIs           |
+ |        |  6. stats.py       medians, CIs of the median           |
  |        |  7. report.py      report.md / .html / figures          |
  |        v                                                         |
- |   results/runs/<timestamp>-<run_name>/   (shared with Windows)   |
+ |   results/runs/<timestamp>-<run_name>/   (on the host)           |
  +------------------------------------------------------------------+
                  |
-                 +--> dashboard/app.py (Streamlit) reads the run folder
                  +--> scripts/make_pdf.ps1 turns report.html into a PDF
                  +--> optional: runner live / crosscheck (real NSD server)
 ```
@@ -155,7 +154,7 @@ Three layers, each with one job:
 |---|---|---|---|
 | Crypto | C | Sign, verify, time, check tampering. Only calls libraries. | `harness/mtlbench.c` |
 | Orchestration and DNS | Python | Build zones, run trials, build DNS answers, count bytes, statistics | `src/cipherops/*.py` |
-| Presentation | Python | Report, figures, dashboard | `report.py`, `results.py`, `dashboard/app.py` |
+| Presentation | Python | Report and figures | `report.py`, `results.py` |
 
 ---
 
@@ -163,11 +162,15 @@ Three layers, each with one job:
 
 ```
 Cipherops/
+├── .devcontainer/          GitHub Codespaces setup (Python, Docker-in-Docker, port 8501)
+├── hackathon/              submission material: project page, readout, feedback, frozen results, decks
+├── DELIVERABLES.md         what is submitted; the PS-036 requirements
+├── THIRD_PARTY_NOTICES.md  licences of the software built on
 ├── configs/
-│   ├── scenarios.yaml      full PS-036 run (50 / 500 / 5000 names, 5 trials)
+│   ├── scenarios.yaml      full PS-036 run (50 / 500 / 5000 names, 10 trials)
 │   └── quick.yaml          fast demo run (20 / 60 / 200 names, 3 trials)
 ├── docker/
-│   ├── Dockerfile          pinned build: OpenSSL 3.6.0, liboqs 0.16.0, MTL @7cef019
+│   ├── Dockerfile          pinned build; OpenSSL, liboqs and MTL come from the stack profile
 │   └── compose.yml         one CPU core, 4 GB RAM, no network, mounts results/
 ├── harness/
 │   ├── mtlbench.c          the C benchmark program (crypto layer)
@@ -180,24 +183,33 @@ Cipherops/
 │   ├── dnswire.py          builds real DNS answers, counts bytes, UDP/TCP model
 │   ├── cache.py            cache usage, measured and analytical
 │   ├── analytical.py       MTL draft section 12 size formulas
-│   ├── stats.py            summary statistics, bootstrap CIs
+│   ├── evolution.py        evolving-zone experiment and its tables (dashboard: Zone updates)
+│   ├── stats.py            summary statistics, median CIs
 │   ├── preflight.py        go/no-go gate (PS-036 "defer if unavailable")
 │   ├── envinfo.py          records hardware/software versions
-│   ├── results.py          loads a finished run (for report and dashboard)
+│   ├── results.py          loads a finished run (for the report)
 │   ├── report.py           writes report.md, report.html, figures/
 │   ├── crosscheck.py       NSD server helper + byte-model cross-check
 │   └── live.py             live mode: real client, real NSD, pcap capture
-├── dashboard/app.py        Streamlit dashboard
+├── dashboard/              Streamlit app (app.py launches live_lab/app.py)
 ├── scripts/
-│   ├── run_benchmark.ps1   Windows: build image + run (start here)
-│   ├── run_benchmark.sh    Linux/macOS equivalent
+│   ├── run_benchmark.sh    Linux/macOS: build image + run (start here)
+│   ├── run_benchmark.ps1   Windows equivalent
+│   ├── run_live.sh         live validation of a finished run (Linux/macOS)
+│   ├── run_live.ps1        Windows equivalent
+│   ├── show_fixes.py       compare an earlier commit with the working tree
 │   ├── make_pdf.ps1        report.html -> report.pdf via Edge/Chrome
 │   ├── probe.py            one quick trial per mode (debugging)
+│   ├── own.py              learning trace: every variable of stages 1-7 on tiny zones
 │   └── pcap_bytes.py       sums bytes in live-mode pcaps, compares with client
 ├── tests/                  pytest unit tests (see section 6.16)
 ├── docs/
 │   ├── methodology.md      measurement method in detail
-│   └── architecture.md     this file
+│   ├── architecture.md     this file
+│   ├── end-to-end-flow.md  what each of the 7 stages takes in and puts out
+│   ├── outputs-reference.md  every output file and column
+│   ├── getting-started.md, codespaces.md, scope-and-limits.md, README.md (index)
+│   └── learn/              background and two animated walkthroughs
 └── results/runs/<run_id>/  every run's outputs (section 9)
 ```
 
@@ -207,22 +219,23 @@ Cipherops/
 
 This is what happens when you type:
 
-```powershell
-.\scripts\run_benchmark.ps1 -Config configs/quick.yaml
+```bash
+bash scripts/run_benchmark.sh configs/quick.yaml        # Windows: .\scripts\run_benchmark.ps1 -Config configs/quick.yaml
 ```
 
-### Step 1. `scripts/run_benchmark.ps1` (on Windows)
+### Step 1. `scripts/run_benchmark.sh` (Windows: `run_benchmark.ps1`)
 
-1. `docker compose -f docker/compose.yml build` builds the pinned image
+1. `docker compose --env-file ecosystem/stacks/<stack>.env -f docker/compose.yml build` builds the pinned image
+   for the stack profile (default `latest`; set `CIPHEROPS_STACK`)
    (only slow the first time; later builds use the cache).
 2. Records the git commit (`CIPHEROPS_GIT_SHA`), the image ID
    (`CIPHEROPS_HOST_IMAGE_ID`) and the CPU core (`CIPHEROPS_CPUSET`) so they
    end up in `environment.json`.
 3. Runs `docker compose run --rm bench "python3 -m cipherops.runner run --config configs/quick.yaml"`.
 
-Why `cmd /c` inside `Invoke-Native`: Windows PowerShell 5.1 treats Docker's
-progress messages on stderr as errors. Routing through `cmd` avoids that;
-failures are detected from the exit code instead.
+(On Windows, `run_benchmark.ps1` does the same through `cmd /c` inside
+`Invoke-Native`, because Windows PowerShell 5.1 treats Docker's progress
+messages on stderr as errors; failures are detected from the exit code.)
 
 ### Step 2. Inside Docker: `runner.py` → `main()` → `cmd_run()`
 
@@ -247,7 +260,8 @@ before any numbers are produced we check:
 | Verisign's own tests | `reference_unit_tests()` | their `mtltest` suite passes (89 tests) |
 | Fixture scheme | `reference_vector_scheme()` | which algorithm the bundled test vectors cover (informational) |
 | Verisign's tools | `reference_tools_roundtrip()` | `mtlkeygen` → `mtlsign` → `mtlverify` works, tampered message rejected |
-| Our harness | `harness_smoke()` | every mode signs/verifies a tiny 6-name zone, tampering rejected |
+| Our harness | `harness_smoke()` | every mode signs/verifies a tiny 6-name zone; every negative case rejected |
+| Independent verifiers | `mtl_reference_tool_check()`, `slh_dsa_openssl_check()` | `mtlverify` and OpenSSL accept the harness's signature bytes and reject a changed message |
 
 Result goes to `preflight.json`. If the verdict is not `GO`, the run stops
 (exit code 3).
@@ -341,8 +355,9 @@ For each dataset and mode:
 ### Step 7. Statistics: `summarise()` → `summary.json`
 
 For each dataset × mode: n, mean, median, std, p05, p95, min, max of each
-timing, plus a **bootstrap 95 % confidence interval of the median**
-(`stats.bootstrap_ci()`), plus whether all correctness checks passed, plus
+timing, plus a **distribution-free confidence interval of the median**
+(`stats.median_ci()`, from order statistics) and its real coverage
+(`stats.median_ci_coverage()`), plus whether all correctness checks passed, plus
 transmitted bytes and UDP-fit percentages.
 
 ### Step 8. Report: `report.write()`
@@ -358,7 +373,6 @@ Reads the run folder through `results.load()` and writes:
 
 | Command | What it does |
 |---|---|
-| `streamlit run dashboard/app.py` | Interactive dashboard over any run |
 | `.\scripts\make_pdf.ps1 results/runs/<run>` | `report.pdf` from `report.html` |
 | `python3 -m cipherops.runner live --run <run>` | Real client vs real NSD, pcaps (section 7) |
 | `python3 -m cipherops.runner crosscheck --run <run>` | Compare byte model with NSD (section 8) |
@@ -554,7 +568,6 @@ PS-036 requires measured cache usage kept separate from analytical estimates.
 |---|---|---|
 | `resolver_cache_measured(responses, ladder)` | measured | Puts the workload's answers into dnspython's real `LRUCache`, measures Python heap with `tracemalloc`, counts signature bytes; adds the one ladder for MTL. |
 | `resolver_cache_analytical(mode, n_rrsigs, ...)` | analytical | Same quantity from formulas (signature size × count + ladder). |
-| `signer_state_measured(trial)` | measured | Memory growth of libmtl while appending the zone (from the harness). |
 | `signer_state_analytical(zone_rrsets)` | analytical | Hash storage of a binary node set: `(2N-1)·16 + N·16` bytes. |
 
 ### 6.8 `src/cipherops/analytical.py`: draft formulas
@@ -579,7 +592,9 @@ maximum).
 | Function | Why |
 |---|---|
 | `summarize(values)` | n, mean, median, std, p05, p95, min, max |
-| `bootstrap_ci(values)` | 95 % confidence interval of the median by resampling 2,000 times. Works with few trials and makes no normality assumption. |
+| `median_ci(values)` | Exact distribution-free interval for the median from sorted trial values (widest pair covering at least 95 %, or the full range if there are too few trials). |
+| `median_ci_coverage(n)` | The real coverage of that interval for `n` trials (93.8 % for 5, 75 % for 3). |
+| `ci_label(n)` | Text for tables and figure titles that states the coverage. |
 
 ### 6.10 `src/cipherops/preflight.py`
 
@@ -595,7 +610,7 @@ That is the "pinned environment" evidence in the report appendix.
 
 ### 6.12 `src/cipherops/results.py`
 
-Loads a finished run for the report and the dashboard.
+Loads a finished run for the report.
 
 | Name | Why |
 |---|---|
@@ -614,17 +629,23 @@ numbers. `figures()` draws the charts (extrapolated bars are hatched).
 `TRACEABILITY` maps each PS-036 requirement to the report section that
 satisfies it. `build_html()` embeds images so the HTML is one file.
 
-### 6.14 `dashboard/app.py`
+### 6.14 `dashboard/`
 
-Streamlit app. Sidebar: pick a run, see the go/no-go verdict and environment.
-Tabs: *Signing & verification*, *Transmitted bytes*, *Cache usage*, *MTL sizes
-vs draft*, *Live demo* (builds a real answer from the run's signatures and
-shows it dig-style), *Reproducibility*.
+One Streamlit app (`streamlit run dashboard/live_lab/app.py`; `dashboard/app.py` launches it). It has six tiles:
+Setup, Live, Benchmark, Compare, Learn and Reset. It drives the multi-zone lab in `ecosystem/` and starts the
+offline harness as a background job.
 
-```powershell
-pip install -r requirements-dashboard.txt
-streamlit run dashboard/app.py
-```
+| Module | Role |
+|---|---|
+| `live_lab/app.py` | the pages and sidebars |
+| `live_lab/glossary.py` | the one list of labels and their explanations (the ⓘ icons) |
+| `live_lab/driver.py` | Docker and lab operations, and the rule that nothing disturbs a running benchmark |
+| `live_lab/suite.py`, `suite_report.py` | the simulated benchmark and its report |
+| `live_lab/offline_job.py` | runs `docker compose build` and the harness (`cipherops.runner run`) as a background job; state in `ecosystem/jobs/_offline/` |
+| `live_lab/build_job.py`, `prepare_job.py` | the image build and the signing as background jobs with live logs |
+| `live_lab/compare.py`, `compare_hub.py` | results of both paths reduced to one shape for the Compare tile; the offline side reads `results/runs/` |
+
+Offline and simulated results are never drawn together. See [the dashboard guide](../dashboard/live_lab/README.md).
 
 ### 6.15 `src/cipherops/crosscheck.py` and `src/cipherops/live.py`
 
@@ -640,28 +661,36 @@ helpers (`NSD`, `_udp`, `_tcp`, `signed_zone_text`, `load_run_zone`) that
 | `test_dnswire.py` | Positive answers carry an RRSIG; MTL full adds the type byte and ladder; NXDOMAIN has SOA + NSEC3 proof with exactly one full signature; UDP/TC/TCP byte accounting; MTL fetches the ladder once per workload. |
 | `test_analytical.py` | Formula values. |
 | `test_cache.py` | Measured cache counts exact signature bytes; MTL counts the ladder once; analytical rows per family. |
-| `test_harness.py` | (Docker only) Real signing in every mode: all signatures verify, tampering rejected, SLH-DSA signature is 7,856 B, MTL sizes within draft bounds, public key lengths match the DNSKEY field, artifacts round-trip. |
+| `test_harness.py` | (Docker only) Real signing in every mode: all signatures verify, every negative check rejected (including cross-message, wrong key, truncation), ECDSA wire form verifies, `mtlverify` and OpenSSL accept the artifacts, SLH-DSA signature is 7,856 B, MTL sizes within draft bounds, public key lengths match the DNSKEY field, artifacts round-trip. |
 | `test_crosscheck.py` | Signed zone file parses, every RRset signed; (Docker) NSD serves it. |
-| `test_dashboard.py` | Dashboard renders for real runs. |
+| `test_dashboard.py` | Every tile, both Benchmark modes and each Compare view render without an exception. |
+| `test_stats.py` | The order-statistic confidence interval of the median: exact coverage figures, narrowing with more trials, empirical coverage matches the formula, labels warn when trials are too few. |
+| `test_lab_run.py` | Live-lab pass validity: SERVFAIL and timeouts are not latency; invalid passes are left out of the summary but their failures stay counted. |
+| `test_lab_guard.py` | Demo safety: lab operations are refused while a benchmark runs, a launching suite counts as active, `dig` accepts only allow-listed options, signing starts when `work/` is root-owned, root-owned folders are removed, the image build is a one-at-a-time background job. |
+| `test_evolution.py` | The evolving-zone tables over synthetic frames with known answers, and the config checks. The harness gate for it is in `test_harness.py`. |
+| `test_results.py`, `test_control.py` | Paired per-trial ratios, the A/A control and its noise band, the timer-calibration summary. |
+| `test_offline_job.py` | The offline-harness job: command, progress parsing, run pick-up, and that it blocks other CPU-heavy work. No Docker. |
+| `test_learn.py` | The Learn pages need no network, and their size figures and draft versions agree with the formulas and the code. |
+| `test_compare_hub.py` | The shared algorithm frame for offline runs and live-lab suites, ratios to a baseline, run-against-run ratios and the comparability notes. |
+| `test_compare.py`, `test_live.py`, `test_prepare_job.py`, `test_prepare_story.py` | Dashboard helpers, packet decoding, the signing job and its replay (no Docker). |
 
-```powershell
-$env:PYTHONPATH="src"; python -m pytest -q                         # host: quick tests
-docker compose -f docker/compose.yml run --rm bench "python3 -m pytest -q tests"   # everything
+```bash
+PYTHONPATH=src python3 -m pytest -q -m "not harness"                      # host: tests that need no Docker
+docker run --rm --network none cipherops-bench:latest \
+  "python3 -m pytest tests/test_harness.py tests/test_crosscheck.py -q"   # harness gates, inside the image
 ```
 
 ### 6.17 Docker files
 
-- `docker/Dockerfile`: stage 1 builds OpenSSL 3.6.0, liboqs 0.16.0 and
-  Verisign MTL at commit `7cef019` from source (MTL compiled with `-O2`
+- `docker/Dockerfile`: stage 1 builds OpenSSL, liboqs and Verisign MTL, at
+  the versions in the stack profile (`ecosystem/stacks/<profile>.env`), from source (MTL compiled with `-O2`
   because upstream forces `-O0`; source unmodified). Stage 2 is the runtime:
   libraries, NSD, tcpdump, pinned Python packages, builds `mtlbench`, installs
   the package.
 - `docker/compose.yml`: service `bench`; `cpuset` pins one core;
   `mem_limit: 4g`; `network_mode: none` (no Internet, no noise); mounts
-  `results/` and `configs/` from Windows. Service `live` is the same plus
-  `NET_ADMIN` (tc-netem on the container's own loopback); service `serve`
-  adds a bridge network and publishes ports 5301-5310 on `127.0.0.1` for the
-  dashboard's live server.
+  `results/` and `configs/` from the host. Service `live` is the same plus
+  `NET_ADMIN` (tc-netem on the container's own loopback).
 
 ---
 
@@ -669,9 +698,10 @@ docker compose -f docker/compose.yml run --rm bench "python3 -m pytest -q tests"
 
 Command (service `live`: no outside network, but `NET_ADMIN` for tc-netem):
 
-```powershell
-.\scripts\run_live.ps1 -Run 20261007T045213Z-quick-demo
-.\scripts\run_live.ps1 -Run <run> -Profiles lan -Udp 1232 -Repeats 1     # quick look
+```bash
+bash scripts/run_live.sh <run-folder>                    # all profiles, both UDP sizes, 3 repeats
+bash scripts/run_live.sh <run-folder> lan 1232 1         # quick look
+# Windows: .\scripts\run_live.ps1 -Run <run-folder> [-Profiles lan -Udp 1232 -Repeats 1]
 ```
 
 Who is who (all inside the container):
@@ -724,28 +754,13 @@ Flow of `live.run()`:
 Check the capture against the client's own count:
 
 ```powershell
-python scripts/pcap_bytes.py results/runs/20261007T045213Z-quick-demo
+python scripts/pcap_bytes.py results/runs/<run-folder>
 ```
 
 Open a `.pcap` in Wireshark and filter `dns` to see each question, answer,
-RRSIG and TC flag, or use the dashboard: *Live demo → Recorded live run*
-picks one lookup and draws its packets (UDP, IP fragments, TCP handshake and
-segments) as a sequence diagram. `pcap.py` does the parsing in pure Python.
-
-### Live server for the dashboard
-
-```powershell
-.\scripts\live_server.ps1 -Run 20261007T045213Z-quick-demo -Profile wan
-```
-
-Service `serve` runs one NSD per mode on ports 5301.. and an NSD with full
-MTL signatures on 5310, published on `127.0.0.1` only. netem on the
-container's `eth0` adds the profile (the full round trip, since only the
-server's packets cross it). `results/live-server/server.json` tells the
-dashboard where to send; `server.pcap` holds the server-side packets. In the
-dashboard, *Live demo → Send a real query* sends the same question to every
-mode from the Windows host and shows the client-side steps next to the
-packets tcpdump saw in the container.
+RRSIG and TC flag. `pcap.py` does the parsing in pure Python. The live lab
+(`dashboard/live_lab`) draws one lookup's packets (UDP, IP fragments, TCP
+handshake and segments) as a sequence diagram from its own captures.
 
 Why live bytes differ from the model for MTL and RSA: when an NXDOMAIN
 answer does not fit in 1232 bytes, NSD fills the truncated UDP reply with as
@@ -762,7 +777,7 @@ accepts the lab algorithm numbers.
 ## 8. NSD cross-check flow
 
 ```powershell
-docker compose -f docker/compose.yml run --rm bench "python3 -m cipherops.runner crosscheck --run results/runs/<run>"
+docker compose --env-file ecosystem/stacks/latest.env -f docker/compose.yml run --rm bench "python3 -m cipherops.runner crosscheck --run results/runs/<run>"
 ```
 
 `crosscheck.run()` serves the signed zone with NSD and, for a sample of
@@ -977,7 +992,7 @@ is labelled with where it came from.**
    server (NSD), a client sends real queries, and tcpdump captures the
    packets. The capture totals equal the client's counts byte for byte.
 8. **Output**: CSV/Parquet tables, `summary.json` with confidence intervals,
-   a report (MD/HTML/PDF) and a dashboard.
+   a report (MD/HTML/PDF).
 
 Key result shape (quick-demo, large zone, live): MTL answers are ~320-415 bytes
 and mostly fit in UDP; direct SLH-DSA answers are ~8,000 bytes and every one

@@ -5,6 +5,13 @@ Working text for an **Informational** IETF Internet-Draft based on the Cipherops
 later conversion with [kramdown-rfc](https://github.com/cabo/kramdown-rfc) or
 xml2rfc. They are **not** RFCs and are not on the Standards Track.
 
+> **Status: working text, not a PS-036 deliverable, and not regenerated.** The draft reports one earlier lab run
+> (`eco-default-draft06/20261014-142918`, kept outside this repository) taken with an earlier methodology:
+> 3 trials, bootstrap confidence intervals, cold = Unbound process restart, and no exclusion of failed lookups.
+> The current benchmark differs (5 trials with an order-statistic interval, resolver flush between trials, invalid
+> passes excluded; see `docs/methodology.md`). The numbers in the draft have **not** been reproduced with the current
+> code and must not be quoted as current results.
+
 ## Documents
 
 | File | Docname | Intended status |
@@ -57,7 +64,7 @@ Related:
 ```
 ecosystem/configs/lab.yaml
 ecosystem/stacks/draft06.env
-ecosystem/reports/verisign-unbound-ds-ladder-issue.md
+ecosystem/reports/verisign-unbound-ds-ladder-issue.md   # not included in this repository
 ```
 
 A smaller smoke run also exists under

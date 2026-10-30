@@ -129,10 +129,6 @@ def shape(lab: Lab, profile: dict) -> None:
     exec_("unbound", " && ".join(cmds))
 
 
-def shaping_report() -> str:
-    return exec_("unbound", "tc qdisc show dev eth0; tc filter show dev eth0", check=False)
-
-
 def start_capture(path_in_container: str, host: str = "unbound") -> None:
     """Start port-53 tcpdump on ``host`` (``unbound`` or ``client``).
 

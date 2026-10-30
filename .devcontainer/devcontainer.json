@@ -1,0 +1,36 @@
+{
+  "name": "CipherOps",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bookworm",
+  "features": {
+    // Docker runs inside the codespace, so the compose files' bind mounts (results/, configs/) resolve as written.
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  // The offline harness pins itself to CPU core 2, so the machine needs at least 3 cores; the image builds are large.
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "16gb",
+    "storage": "32gb"
+  },
+  "containerEnv": {
+    "STREAMLIT_SERVER_HEADLESS": "true",
+    // The Codespaces port proxy rewrites the origin; without these the dashboard's websocket is refused.
+    "STREAMLIT_SERVER_ENABLE_CORS": "false",
+    "STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION": "false"
+  },
+  "postCreateCommand": "pip install --user -r requirements-dashboard.txt",
+  "forwardPorts": [8501],
+  "portsAttributes": {
+    "8501": {
+      "label": "CipherOps dashboard",
+      "onAutoForward": "openBrowser"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "ms-azuretools.vscode-docker"],
+      "settings": {
+        "python.testing.pytestEnabled": true
+      }
+    }
+  }
+}

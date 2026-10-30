@@ -1,4 +1,5 @@
 work/
+jobs/
 results/
 *.log
 configs/_dashboard.yaml

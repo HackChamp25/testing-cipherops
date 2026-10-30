@@ -15,8 +15,7 @@ the one-way delay is half the round-trip time. The loopback MTU is set to
 on Ethernet; one lost fragment loses the whole datagram.
 
 `run` measures every dataset, both EDNS buffer sizes and every network profile,
-repeated, and saves pcaps of the first repetition. `serve` keeps one NSD per
-mode running for the dashboard to query from the host. Signatures are not
+repeated, and saves pcaps of the first repetition. Signatures are not
 validated by the client; verification cost comes from the harness.
 """
 
@@ -29,7 +28,6 @@ import signal
 import socket
 import struct
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
@@ -53,7 +51,7 @@ PROFILES = {
 UDP_TRIES = 4
 TCP_TIMEOUT_S = 10.0
 NEEDS_CAP = ("network shaping needs the NET_ADMIN capability and tc: run it with "
-             "`docker compose -f docker/compose.yml run --rm live ...`")
+             "`scripts/run_live.sh <run-folder>` (docker compose run --rm live)")
 
 
 class Capture:
@@ -377,47 +375,3 @@ def _nsd_version() -> str:
         return (out.stdout + out.stderr).splitlines()[0].strip()
     except (OSError, IndexError):
         return "unknown"
-
-
-def serve(run_dir: Path, dataset: str | None = None, profile: str = "lan", base_port: int = 5301,
-          full_port: int = 5310, dev: str = "eth0", info_dir: Path = Path("results/live-server")) -> None:
-    """Serve the run's zone, one NSD per mode on 0.0.0.0, until stopped. Writes server.json and a pcap."""
-    run_dir = Path(run_dir)
-    cfg, ds, zone = load_run_zone(run_dir, dataset)
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-    info_dir.mkdir(parents=True, exist_ok=True)
-    for old in info_dir.glob("server.*"):
-        old.unlink()
-    ports, full = {}, None
-    with contextlib.ExitStack() as stack:
-        for i, mk in enumerate(cfg["modes"]):
-            sigs = _signatures(cfg, run_dir, ds["name"], mk)
-            stack.enter_context(NSD(signed_zone_text(zone, sigs), zone.origin.to_text(), port=base_port + i,
-                                    host="0.0.0.0"))
-            ports[mk] = base_port + i
-            if MODES[mk].family == "mtl":
-                every = set(range(len(dnswire.ResponseBuilder(zone, sigs).rrsets)))
-                stack.enter_context(NSD(signed_zone_text(zone, sigs, every), zone.origin.to_text(), port=full_port,
-                                        host="0.0.0.0"))
-                full = {"mode": mk, "port": full_port}
-        net = stack.enter_context(Network(dev, share=1.0, mtu=None, required=profile != "lan"))
-        net.apply(profile)
-        stack.enter_context(Capture(info_dir / "server.pcap", iface=dev,
-                                    ports=f"portrange {base_port}-{full_port}", quiet=True, staged=False))
-        info = {"run": run_dir.name, "dataset": ds["name"], "rrsets": len(zone.items), "profile": profile,
-                "profile_detail": PROFILES[profile], "netem": net.active, "host": "127.0.0.1", "ports": ports,
-                "full": full, "modes": cfg["modes"], "started": time.time(), "pcap": "server.pcap",
-                "nsd_version": _nsd_version()}
-        (info_dir / "server.json").write_text(json.dumps(info, indent=2))
-        stack.callback(lambda: (info_dir / "server.json").unlink(missing_ok=True))
-        print(f"serving {ds['name']} zone of {run_dir.name} ({PROFILES[profile]['label']}):")
-        for mk, port in ports.items():
-            print(f"   {MODES[mk].label:<28} 127.0.0.1:{port}  (UDP and TCP)")
-        if full:
-            print(f"   {'MTL full signatures':<28} 127.0.0.1:{full_port}")
-        print("dashboard: Live demo -> Send a real query.  Stop with Ctrl+C.")
-        try:
-            while True:
-                time.sleep(3600)
-        except KeyboardInterrupt:
-            pass

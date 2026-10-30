@@ -1,0 +1,548 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Why DNSSEC Needs MTL</title>
+<style>
+/* Layout: one presenter "stage" (SVG scene) above a caption console, like a packet trace with narration. */
+:root{
+  --bg:#eef1f6; --surface:#ffffff; --ink:#15203a; --muted:#56637d; --line:#cfd6e3;
+  --accent:#2457c5; --good:#1c8656; --bad:#c3362b; --warn:#a86a12; --quantum:#6a44b8;
+  --on-accent:#ffffff; --good-soft:#e2f3ea; --bad-soft:#fbe7e5; --accent-soft:#e4ebfa; --q-soft:#eee8f8;
+  --f-display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0d131f; --surface:#151d2c; --ink:#e5eaf4; --muted:#95a2bb; --line:#2b3650;
+  --accent:#6f9bff; --good:#4cc68f; --bad:#ff6f62; --warn:#e3a646; --quantum:#ac8cff;
+  --on-accent:#0d131f; --good-soft:#15322a; --bad-soft:#3a1d1c; --accent-soft:#1b2a4a; --q-soft:#271f40; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0d131f; --surface:#151d2c; --ink:#e5eaf4; --muted:#95a2bb; --line:#2b3650;
+  --accent:#6f9bff; --good:#4cc68f; --bad:#ff6f62; --warn:#e3a646; --quantum:#ac8cff;
+  --on-accent:#0d131f; --good-soft:#15322a; --bad-soft:#3a1d1c; --accent-soft:#1b2a4a; --q-soft:#271f40; color-scheme:dark}
+
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.55}
+.wrap{max-width:1080px;margin:0 auto;padding-block:28px 40px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  display:grid;gap:18px}
+header{display:grid;gap:6px}
+.eyebrow{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{font-family:var(--f-display);font-weight:600;font-size:clamp(28px,4.4vw,42px);line-height:1.08;margin:0;text-wrap:balance}
+.lede{margin:0;color:var(--muted);max-width:66ch}
+
+nav.scenes{display:flex;flex-wrap:wrap;gap:6px}
+nav.scenes button{font:500 13px/1.2 var(--f-body);color:var(--muted);background:transparent;border:1px solid var(--line);
+  border-radius:999px;padding:7px 12px;cursor:pointer;display:flex;gap:7px;align-items:center}
+nav.scenes button .n{font-family:var(--f-mono);font-size:11px;color:var(--muted)}
+nav.scenes button:hover{color:var(--ink);border-color:var(--muted)}
+nav.scenes button[aria-current="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+nav.scenes button[aria-current="true"] .n{color:var(--bg);opacity:.75}
+
+.stage{background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow-x:auto}
+.stage svg{display:block;width:100%;min-width:640px;height:auto}
+
+.console{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px 24px;align-items:start}
+.cap{min-width:0;display:grid;gap:6px}
+.cap .stepno{font-family:var(--f-mono);font-size:12px;color:var(--muted);letter-spacing:.04em}
+.cap h2{font-family:var(--f-display);font-weight:600;font-size:22px;line-height:1.2;margin:0;text-wrap:balance}
+.cap p{margin:0;max-width:72ch}
+.cap code{display:block;font-family:var(--f-mono);font-size:13px;background:var(--surface);border:1px solid var(--line);
+  border-radius:8px;padding:8px 12px;overflow-x:auto;white-space:pre;color:var(--ink)}
+.controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.controls button{font:500 14px/1 var(--f-body);border-radius:8px;padding:10px 14px;cursor:pointer;border:1px solid var(--line);
+  background:var(--surface);color:var(--ink)}
+.controls button.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.controls button:disabled{opacity:.4;cursor:default}
+.dots{display:flex;gap:5px;padding:0 4px}
+.dots span{width:7px;height:7px;border-radius:50%;background:var(--line)}
+.dots span.on{background:var(--accent)}
+.dots span.done{background:var(--muted)}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.hint{font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+.foot{font-size:13px;color:var(--muted);border-top:1px solid var(--line);padding-top:14px;display:grid;gap:4px}
+@media (max-width:760px){.console{grid-template-columns:1fr}.controls{justify-content:flex-start}}
+
+/* ---------- SVG scene styles ---------- */
+svg text{font-family:var(--f-body);fill:var(--ink)}
+.node rect{fill:var(--surface);stroke:var(--ink);stroke-width:1.5}
+.node text{text-anchor:middle}
+.node .nl{font:600 15px var(--f-display);fill:var(--ink)}
+.node .ns{font:12px var(--f-mono);fill:var(--muted)}
+.node.attacker rect{stroke:var(--bad);stroke-dasharray:5 4}
+.node.attacker .nl{fill:var(--bad)}
+.node.quantum rect{stroke:var(--quantum);fill:var(--q-soft)}
+.node.quantum .nl{fill:var(--quantum)}
+.node.ghost{opacity:.38}
+.node.bad rect{stroke:var(--bad);fill:var(--bad-soft)}
+.node.bad .nl,.node.bad .ns{fill:var(--bad)}
+.node.good rect{stroke:var(--good);fill:var(--good-soft)}
+.node.good .nl{fill:var(--good)}
+.node.key rect{stroke:var(--accent);stroke-width:3}
+.node{transition:opacity .4s}
+.node rect{transition:fill .4s,stroke .4s}
+.link{stroke:var(--line);stroke-width:2;fill:none}
+.link.atk{stroke:var(--bad);stroke-dasharray:6 6}
+.link.goodl{stroke:var(--good);stroke-width:2.5}
+.link.badl{stroke:var(--bad);stroke-width:2.5}
+.pkt rect{fill:var(--surface);stroke:var(--accent);stroke-width:1.5}
+.pkt text{font:500 12px var(--f-mono);text-anchor:middle;fill:var(--accent)}
+.pkt.bad rect{stroke:var(--bad);fill:var(--bad-soft)}
+.pkt.bad text{fill:var(--bad)}
+.pkt.good rect{stroke:var(--good);fill:var(--good-soft)}
+.pkt.good text{fill:var(--good)}
+.pkt.q rect{stroke:var(--quantum);fill:var(--q-soft)}
+.pkt.q text{fill:var(--quantum)}
+.pkt.warnp rect{stroke:var(--warn)}
+.pkt.warnp text{fill:var(--warn)}
+.fx{opacity:0;transition:opacity .35s}
+.fx.on{opacity:1}
+svg.instant *{transition:none!important}
+.mono{font-family:var(--f-mono)!important;font-size:12px}
+.muted{fill:var(--muted)!important}
+.t-good{fill:var(--good)!important}
+.t-bad{fill:var(--bad)!important}
+.t-warn{fill:var(--warn)!important}
+.t-acc{fill:var(--accent)!important}
+.mid{text-anchor:middle}
+.end{text-anchor:end}
+.halo{paint-order:stroke;stroke:var(--surface);stroke-width:6px;stroke-linejoin:round}
+.colhead{font:500 14px var(--f-mono);text-anchor:middle;fill:var(--muted)}
+.panel rect{fill:var(--bg);stroke:var(--line)}
+.arr{stroke:var(--line);stroke-width:2;fill:none;marker-end:url(#mk-line)}
+.arr.ok{stroke:var(--good);marker-end:url(#mk-good)}
+.arr.no{stroke:var(--bad);marker-end:url(#mk-bad)}
+.alabel{font:500 12px var(--f-mono);text-anchor:middle;fill:var(--muted)}
+.alabel.ok{fill:var(--good)}
+.alabel.no{fill:var(--bad)}
+.pill rect{fill:var(--surface);stroke:var(--line)}
+.pill.good rect{fill:var(--good-soft);stroke:var(--good)}
+.pill.bad rect{fill:var(--bad-soft);stroke:var(--bad)}
+.pill text{font:600 14px var(--f-body);text-anchor:middle}
+.pill.good text{fill:var(--good)}
+.pill.bad text{fill:var(--bad)}
+.bar{transform-box:fill-box;transform-origin:left center;transform:scaleX(0);transition:transform .8s cubic-bezier(.3,.7,.2,1)}
+.bar.on{transform:scaleX(1)}
+.bar.fit{fill:var(--accent)}
+.bar.over{fill:var(--bad)}
+.bar.mtl{fill:var(--good)}
+.thresh{stroke:var(--ink);stroke-width:1.5;stroke-dasharray:4 4}
+.thresh2{stroke:var(--muted);stroke-width:1;stroke-dasharray:2 4}
+.axis{stroke:var(--line);stroke-width:1}
+.tree line{stroke:var(--good);stroke-width:1.5}
+.tree circle{fill:var(--surface);stroke:var(--good);stroke-width:1.5}
+.tree circle.top{fill:var(--good)}
+.chip rect{fill:var(--surface);stroke:var(--line)}
+.chip.warn rect{stroke:var(--warn)}
+.chip.bad rect{stroke:var(--bad);fill:var(--bad-soft)}
+.dcard rect{fill:var(--surface);stroke:var(--line);stroke-width:1.5;transition:stroke .3s}
+.dcard.hl rect{stroke:var(--accent);stroke-width:3}
+.dcard .dt{font:600 16px var(--f-display)}
+.dcard .dl{font:13px var(--f-body)}
+.dcard .ds{fill:var(--warn)!important}
+.dpanel rect{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.5}
+.dpanel text{font:13px var(--f-body)}
+.dpanel .dh{font:600 15px var(--f-display)}
+@media (prefers-reduced-motion: reduce){.fx,.bar,.node,.node rect{transition:none}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">CipherOps · explainer</div>
+    <h1>Why DNSSEC needs MTL</h1>
+    <p class="lede">How a DNS answer gets forged, how DNSSEC stops it, why a quantum computer would undo that, why the post-quantum fix runs into packet sizes, how MTL helps, and where the IETF drafts stand.</p>
+  </header>
+
+  <nav class="scenes" id="scenes" aria-label="Scenes"></nav>
+
+  <div class="stage" id="stage">
+    <svg id="svg" viewBox="0 0 960 500" role="img" aria-labelledby="capH">
+    </svg>
+  </div>
+
+  <div class="console">
+    <div class="cap" aria-live="polite">
+      <div class="stepno" id="capN"></div>
+      <h2 id="capH"></h2>
+      <p id="capP"></p>
+      <code id="capM"></code>
+    </div>
+    <div class="controls">
+      <button id="prev" type="button" aria-label="Previous step">← Back</button>
+      <div class="dots" id="dots" aria-hidden="true"></div>
+      <button id="next" type="button" class="primary">Next →</button>
+      <button id="play" type="button" aria-pressed="false">Play all</button>
+    </div>
+  </div>
+  <div class="hint">Keys: → next · ← back · space play/pause</div>
+
+  <div class="foot">
+    <div>Draft status was checked on the IETF Datatracker on 30 October 2026. It changes, so check the Datatracker for the latest.</div>
+    <div>Addresses are documentation ranges (192.0.2.0/24, 203.0.113.0/24); bank.example is a placeholder zone.</div>
+    <div>Response sizes are approximate: one signed A answer ≈ 113 bytes of DNS overhead plus the signature. MTL sizes use the maximum-size formulas in draft-harvey-cfrg-mtl-mode for a 10,005-RRset zone (14 hashes at most, so 60 + 14 × 16 = 284 bytes). SLH-DSA signing time is the team harness's figure for one core. This page explains the problem; the benchmark's measured results are in the run report (<code>report.html</code>) and in the dashboard's Compare tile.</div>
+  </div>
+</div>
+
+<script>
+(function(){
+const reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+const svg = document.getElementById('svg');
+const DEFS = `<defs>
+  <marker id="mk-line" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--line)"/></marker>
+  <marker id="mk-good" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--good)"/></marker>
+  <marker id="mk-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--bad)"/></marker>
+</defs>`;
+
+/* ---------- drawing helpers ---------- */
+function node(id,x,y,label,sub,cls='',w=170,h=64){
+  return `<g id="${id}" class="node ${cls}" transform="translate(${x} ${y})"><rect x="${-w/2}" y="${-h/2}" width="${w}" height="${h}" rx="10"/><text class="nl" y="${sub?-4:5}">${label}</text><text class="ns" y="16">${sub}</text></g>`;
+}
+function pkt(id,label,cls=''){
+  const w = Math.round(label.length*7.25+24);
+  return `<g id="${id}" class="pkt fx ${cls}" transform="translate(-300 -300)"><rect x="${-w/2}" y="-13" width="${w}" height="26" rx="13"/><text y="4.5">${label}</text></g>`;
+}
+function line(x1,y1,x2,y2,cls='link',id=''){return `<line ${id?`id="${id}"`:''} class="${cls}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;}
+function pill(id,x,y,w,txt,cls=''){return `<g id="${id}" class="pill ${cls}" transform="translate(${x} ${y})"><rect x="${-w/2}" y="-17" width="${w}" height="34" rx="17"/><text y="5">${txt}</text></g>`;}
+
+/* ---------- step engine ---------- */
+let runToken = 0;
+function ctx(instant, token){
+  const $ = id => svg.querySelector('#'+id);
+  const fast = instant || reduce;
+  const c = {
+    $, alive: () => token === runToken,
+    show(id,on=true){ const e=$(id); if(e) e.classList.toggle('on',on); },
+    cls(id,k,on=true){ const e=$(id); if(e) e.classList.toggle(k,on); },
+    text(id,s){ const e=$(id); if(!e) return; const t=e.querySelector('.ns')||(e.tagName==='text'?e:e.querySelector('text')); t.textContent=s; },
+    label(id,s){ const e=$(id); if(!e) return; const t=e.querySelector('.nl'); if(t) t.textContent=s; },
+    place(id,x,y){ const e=$(id); e.dataset.x=x; e.dataset.y=y; e.setAttribute('transform',`translate(${x} ${y})`); },
+    move(id,x,y,ms=900){
+      const e=$(id); const fx=+e.dataset.x||0, fy=+e.dataset.y||0;
+      e.dataset.x=x; e.dataset.y=y; e.setAttribute('transform',`translate(${x} ${y})`);
+      if(fast || !c.alive() || !e.animate) return Promise.resolve();
+      return e.animate([{transform:`translate(${fx}px,${fy}px)`},{transform:`translate(${x}px,${y}px)`}],
+        {duration:ms,easing:'cubic-bezier(.45,0,.2,1)'}).finished.catch(()=>{});
+    },
+    async send(id,from,to,ms=900,keep=false){
+      c.place(id,from[0],from[1]); c.show(id); await c.move(id,to[0],to[1],ms);
+      if(!keep){ await c.wait(250); c.show(id,false); }
+    },
+    wait(ms){ return fast ? Promise.resolve() : new Promise(r=>setTimeout(r,ms)); }
+  };
+  return c;
+}
+
+/* ---------- scenes ---------- */
+const P = {user:[110,250],res:[470,250],auth:[830,110],atk:[830,400],real:[110,78],fake:[110,422]};
+function lookupStage(withDnssec){
+  return DEFS +
+    line(...P.user,...P.res) + line(...P.res,...P.auth) +
+    line(...P.atk,...P.res,'link atk fx','latk') +
+    line(...P.user,...P.real,'link goodl fx','lreal') + line(...P.user,...P.fake,'link badl fx','lfake') +
+    node('real',...P.real,'192.0.2.10','real bank.example','ghost') +
+    node('fake',...P.fake,'203.0.113.66','fake login page','ghost') +
+    node('user',...P.user,'Your laptop','stub resolver') +
+    node('res',...P.res,'Recursive resolver', withDnssec ? 'validating' : 'caching') +
+    node('auth',...P.auth,'ns1.bank.example','authoritative') +
+    node('atk',...P.atk,'Attacker','spoofed replies','attacker') +
+    (withDnssec
+      ? `<g id="vpanel" class="panel fx" transform="translate(470 345)"><rect x="-175" y="-30" width="350" height="62" rx="8"/>
+          <text id="vp1" class="mono mid" y="-6">verify(RRSIG, DNSKEY of bank.example)</text>
+          <text id="vp2" class="mono mid" y="16">…</text></g>`
+      : `<text id="cache" class="mono mid muted" x="470" y="310">cache: empty</text>`) +
+    pkt('q1', withDnssec ? 'A? bank.example  +DO' : 'A? bank.example') +
+    pkt('q2', withDnssec ? 'A? bank.example  +DO' : 'A? bank.example') +
+    pkt('r1', withDnssec ? 'A 192.0.2.10 · RRSIG ✓' : 'A 192.0.2.10', withDnssec ? 'good' : '') +
+    pkt('f1', withDnssec ? 'A 203.0.113.66 · RRSIG ✗' : 'A 203.0.113.66', 'bad') +
+    pkt('a1', withDnssec ? 'A 192.0.2.10 · AD' : 'A 203.0.113.66', withDnssec ? 'good' : 'bad');
+}
+
+const scenes = [
+{ id:'plain', name:'Plain DNS', build:()=>lookupStage(false), steps:[
+  { h:'You type bank.example', p:'Your laptop asks its resolver for the address of bank.example. The resolver has nothing cached yet.',
+    m:'bank.example.  IN  A  ?',
+    run: async c => { await c.send('q1',P.user,P.res); } },
+  { h:'The resolver asks the authority', p:'The resolver forwards the question to bank.example\'s authoritative server. The only things tying the eventual reply to this question are a 16-bit query ID and a random source port.',
+    m:';; ->>HEADER<<- opcode: QUERY, id: 48211',
+    run: async c => { await c.send('q2',P.res,P.auth); } },
+  { h:'An attacker answers first', p:'The attacker floods the resolver with forged replies, guessing the query ID and port. One of them matches before the real answer arrives. Plain DNS has no way to check who wrote an answer.',
+    m:'bank.example.  86400  IN  A  203.0.113.66    ; forged',
+    run: async c => { c.show('latk'); c.place('r1',...P.auth); c.show('r1');
+      const slow = c.move('r1',650,180,1700);
+      await c.send('f1',P.atk,[470,190],850,true); await slow; } },
+  { h:'The cache is poisoned', p:'The resolver accepts the first matching reply and caches it. The real answer arrives too late and is thrown away. Everyone using this resolver now gets the attacker\'s address until the TTL expires, a full day here.',
+    m:'cache: bank.example. → 203.0.113.66  (TTL 86400)',
+    run: async c => { c.cls('res','bad'); c.text('cache','cache: bank.example → 203.0.113.66 · TTL 86400'); c.cls('cache','t-bad'); c.cls('cache','muted',false);
+      c.show('f1',false); await c.move('r1',560,200,700); await c.wait(400); c.show('r1',false); } },
+  { h:'You land on the attacker\'s site', p:'Your browser connects to 203.0.113.66, a copy of the bank\'s login page. HTTPS certificates catch some of these cases for websites, but mail routing, many other services and certificate issuance itself all trust DNS answers. This is the gap DNSSEC closes.',
+    m:'$ curl https://bank.example  →  connected to 203.0.113.66',
+    run: async c => { await c.send('a1',P.res,P.user,900); c.show('lfake'); c.cls('fake','ghost',false); c.cls('fake','bad'); } },
+]},
+{ id:'dnssec', name:'With DNSSEC', build:()=>lookupStage(true), steps:[
+  { h:'Same lookup, asking for signatures', p:'This time the resolver validates. It sets the DO ("DNSSEC OK") bit, so the authoritative server returns each record with its signature, an RRSIG record.',
+    m:'bank.example.  IN  A  ?      ; EDNS: do',
+    run: async c => { await c.send('q1',P.user,P.res,800); await c.send('q2',P.res,P.auth,800); } },
+  { h:'The attacker tries again', p:'The forged reply can match the query ID, but it can\'t carry a valid signature. Signatures are made with bank.example\'s private key, which never leaves the zone\'s signer.',
+    m:'bank.example.  86400  IN  A  203.0.113.66\n                       IN  RRSIG  A 13 2 86400 …  <garbage>',
+    run: async c => { c.show('latk'); c.place('r1',...P.auth); c.show('r1');
+      const slow = c.move('r1',650,180,1700);
+      await c.send('f1',P.atk,[470,190],850,true); await slow; } },
+  { h:'Validation fails, the forgery is dropped', p:'The resolver checks the RRSIG against the zone\'s public key (its DNSKEY record). The math doesn\'t work out, so the reply is marked bogus and discarded. Nothing is cached.',
+    m:'validation failure <bank.example. A IN>: signature crypto failed',
+    run: async c => { c.show('vpanel'); c.text('vp2','✗ signature fails → bogus, discarded'); c.cls('vp2','t-bad');
+      c.cls('f1','bad'); await c.move('f1',470,205,500); await c.wait(500); c.show('f1',false); } },
+  { h:'The real answer validates', p:'The genuine reply arrives with a signature that checks out against bank.example\'s DNSKEY. The resolver caches it as secure.',
+    m:'bank.example.  86400  IN  A  192.0.2.10   ; secure',
+    run: async c => { await c.move('r1',470,190,800); c.text('vp2','✓ signature valid → secure'); c.cls('vp2','t-bad',false); c.cls('vp2','t-good'); c.cls('res','good'); } },
+  { h:'You reach the real bank', p:'The answer goes back with the AD ("authenticated data") flag. If only forgeries had arrived you would get SERVFAIL, an error, never a wrong address. DNSSEC proves origin and integrity; it doesn\'t encrypt, and the last hop to your laptop still relies on trusting the resolver or using DoT/DoH.',
+    m:';; flags: qr rd ra ad; QUERY: 1, ANSWER: 2',
+    run: async c => { c.show('r1',false); await c.send('a1',P.res,P.user,900); c.show('lreal'); c.cls('real','ghost',false); c.cls('real','good'); } },
+]},
+{ id:'chain', name:'Chain of trust', build:()=>{
+    const X=[330,580,830], KY=140, LY=340, W=190;
+    return DEFS +
+      `<text class="colhead" x="${X[0]}" y="64">. (root)</text><text class="colhead" x="${X[1]}" y="64">example.</text><text class="colhead" x="${X[2]}" y="64">bank.example.</text>` +
+      `<path id="a0" class="arr fx" d="M185 236 L232 158"/>` +
+      `<path id="a1" class="arr fx" d="M${X[0]} 174 L${X[0]} 304"/>` +
+      `<path id="a2" class="arr fx" d="M${X[0]+95} 330 L${X[1]-96} 156"/>` +
+      `<path id="a3" class="arr fx" d="M${X[1]} 174 L${X[1]} 304"/>` +
+      `<path id="a4" class="arr fx" d="M${X[1]+95} 330 L${X[2]-96} 156"/>` +
+      `<path id="a5" class="arr fx" d="M${X[2]} 174 L${X[2]} 304"/>` +
+      node('res',100,250,'Resolver','root trust anchor','',170,64) +
+      node('k0',X[0],KY,'DNSKEY','root KSK + ZSK','',W) +
+      node('k1',X[1],KY,'DNSKEY','example. keys','',W) +
+      node('k2',X[2],KY,'DNSKEY','bank.example. keys','',W) +
+      node('d0',X[0],LY,'DS example.','digest of child key','',W) +
+      node('d1',X[1],LY,'DS bank.example.','digest of child key','',W) +
+      node('rr',X[2],LY,'A 192.0.2.10','signed by zone key','',W) +
+      `<text id="l0" class="alabel halo fx" x="214" y="196">anchor ✓</text>` +
+      `<text id="l1" class="alabel halo fx" x="${X[0]}" y="244">RRSIG ✓</text>` +
+      `<text id="l2" class="alabel halo fx" x="${(X[0]+X[1])/2}" y="244">digest ✓</text>` +
+      `<text id="l3" class="alabel halo fx" x="${X[1]}" y="244">RRSIG ✓</text>` +
+      `<text id="l4" class="alabel halo fx" x="${(X[1]+X[2])/2}" y="244">digest ✓</text>` +
+      `<text id="l5" class="alabel halo fx" x="${X[2]}" y="244">RRSIG ✓</text>` +
+      pill('status',580,450,330,'Validation: not started');
+  }, steps:[
+  { h:'It starts from one key the resolver already trusts', p:'A validating resolver ships with a trust anchor: the digest of the root zone\'s key-signing key. Everything else has to be proven, link by link, starting from it.',
+    m:'trust-anchor: ". DS <key tag> 8 2 <SHA-256 digest>"',
+    run: async c => { c.cls('res','key'); } },
+  { h:'Root keys match the anchor', p:'The resolver fetches the root DNSKEY set and checks that its key-signing key hashes to the trust anchor. The root\'s keys are now trusted.',
+    m:'.  IN  DNSKEY  257 3 8 …   ; matches anchor',
+    run: async c => { c.show('a0'); c.cls('a0','ok'); c.show('l0'); c.cls('l0','ok'); c.cls('k0','good'); await c.wait(300); } },
+  { h:'The root vouches for example.', p:'The root zone publishes a DS record for example.: a hash of example.\'s key. The root\'s key signs that DS record, so the resolver can verify it.',
+    m:'example.  IN  DS  <key tag> 13 2 <digest>   ; RRSIG by root ZSK ✓',
+    run: async c => { c.show('a1'); c.cls('a1','ok'); c.show('l1'); c.cls('l1','ok'); c.cls('d0','good'); await c.wait(300); } },
+  { h:'example.\'s key matches the DS', p:'The resolver hashes example.\'s DNSKEY and compares it with the DS the root signed. They match, so example.\'s key is trusted too.',
+    m:'SHA-256(example. DNSKEY) == DS digest   ✓',
+    run: async c => { c.show('a2'); c.cls('a2','ok'); c.show('l2'); c.cls('l2','ok'); c.cls('k1','good'); await c.wait(300); } },
+  { h:'The same pattern, one level down', p:'example. signs a DS for bank.example., and bank.example.\'s DNSKEY hashes to it. Each parent vouches for exactly one key of each child.',
+    m:'bank.example.  IN  DS  …   ; RRSIG by example. ZSK ✓, digest ✓',
+    run: async c => { c.show('a3'); c.cls('a3','ok'); c.show('l3'); c.cls('l3','ok'); c.cls('d1','good'); await c.wait(350);
+      c.show('a4'); c.cls('a4','ok'); c.show('l4'); c.cls('l4','ok'); c.cls('k2','good'); } },
+  { h:'The answer is secure', p:'Finally, bank.example.\'s key verifies the RRSIG on the A record. Every link from the anchor to the answer checks out, so the resolver sets the AD flag.',
+    m:'bank.example.  IN  A  192.0.2.10   ; secure',
+    run: async c => { c.show('a5'); c.cls('a5','ok'); c.show('l5'); c.cls('l5','ok'); c.cls('rr','good');
+      c.text('status','Validation: Secure'); c.cls('status','good'); } },
+  { h:'Attack: bring your own key', p:'The attacker serves a fake A record signed with their own key, and a fake DNSKEY for bank.example. The signature on the A record checks out against that fake key, but the fake key doesn\'t hash to the DS that example. signed. The chain breaks, and the answer is bogus.',
+    m:'SHA-256(attacker DNSKEY) != DS digest   ✗  → bogus, SERVFAIL',
+    run: async c => { c.label('k2','DNSKEY (attacker)'); c.text('k2','not the zone\'s key'); c.cls('k2','good',false); c.cls('k2','bad');
+      c.label('rr','A 203.0.113.66'); c.text('rr','signed by attacker key'); c.cls('rr','good',false); c.cls('rr','bad');
+      c.cls('a4','ok',false); c.cls('a4','no'); c.text('l4','digest ✗'); c.cls('l4','ok',false); c.cls('l4','no');
+      c.text('status','Validation: Bogus'); c.cls('status','good',false); c.cls('status','bad'); } },
+  { h:'What a forger would really need', p:'Signatures prove the data; the chain proves the keys. To forge an answer that validates, an attacker needs a private key somewhere on this chain. With RSA and ECDSA, that\'s exactly what a large quantum computer could provide.',
+    m:'forgery possible  ⇔  attacker holds a private key on the chain',
+    run: async c => { ['k0','k1','k2'].forEach(k=>c.cls(k,'key')); c.text('status','Weak point: the private keys'); c.cls('status','bad',false); } },
+]},
+{ id:'quantum', name:'Quantum threat', build:()=>{
+    return DEFS +
+      line(220,152,300,348) + line(480,152,300,348) + line(740,152,300,348) + line(390,380,670,380,'link atk fx','lq') +
+      node('k0',220,120,'. DNSKEY','RSA-2048','',200) +
+      node('k1',480,120,'example. DNSKEY','ECDSA P-256','',200) +
+      node('k2',740,120,'bank.example. DNSKEY','ECDSA P-256','',200) +
+      node('qc',300,380,'Quantum computer','runs Shor\'s algorithm','quantum',190) +
+      node('res',760,380,'Validating resolver','trusts the chain','',180) +
+      `<text id="why" class="mono mid t-warn fx" x="480" y="262">root · TLDs · signers · resolvers: algorithm changes take years</text>` +
+      pill('rb',760,452,250,'—','fx') +
+      pkt('p0','DNSKEY','q') + pkt('p1','DNSKEY','q') + pkt('p2','DNSKEY','q') +
+      pkt('fz','A 203.0.113.66 · RRSIG ✓','bad');
+  }, steps:[
+  { h:'Public keys are, by design, public', p:'Every DNSKEY in the chain can be fetched by anyone with an ordinary query. Collecting the root\'s, a TLD\'s and a zone\'s keys takes seconds.',
+    m:'$ dig bank.example DNSKEY +dnssec',
+    run: async c => { await Promise.all([c.send('p0',[220,120],[300,380],1000),c.send('p1',[480,120],[300,380],1100),c.send('p2',[740,120],[300,380],1200)]); } },
+  { h:'Shor\'s algorithm recovers the private keys', p:'Shor\'s algorithm factors RSA moduli and solves elliptic-curve discrete logarithms efficiently. On a large enough quantum computer, every classical DNSKEY gives up its private key.',
+    m:'public key  →  Shor  →  private key',
+    run: async c => { ['k0','k1','k2'].forEach(k=>{c.cls(k,'bad'); c.text(k,'private key recovered');}); await c.wait(300); } },
+  { h:'Forgeries now validate', p:'With the recovered keys the attacker signs a forged A record, and forged DS records if needed. Every check in the chain passes, so the resolver marks the forgery as authentic. That is worse than having no DNSSEC.',
+    m:';; flags: qr rd ra ad    bank.example. A 203.0.113.66   ; "secure"',
+    run: async c => { c.show('lq'); await c.send('fz',[300,380],[760,320],1000,true);
+      c.show('rb'); c.text('rb','Secure ✓ (on a forgery)'); c.cls('rb','bad'); c.cls('res','bad'); } },
+  { h:'Why this has to start now', p:'Encrypted traffic can be recorded now and decrypted later. A signature can\'t be attacked that way: the risk begins the day a capable machine exists (the IETF strategy draft calls it "trust now, forge later"). But replacing the algorithm at the root, in every TLD, in signing tools and in millions of resolvers takes years, so the replacement has to be ready well before.',
+    m:'risk window = time to migrate − time until a quantum computer exists',
+    run: async c => { c.show('why'); } },
+  { h:'Post-quantum signatures close the hole', p:'Post-quantum schemes rest on problems Shor\'s algorithm doesn\'t solve: lattices (ML-DSA, Falcon) or hash functions alone (SLH-DSA). NIST has standardised ML-DSA (FIPS 204) and SLH-DSA (FIPS 205). A private key can no longer be recovered, so the forgery fails. The catch is size.',
+    m:'ML-DSA (FIPS 204) · SLH-DSA (FIPS 205) · Falcon (FN-DSA, draft FIPS 206)',
+    run: async c => { c.show('why',false); c.show('fz',false); c.show('lq',false);
+      [['k0','SLH-DSA'],['k1','ML-DSA-44'],['k2','SLH-DSA']].forEach(([k,s])=>{c.cls(k,'bad',false); c.cls(k,'good'); c.text(k,s);});
+      c.cls('qc','ghost'); c.cls('res','bad',false); c.text('rb','Bogus: forgery rejected'); c.cls('rb','bad',false); c.cls('rb','good'); } },
+]},
+{ id:'size', name:'PQC size problem', build:()=>{
+    const x0=250, sc=620/8200, rows=[
+      ['ECDSA P-256','64 B sig',177,'fit'],['Ed25519','64 B sig',177,'fit'],['RSA-2048','256 B sig',369,'fit'],
+      ['Falcon-512','≈666 B sig',779,'fit'],['ML-DSA-44','2,420 B sig',2533,'over'],['SLH-DSA-SHA2-128s','7,856 B sig',7969,'over']];
+    let s = DEFS + `<text class="mono muted" x="40" y="18">one signed A answer, approx. bytes</text>`;
+    const xl=x0+1232*sc, xm=x0+1500*sc;
+    s += `<line class="axis" x1="${x0}" y1="46" x2="${x0}" y2="330"/>`;
+    rows.forEach((r,i)=>{ const y=68+i*46, w=Math.max(2,r[2]*sc);
+      s += `<text x="236" y="${y+5}" class="end" style="font:600 14px var(--f-display)">${r[0]}</text>`+
+           `<text x="236" y="${y+21}" class="end mono muted">${r[1]}</text>`+
+           `<rect id="b${i}" class="bar ${r[3]}" x="${x0}" y="${y-8}" width="${w}" height="22" rx="3"/>`+
+           `<text id="v${i}" class="mono halo fx ${r[3]==='over'?'t-bad':''}" x="${x0+w+8}" y="${y+7}">${r[2].toLocaleString('en-US')} B</text>`; });
+    s += `<line class="thresh" x1="${xl}" y1="44" x2="${xl}" y2="332"/><text class="mono end" x="${xl-6}" y="40">1,232 B default UDP buffer</text>`+
+         `<line class="thresh2" x1="${xm}" y1="44" x2="${xm}" y2="332"/><text class="mono muted" x="${xm+6}" y="346">1,500 B Ethernet MTU</text>`;
+    s += `<g id="cost" class="chip warn fx" transform="translate(705 160)"><rect x="-165" y="-40" width="330" height="80" rx="10"/>`+
+         `<text class="mid" y="-10" style="font:600 16px var(--f-display);fill:var(--warn)">≈0.6 s per SLH-DSA signature</text>`+
+         `<text class="mid mono muted" y="16">10,005 RRsets ≈ 100 min to sign</text></g>`;
+    s += `<g id="lane" class="fx">` + line(160,430,800,430) +
+         node('lr',90,430,'Resolver','',  '',130,46) + node('ls',870,430,'Server','','',130,46) +
+         `<text id="rtt" class="mono mid muted" x="480" y="482">round trips: 0</text></g>`;
+    ['UDP query →','TC=1 truncated','TCP SYN →','SYN-ACK','query over TCP','7,969 B answer'].forEach((t,i)=>{ s += pkt('c'+i,t, i===1?'bad':(i===5?'warnp':'')); });
+    return s;
+  }, steps:[
+  { h:'Classical signatures are small', p:'Today\'s DNSSEC algorithms produce 64 to 256-byte signatures. A signed answer fits comfortably in one UDP packet.',
+    m:'ECDSA P-256 · Ed25519 · RSA-2048  →  all under 400 bytes',
+    run: async c => { [0,1,2].forEach(i=>{c.show('b'+i); c.show('v'+i);}); await c.wait(500); } },
+  { h:'Lattice signatures start to overflow', p:'Falcon-512 still fits for a single record. ML-DSA signatures are 2,420 to 4,627 bytes, so even the smallest pushes one answer past the 1,232-byte UDP buffer that resolvers have used by default since DNS Flag Day 2020.',
+    m:'ML-DSA-44 answer ≈ 2,533 B  >  1,232 B',
+    run: async c => { [3,4].forEach(i=>{c.show('b'+i); c.show('v'+i);}); await c.wait(500); } },
+  { h:'SLH-DSA is far over the limit', p:'SLH-DSA-SHA2-128s, the scheme in this benchmark, has 7,856-byte signatures (the SLH-DSA family goes up to 49,856). One signed answer is about 6.5 times the UDP limit, and bigger than five Ethernet frames.',
+    m:'SLH-DSA-SHA2-128s answer ≈ 7,969 B  ≈ 6.5 × 1,232 B',
+    run: async c => { c.show('b5'); c.show('v5'); await c.wait(600); } },
+  { h:'What happens on the wire', p:'An oversized UDP answer comes back truncated (TC flag) and the resolver retries over TCP: a handshake plus extra round trips on every such lookup. Raising the buffer instead means IP fragmentation, about six fragments here, and fragments are often dropped by firewalls, so lookups time out.',
+    m:'UDP → TC=1 → TCP handshake → query → answer   (3 round trips instead of 1)',
+    run: async c => { c.show('lane'); const L=[160,430], R=[800,430];
+      const seq=[[L,R],[R,L],[L,R],[R,L],[L,R],[R,L]];
+      for(let i=0;i<6;i++){ if(!c.alive()) return; await c.send('c'+i,seq[i][0],seq[i][1],650);
+        if(i===1) c.text('rtt','round trips: 1 · no answer yet');
+        if(i===3) c.text('rtt','round trips: 2 · TCP connected');
+        if(i===5){ c.text('rtt','round trips: 3 instead of 1'); c.cls('rtt','t-bad'); c.cls('rtt','muted',false); } } } },
+  { h:'Signing is slow too', p:'Size isn\'t the only cost. The team\'s harness measured about 0.6 seconds per SLH-DSA-SHA2-128s signature on one core, so signing a 10,005-RRset zone record by record takes around 100 minutes.',
+    m:'10,005 RRsets × ≈0.6 s  ≈  100 min',
+    run: async c => { c.show('cost'); } },
+]},
+{ id:'mtl', name:'How MTL helps', build:()=>{
+    const R=[130,210], A=[830,210];
+    let s = DEFS + line(...R,...A) + node('res',...R,'Resolver','validating','',170,64) + node('auth',...A,'bank.example.','MTL signer','',170,64);
+    // small Merkle tree above the server
+    const lv=[[830],[790,870],[770,810,850,890],[760,780,800,820,840,860,880,900]], ys=[38,70,102,134];
+    let t='';
+    for(let l=1;l<4;l++) lv[l].forEach((x,i)=>{ const px=lv[l-1][Math.floor(i/2)]; t+=`<line x1="${px}" y1="${ys[l-1]}" x2="${x}" y2="${ys[l]}"/>`; });
+    lv.forEach((row,l)=>row.forEach(x=>{ t+=`<circle class="${l===0?'top':''}" cx="${x}" cy="${ys[l]}" r="${l===0?7:5}"/>`; }));
+    s += `<g id="tree" class="tree fx">${t}<text class="end mono t-good" x="740" y="44">1 × SLH-DSA signs the ladder</text><text class="end mono muted" x="740" y="64">every RRset is a leaf</text></g>`;
+    s += `<text id="cached" class="mono mid t-good fx" x="130" y="268">ladder cached ✓</text>`;
+    s += `<g id="miss" class="chip warn fx" transform="translate(480 140)"><rect x="-170" y="-18" width="340" height="36" rx="8"/><text class="mid mono" y="5" style="fill:var(--warn)">new record or no ladder → full signature</text></g>`;
+    const x0=250, sc=600/8200, rows=[['Plain SLH-DSA','per answer',7969,'over'],['SLH-DSA + MTL','condensed',397,'mtl'],['ECDSA P-256','classical',177,'fit']];
+    s += `<line class="axis" x1="${x0}" y1="312" x2="${x0}" y2="470"/>`;
+    rows.forEach((r,i)=>{ const y=334+i*48, w=r[2]*sc;
+      s += `<text x="236" y="${y+5}" class="end" style="font:600 14px var(--f-display)">${r[0]}</text><text x="236" y="${y+21}" class="end mono muted">${r[1]}</text>`+
+           `<rect id="b${i}" class="bar ${r[3]}" x="${x0}" y="${y-8}" width="${w}" height="22" rx="3"/>`+
+           `<text id="v${i}" class="mono halo fx" x="${x0+w+8}" y="${y+7}">≈${r[2].toLocaleString('en-US')} B</text>`; });
+    const xl=x0+1232*sc; s += `<line class="thresh" x1="${xl}" y1="312" x2="${xl}" y2="472"/><text class="mono" x="${xl+6}" y="490">1,232 B</text>`;
+    s += pkt('full','full signature ≈ 8.7 KB · TCP','warnp') + pkt('c0','condensed ≈ 284 B · UDP','good') + pkt('c1','condensed ≈ 284 B · UDP','good') + pkt('c2','condensed ≈ 284 B · UDP','good');
+    return s;
+  }, steps:[
+  { h:'One slow signature for the whole zone', p:'MTL mode puts every RRset into a Merkle tree and signs only the ladder, a short summary of the tree, with SLH-DSA. One slow signature instead of 10,005.',
+    m:'sign_append(rrset) × 10,005  +  sign(ladder) × 1',
+    run: async c => { c.show('tree'); } },
+  { h:'First answer: the full signature, once', p:'The first time a resolver meets this zone it needs the signed ladder. It fetches a full signature (about 8.7 KB, over TCP), checks the one SLH-DSA signature and caches the ladder.',
+    m:'full signature = condensed signature + signed ladder',
+    run: async c => { await c.send('full',[830,210],[130,210],1300); c.show('cached'); } },
+  { h:'Every later answer: a condensed signature', p:'Later answers carry only the authentication path: at most 14 hashes of 16 bytes for a 10,005-RRset zone (224 bytes), plus a 60-byte header, 284 bytes in all. The resolver checks it with hashing alone, against the cached ladder. The answer fits in one UDP packet.',
+    m:'verify(condensed, cached ladder)  →  hashing only, no SLH-DSA',
+    run: async c => { for(let i=0;i<3;i++){ if(!c.alive()) return; await c.send('c'+i,[830,210],[130,210],600); } } },
+  { h:'Back near classical sizes', p:'Per answer, MTL brings SLH-DSA down from about 8 KB to about 400 bytes, under the UDP limit. These are the draft\'s maximum-size formulas; the benchmark measures the real values.',
+    m:'≈7,969 B  →  ≈397 B per signed answer',
+    run: async c => { [0,1,2].forEach(i=>{c.show('b'+i); c.show('v'+i);}); await c.wait(600); } },
+  { h:'The trade-offs the benchmark measures', p:'A resolver without the ladder pays more than plain SLH-DSA, once. New or changed records only verify after a new ladder is signed. How often that happens and what it costs is what the benchmark\'s cache and zone-update results show.',
+    m:'cache hit → condensed (small)    cache miss → full (≈8.7 KB)',
+    run: async c => { c.show('miss'); } },
+]},
+{ id:'ietf', name:'Where the IETF stands', build:()=>{
+    const card=(id,x,y,title,draft,lines,status)=>`<g id="${id}" class="dcard fx" transform="translate(${x} ${y})"><rect width="440" height="150" rx="10"/><text class="dt" x="16" y="28">${title}</text><text class="mono muted" x="16" y="48">${draft}</text>${lines.map((l,i)=>`<text class="dl" x="16" y="${76+i*20}">${l}</text>`).join('')}<text class="mono ds" x="16" y="138">${status}</text></g>`;
+    const panel=(id,head,lines)=>`<g id="${id}" class="dpanel fx" transform="translate(30 352)"><rect width="900" height="130" rx="10"/><text class="dh" x="16" y="28">${head}</text>${lines.map((l,i)=>`<text x="16" y="${58+i*24}">${l}</text>`).join('')}</g>`;
+    return DEFS +
+      card('d0',30,20,'MTL mode','draft-harvey-cfrg-mtl-mode-09',['A mode of operation for any signature scheme:','sign a hash ladder once; each answer carries a short path.'],'Individual draft · Mar 2026 · expired') +
+      card('d1',490,20,'SLH-DSA-MTL in DNSSEC','draft-fregly-dnsop-slh-dsa-mtl-dnssec-06',['Publishing SLH-DSA-MTL keys and signatures in DNSSEC,','with EDNS(0) guidance for fetching the full signature.','This is the scheme CipherOps measures.'],'Individual draft · Mar 2026 · expired') +
+      card('d2',30,186,'ML-DSA-MTL in DNSSEC','draft-kaizer-dnsop-ml-dsa-mtl-dnssec-03',['MTL applied to ML-DSA-44 (SHAKE-128), described as a','conservative algorithm. Smaller signature: 2,420 B.'],'Individual draft · Oct 2026 · active') +
+      card('d3',490,186,'PQC strategy for DNSSEC','draft-sheth-pqc-dnssec-strategy-02',['A conservative algorithm run in MTL mode, paired with','a low-impact drop-in used like today\'s signatures.'],'Informational, individual · Oct 2026 · active') +
+      panel('open','What is still open',['Individual Internet-Drafts: none is adopted by a working group or published as an RFC yet.','No DNSSEC algorithm numbers are assigned for these schemes; IANA registration is future work.','Datatracker marks the first two as expired (last revised March 2026); the two newest are active.']) +
+      panel('meaning','What it means for this benchmark',['CipherOps measures MTL with SLH-DSA, the largest of the common signatures, so the effects are easy to see.','The same trade-offs (ladder fetch, cache use, update cost) should carry over to ML-DSA-MTL, with smaller numbers.','Measuring ML-DSA-MTL is a follow-up; it is not part of this benchmark.']);
+  }, steps:[
+  { h:'The mode: MTL', p:'MTL mode is specified in draft-harvey-cfrg-mtl-mode (revision 09, March 2026). It works with any signature scheme, and its security rests only on hash functions, so it is quantum-safe as long as the hash is.',
+    m:'draft-harvey-cfrg-mtl-mode-09 · individual draft',
+    run: async c => { ['d0','d1','d2','d3'].forEach(k=>c.cls(k,'hl',k==='d0')); c.show('d0'); } },
+  { h:'The DNSSEC profile this benchmark measures', p:'draft-fregly-dnsop-slh-dsa-mtl-dnssec (revision 06, March 2026) defines SLH-DSA-MTL keys and signatures in DNSSEC, with EDNS(0) guidance for fetching the full signature. CipherOps runs this scheme on the Verisign reference code.',
+    m:'draft-fregly-dnsop-slh-dsa-mtl-dnssec-06 · individual draft',
+    run: async c => { ['d0','d1','d2','d3'].forEach(k=>c.cls(k,'hl',k==='d1')); c.show('d0'); c.show('d1'); } },
+  { h:'The newest draft uses ML-DSA', p:'draft-kaizer-dnsop-ml-dsa-mtl-dnssec (revision 03, October 2026) applies MTL to ML-DSA-44 as a "conservative" algorithm. The signature underneath is smaller (2,420 bytes against 7,856), so the full signature a resolver fetches once is smaller too.',
+    m:'ML-DSA-44 + SHAKE-128 · signature 2,420 B',
+    run: async c => { ['d0','d1','d2','d3'].forEach(k=>c.cls(k,'hl',k==='d2')); ['d0','d1','d2'].forEach(k=>c.show(k)); } },
+  { h:'A strategy with two kinds of algorithm', p:'draft-sheth-pqc-dnssec-strategy (revision 02, October 2026, Informational) proposes a conservative algorithm in MTL mode as the resilient fallback, plus a low-impact "drop-in" algorithm used like today\'s signatures, such as MAYO or SNOVA from NIST\'s on-ramp. It asks for tests of truncation, TCP fallback and latency in BIND, NSD and CoreDNS.',
+    m:'conservative + MTL mode  ·  low-impact drop-in',
+    run: async c => { ['d0','d1','d2','d3'].forEach(k=>{c.cls(k,'hl',k==='d3'); c.show(k);}); } },
+  { h:'What is still open', p:'All four are individual drafts. None has been adopted by a working group or published as an RFC, and no DNSSEC algorithm number is assigned yet. Treat message formats and sizes as likely to change.',
+    m:'status: work in progress',
+    run: async c => { ['d0','d1','d2','d3'].forEach(k=>{c.cls(k,'hl',false); c.show(k);}); c.show('open'); } },
+  { h:'What it means for this benchmark', p:'CipherOps measures MTL on SLH-DSA, the largest of the common signatures, so truncation, TCP fallback, cache use and update cost are easy to see. The same trade-offs should apply to ML-DSA-MTL with smaller numbers; measuring that is a follow-up.',
+    m:'measured here: SLH-DSA-MTL · next: ML-DSA-MTL',
+    run: async c => { ['d0','d1','d2','d3'].forEach(k=>{c.cls(k,'hl',k==='d1'); c.show(k);}); c.show('open',false); c.show('meaning'); } },
+]},
+];
+
+/* ---------- UI wiring ---------- */
+const navEl=document.getElementById('scenes'), dotsEl=document.getElementById('dots');
+const capN=document.getElementById('capN'), capH=document.getElementById('capH'), capP=document.getElementById('capP'), capM=document.getElementById('capM');
+const prevB=document.getElementById('prev'), nextB=document.getElementById('next'), playB=document.getElementById('play');
+let si=0, st=0, playing=false;
+
+scenes.forEach((s,i)=>{ const b=document.createElement('button'); b.type='button';
+  b.innerHTML=`<span class="n">${i+1}</span>${s.name}`; b.addEventListener('click',()=>{stop(); go(i,0);}); navEl.appendChild(b); });
+
+async function go(sIdx, step){
+  si=sIdx; st=step; const token=++runToken; const sc=scenes[si];
+  [...navEl.children].forEach((b,i)=>b.setAttribute('aria-current', i===si?'true':'false'));
+  dotsEl.innerHTML = sc.steps.map((_,i)=>`<span class="${i===st?'on':(i<st?'done':'')}"></span>`).join('');
+  const s=sc.steps[st];
+  capN.textContent=`Scene ${si+1} of ${scenes.length} · step ${st+1} of ${sc.steps.length}`;
+  capH.textContent=s.h; capP.textContent=s.p; capM.textContent=s.m;
+  prevB.disabled = (si===0 && st===0);
+  nextB.disabled = (si===scenes.length-1 && st===sc.steps.length-1);
+  nextB.textContent = st===sc.steps.length-1 && si<scenes.length-1 ? 'Next scene →' : 'Next →';
+  try{ if(location.hash!=='#'+sc.id) history.replaceState(null,'','#'+sc.id); }catch(e){}
+  svg.innerHTML = sc.build();
+  svg.classList.add('instant');
+  const fast = ctx(true, token);
+  for(let i=0;i<st;i++){ await sc.steps[i].run(fast); if(token!==runToken) return; }
+  void svg.getBoundingClientRect();
+  svg.classList.remove('instant');
+  await sc.steps[st].run(ctx(false, token));
+  if(token!==runToken) return;
+  if(playing){ await new Promise(r=>setTimeout(r, reduce?4200:2600)); if(token===runToken && playing) next(); }
+}
+function next(){ const sc=scenes[si]; if(st<sc.steps.length-1) go(si,st+1); else if(si<scenes.length-1) go(si+1,0); else stop(); }
+function prev(){ if(st>0) go(si,st-1); else if(si>0) go(si-1,scenes[si-1].steps.length-1); }
+function stop(){ playing=false; playB.textContent='Play all'; playB.setAttribute('aria-pressed','false'); }
+function play(){ if(playing){ stop(); return; } playing=true; playB.textContent='Pause'; playB.setAttribute('aria-pressed','true'); next(); }
+
+nextB.addEventListener('click',()=>{stop(); next();});
+prevB.addEventListener('click',()=>{stop(); prev();});
+playB.addEventListener('click',play);
+document.addEventListener('keydown',e=>{
+  if(e.target.closest && e.target.closest('input,textarea')) return;
+  if(e.key==='ArrowRight'){e.preventDefault(); stop(); next();}
+  else if(e.key==='ArrowLeft'){e.preventDefault(); stop(); prev();}
+  else if(e.key===' '){e.preventDefault(); play();}
+});
+function fromHash(){ const id=(location.hash||'').slice(1); const i=scenes.findIndex(s=>s.id===id); return i<0?0:i; }
+window.addEventListener('hashchange',()=>{ const i=fromHash(); if(i!==si){ stop(); go(i,0); } });
+go(fromHash(),0);
+})();
+</script>
+
+</body></html>

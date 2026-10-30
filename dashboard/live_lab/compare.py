@@ -87,6 +87,22 @@ def bench_by_scenario(summary: pd.DataFrame, profile: str | None = None,
     return pd.DataFrame(rows, columns=cols)
 
 
+def lookup_problems(summary: pd.DataFrame | None) -> list[str]:
+    """Plain-language notes about passes in which lookups failed. Such passes are left out of every figure, so a
+    scenario that cannot be resolved shows no numbers instead of misleadingly fast ones."""
+    if summary is None or summary.empty or "failed" not in summary:
+        return []
+    out = []
+    for _, r in summary.iterrows():
+        failed = int(r.get("failed") or 0)
+        trials, valid = int(r.get("trials") or 0), int(r.get("valid_trials") if "valid_trials" in r else r.get("trials") or 0)
+        if failed or valid < trials:
+            out.append(f"**{r['scenario']}** ({r.get('profile', '?')}, {r.get('pass', '?')} pass): {failed} lookup(s) "
+                       f"failed (SERVFAIL {int(r.get('servfail') or 0)}, timeouts {int(r.get('timeouts') or 0)}); "
+                       f"{valid} of {trials} passes valid and used for the figures")
+    return out
+
+
 def analytical_by_scenario(rows: list[dict]) -> pd.DataFrame:
     """Formula-derived (draft section 12) signature storage per scenario; never measured.
 
@@ -158,12 +174,12 @@ def load_suite(suite_dir: Path) -> dict | None:
 
 def signing_trial_stats(trials: pd.DataFrame, full: pd.DataFrame) -> pd.DataFrame:
     """Per dataset and scenario: the dataset-wide sign and verify time estimated from the repeated sample trials
-    (median over trials, 95% bootstrap CI), next to the single full signing run that was actually served.
+    (median over trials, distribution-free CI of the median), next to the single full signing run that was actually served.
 
     Each trial signs two sample zones. A straight line through them gives a fixed cost per zone and a cost
     per RRSIG; applying it to every zone of the dataset gives the estimate. It is an extrapolation and is
     labelled as one wherever it is shown."""
-    from cipherops.stats import bootstrap_ci
+    from cipherops.stats import median_ci
 
     cols = ["dataset", "scenario", "trials", "sample_names", "sample_rrsigs", "sign_ms_per_rrsig", "sign_fixed_s",
             "dataset_rrsigs", "est_sign_s", "est_sign_lo", "est_sign_hi", "est_verify_s", "est_verify_lo",
@@ -190,8 +206,8 @@ def signing_trial_stats(trials: pd.DataFrame, full: pd.DataFrame) -> pd.DataFram
             est_ver.append(sum(v_fix + v_per * r for r in zone_rr))
             per_sign.append(s_per * 1000)
             fixed_sign.append(s_fix)
-        s_lo, s_hi = bootstrap_ci(est_sign)
-        v_lo, v_hi = bootstrap_ci(est_ver)
+        s_lo, s_hi = median_ci(est_sign)
+        v_lo, v_hi = median_ci(est_ver)
         big = g[g["names"] == g["names"].max()]
         rows.append({
             "dataset": int(ds), "scenario": sc, "trials": int(g["trial"].nunique()),
@@ -288,12 +304,12 @@ def headline(df: pd.DataFrame, base: str, cand: str) -> list[dict]:
     """The five 'candidate vs baseline' cards."""
     spec = [
         ("Signing time", "sign_s", "faster", "slower", fmt_seconds, "Whole-zone signing during Prepare"),
-        ("Zone verification", "verify_s", "faster", "slower", fmt_seconds,
+        ("Verification time", "verify_s", "faster", "slower", fmt_seconds,
          "ldns-verify-zone over every signed zone (offline check, not the resolver)"),
-        ("Signed size", "signed_bytes", "smaller", "larger", fmt_bytes, "Total size of the signed zone files"),
-        ("Bytes on the wire", "upstream_bytes", "less data", "more data", fmt_bytes,
+        ("Signed zone size", "signed_bytes", "smaller", "larger", fmt_bytes, "Total size of the signed zone files"),
+        ("Response size", "upstream_bytes", "less data", "more data", fmt_bytes,
          "Resolver ↔ authoritative traffic, cold pass"),
-        ("Resolver cache", "cache_rrset", "less memory", "more memory", fmt_bytes,
+        ("Cache size", "cache_rrset", "less memory", "more memory", fmt_bytes,
          "Measured: RRset cache memory in Unbound after the cold pass"),
     ]
     out = []
@@ -313,23 +329,23 @@ def table(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     t = pd.DataFrame({
-        "Scenario": df.scenario,
-        "Sign zones": df.sign_s.map(fmt_seconds),
-        "Verify zones": df.verify_s.map(fmt_seconds),
+        "Algorithm": df.scenario,
+        "Signing time": df.sign_s.map(fmt_seconds),
+        "Verification time": df.verify_s.map(fmt_seconds),
         "Sign / RRSIG (ms)": df.sign_ms_per_rrsig,
-        "Signed size": df.signed_bytes.map(fmt_bytes),
+        "Signed zone size": df.signed_bytes.map(fmt_bytes),
         "RRSIGs": df.rrsigs,
-        "Cold median (ms)": df.cold_ms.round(2),
-        "Warm median (ms)": df.warm_ms.round(2),
-        "Upstream bytes (cold)": df.upstream_bytes.map(fmt_bytes),
-        "Upstream queries": df.upstream_queries,
-        "Truncated": df.truncated,
+        "Latency p50, cold cache (ms)": df.cold_ms.round(2),
+        "Latency p50, warm cache (ms)": df.warm_ms.round(2),
+        "Resolver→authoritative bytes (cold)": df.upstream_bytes.map(fmt_bytes),
+        "Resolver→authoritative queries": df.upstream_queries,
+        "Truncated (TC) responses": df.truncated,
         "TCP connections": df.tcp_conns,
         "Root": df.root_bytes.map(fmt_bytes),
         "TLD": df.tld_bytes.map(fmt_bytes),
         "Leaf": df.sld_bytes.map(fmt_bytes),
-        "RRset cache (measured)": df.cache_rrset.map(fmt_bytes),
-        "Message cache (measured)": df.cache_message.map(fmt_bytes),
+        "Cache size, RRsets (measured)": df.cache_rrset.map(fmt_bytes),
+        "Cache size, messages (measured)": df.cache_message.map(fmt_bytes),
         "Signature storage, whole zone (analytical)": df.analytic_sig_bytes.map(fmt_bytes),
     })
     return t

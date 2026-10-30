@@ -158,20 +158,23 @@ def check_frozen(lab: Lab, scenario: str) -> None:
             raise RuntimeError(f"{f} changed since signing (SHA-256 mismatch)")
 
 
-def sign_trials(lab: Lab, scenario: str, trials: int, names: list[int], log=print) -> list[dict]:
+def sign_trials(lab: Lab, scenario: str, trials: int, names: list[int], log=print, warmup: int = 1) -> list[dict]:
     """Repeat signing and verification of sample leaf zones; one row per trial and sample size.
 
     Each sample uses the scenario's leaf-tier algorithm and the same synthetic content generator as the
     real zones. Two or more sample sizes let the report separate the fixed cost per zone from the cost
     per RRSIG, and extrapolate to the whole dataset without signing it again for every trial. Nothing
     here is served: the frozen zones from sign_scenario stay untouched.
+
+    ``warmup`` extra rounds on the smallest sample run first and are discarded: the first signing after a
+    start pays one-off costs (loading the libraries, cold caches) that are not part of the repeated cost.
     """
     tld = next(z for z in lab.zones if z.tier == "tld")
     first = next(z for z in lab.zones if z.tier == "sld")
     rows = []
     base = lab.work / "signtrials" / scenario
-    for t in range(1, int(trials) + 1):
-        for n in names:
+    for t in range(1 - int(warmup), int(trials) + 1):
+        for n in ([min(names)] if t < 1 else names):
             spec = ZoneSpec(f"sample.{tld.origin}", "sld", first.server, tld.origin, int(n),
                             int(lab.cfg["seed"]) + 104729)
             out = base / f"t{t}-n{n}"
@@ -179,6 +182,10 @@ def sign_trials(lab: Lab, scenario: str, trials: int, names: list[int], log=prin
                 shutil.rmtree(out)
             out.mkdir(parents=True)
             r = sign_zone(lab, scenario, spec, {}, out)
+            if t < 1:
+                log(f"  [{scenario}] warm-up, {n} names (discarded)")
+                shutil.rmtree(out, ignore_errors=True)
+                continue
             rows.append({"scenario": scenario, "trial": t, "names": spec.n_names, "algorithm": r["algorithm"],
                          "rrsigs": r["rrsig_count"], "sign_s": r["sign_seconds"], "verify_s": r["verify_seconds"],
                          "signed_bytes": r["signed_bytes"]})
