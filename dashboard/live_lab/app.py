@@ -67,6 +67,9 @@ LEVEL_ICON = {"info": "ℹ️", "ok": "✅", "warn": "⚠️", "err": "❌", "st
 ACTIVITY_CAP = 500
 
 NAV_MODES = ("home", "setup", "live", "benchmark", "compare", "learn", "reset")
+HOSTED_TILES = ("home", "live", "benchmark", "compare", "learn")  # CIPHEROPS_HOSTED=1
+HOSTED_NOTICE = ("Hosted demo: Live, Compare, Learn and small benchmarks. "
+                 "Setup, larger benchmarks and Reset need a local install, see README.")
 TILE_TEXT_HEIGHT = 120  # px; title, status chip and a two-line purpose
 
 TILES = {
@@ -301,8 +304,14 @@ def _scenario_list(h: driver.LabHandle) -> list[str]:
     return chosen
 
 
+def resolve_mode(mode) -> str:
+    """The tile to show: the requested one if it is allowed here, otherwise home (hidden tiles are also refused)."""
+    return mode if mode in (HOSTED_TILES if driver.hosted() else NAV_MODES) else "home"
+
+
 def _go(mode: str) -> None:
-    st.session_state.nav = mode if mode in NAV_MODES else "home"
+    mode = resolve_mode(mode)
+    st.session_state.nav = mode
     try:
         if mode == "home":
             if "tile" in st.query_params:
@@ -321,7 +330,9 @@ def _init_nav() -> None:
         tile = st.query_params.get("tile", "home")
     except Exception:  # noqa: BLE001
         pass
-    st.session_state.nav = tile if tile in NAV_MODES else "home"
+    st.session_state.nav = resolve_mode(tile)
+    if driver.hosted() and st.session_state.nav != tile:
+        _go(st.session_state.nav)  # also drops the refused tile from the URL
 
 
 PROFILE_FIELDS = (
@@ -466,7 +477,8 @@ def _gate(stt: dict, what: str) -> bool:
     missing = [name for name, ok in (("images", r["images"]), ("signed zones", r["prepared"]),
                                      ("running containers", r["running"])) if not ok]
     st.warning(f"{what} needs a ready lab. Still missing: {', '.join(missing)}.")
-    st.button("Go to Setup", on_click=_go, args=("setup",), key=f"gate_{what}", type="primary")
+    if resolve_mode("setup") == "setup":
+        st.button("Go to Setup", on_click=_go, args=("setup",), key=f"gate_{what}", type="primary")
     return False
 
 
@@ -586,14 +598,19 @@ def _sidebar_brand(mode: str) -> None:
 def sidebar_home(h: driver.LabHandle, stt: dict) -> None:
     _sidebar_brand("home")
     st.sidebar.markdown("### How to use this lab")
-    st.sidebar.markdown(
-        "1. **Setup** (first, once) — build the images, sign the zones, start the lab  \n"
-        "2. **Live** — send a query, compare cold and warm cache, read the packets  \n"
-        "3. **Benchmark** — *Offline* needs no setup; *Simulated* needs only the images  \n"
-        "4. **Compare** — algorithms side by side, run against run, zone updates  \n"
-        "5. **Learn** — why DNSSEC needs MTL  \n"
-        "6. **Reset** — clear only what you choose"
-    )
+    guide = [
+        ("setup", "**Setup** (first, once) — build the images, sign the zones, start the lab"),
+        ("live", "**Live** — send a query, compare cold and warm cache, read the packets"),
+        ("benchmark", "**Benchmark** — *Offline* needs no setup; *Simulated* needs only the images"),
+        ("compare", "**Compare** — algorithms side by side, run against run, zone updates"),
+        ("learn", "**Learn** — why DNSSEC needs MTL"),
+        ("reset", "**Reset** — clear only what you choose"),
+    ]
+    if driver.hosted():
+        guide = [(m, t) for m, t in guide if m in HOSTED_TILES]
+        guide = [(m, t.replace("*Offline* needs no setup; *Simulated* needs only the images", "the Small benchmark"))
+                 for m, t in guide]
+    st.sidebar.markdown("  \n".join(f"{i}. {t}" for i, (_m, t) in enumerate(guide, 1)))
     st.sidebar.markdown("---")
     r = readiness(stt)
     st.sidebar.markdown("### Lab readiness")
@@ -955,6 +972,8 @@ BENCH_MODE_NOTE = {
 
 
 def bench_mode() -> str:
+    if driver.hosted():
+        return "simulated"  # the offline presets are larger than Small
     mode = cfg("bench_mode", "offline")
     return mode if mode in BENCH_MODES else "offline"
 
@@ -962,7 +981,8 @@ def bench_mode() -> str:
 def sidebar_benchmark(h: driver.LabHandle, stt: dict) -> None:
     _sidebar_brand("benchmark")
     st.sidebar.markdown("### Benchmark")
-    mode = sb(st.sidebar.radio, "bench_mode", "offline", "Mode", options=list(BENCH_MODES),
+    mode = sb(st.sidebar.radio, "bench_mode", "offline", "Mode",
+              options=["simulated"] if driver.hosted() else list(BENCH_MODES),
               format_func=BENCH_MODES.get,
               help="Offline (harness): crypto timings and DNS message sizes on one pinned core, no network. "
                    "Simulated (Verisign stack): a real root, TLD and leaf hierarchy with a validating resolver, "
@@ -1030,9 +1050,16 @@ def _sidebar_bench_simulated(h: driver.LabHandle, stt: dict) -> None:
     _hint(f"Saved as {stamp}{'_' + clean if clean else ''} (time = when you press Run)")
 
     st.sidebar.markdown("**What to measure**")
-    sizes = sb(st.sidebar.multiselect, "bench_sizes", SUITE_DEFAULT_SIZES, gl.label("zone_size"),
-               options=SUITE_SIZE_CHOICES, format_func=_size_label,
-               help=gl.tip("zone_size") + " Recommended: 50, 500 and 5,000.")
+    if driver.hosted():
+        sizes = list(suite_mod.HOSTED_SIZES)  # Small only; suite_mod.start() refuses anything else too
+        _store()["bench_sizes"] = sizes
+        st.sidebar.multiselect(gl.label("zone_size"), options=sizes, default=sizes, disabled=True,
+                               format_func=lambda n: f"Small ({n} names)", key="hosted_bench_sizes",
+                               help="The hosted demo runs the Small benchmark only. Larger sizes need a local install.")
+    else:
+        sizes = sb(st.sidebar.multiselect, "bench_sizes", SUITE_DEFAULT_SIZES, gl.label("zone_size"),
+                   options=SUITE_SIZE_CHOICES, format_func=_size_label,
+                   help=gl.tip("zone_size") + " Recommended: 50, 500 and 5,000.")
     sc = sb(st.sidebar.multiselect, "bench_scenarios", ["ecdsa", "slh-dsa", "mtl"], gl.label("algorithm") + "s",
             options=list(driver.SCENARIO_ALGS), help=gl.tip("algorithm"))
     sb(st.sidebar.number_input, "bench_trials", 5, gl.label("runs"), min_value=1, max_value=10,
@@ -1164,12 +1191,12 @@ def home_page(h: driver.LabHandle, stt: dict) -> None:
         st.error(f"Could not read lab status: {stt['error']}")
 
     r = readiness(stt)
-    if not r["ready"]:
+    if not r["ready"] and not driver.hosted():
         st.info("**New here? Start with Setup.** Live needs the lab signed and running. Benchmark needs no "
                 "Setup in Offline mode, and only the built images in Simulated mode.")
 
-    order = [("setup", "live", "benchmark"), ("compare", "learn", "reset")]
-    for row in order:
+    shown = [m for m in ("setup", "live", "benchmark", "compare", "learn", "reset") if resolve_mode(m) == m]
+    for row in [shown[i:i + 3] for i in range(0, len(shown), 3)]:
         for col, mode in zip(st.columns(3), row):
             tile = TILES[mode]
             with col, st.container(border=True):
@@ -2165,7 +2192,8 @@ def benchmark_run(h: driver.LabHandle, stt: dict) -> None:
     if not r["images"]:
         st.warning("The lab images are not built yet. Build them once in **Setup** (step 1); the benchmark "
                    "does the rest itself.")
-        st.button("Go to Setup", on_click=_go, args=("setup",), key="bench_to_setup")
+        if resolve_mode("setup") == "setup":
+            st.button("Go to Setup", on_click=_go, args=("setup",), key="bench_to_setup")
     st.caption("Set the options in the sidebar, then press **Run benchmark**. It signs, starts and stops the "
                "lab on its own, one zone size after another.")
     _bench_plan()
@@ -3518,9 +3546,13 @@ def main() -> None:
     if symbol is not None:
         st.logo(symbol, icon_image=symbol, size="large")  # top-left on Home and on every tile
     _init_nav()
+    if driver.hosted():
+        st.info(HOSTED_NOTICE)
     _bootstrap_cfg_from_disk()
     h = _handle()
-    mode = st.session_state.nav
+    mode = resolve_mode(st.session_state.nav)  # checked on every run, not only when the page loads
+    if mode != st.session_state.nav:
+        _go(mode)
 
     err = _apply_ui_config(h)
     tag_before = h.tag

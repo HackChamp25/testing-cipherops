@@ -79,6 +79,8 @@ def start(preset: str, *, trials: int | None = None, stack: str = OFFLINE_STACK)
     """Launch the harness as a detached worker. Returns at once."""
     if preset not in PRESETS:
         raise RuntimeError(f"unknown preset {preset!r}")
+    if driver.hosted():
+        raise driver.LabBusy("Offline benchmarks need a local install; the hosted demo runs the Small benchmark only.")
     if is_running():
         raise driver.LabBusy("An offline benchmark is already running.")
     driver.require_no_suite()

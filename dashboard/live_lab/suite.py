@@ -38,6 +38,7 @@ DEFAULT_SIGN_TRIALS = 5
 DEFAULT_SAMPLE_NAMES = 100
 STEPS_PER_SIZE = 5
 LONG_RUN_S = 12 * 3600                # the command line asks for --yes above this
+HOSTED_SIZES = (SMOKE_SIZE,)          # the hosted demo runs the Small size only (CIPHEROPS_HOSTED=1)
 
 
 def bench_shape(n_names: int) -> dict:
@@ -160,8 +161,20 @@ def create(params: dict) -> tuple[str, Path]:
     return suite_id, d
 
 
+def enforce_hosted_sizes(sizes) -> None:
+    """In the hosted demo, refuse any size but Small, whatever the caller sends."""
+    if not driver.hosted():
+        return
+    wanted = [int(n) for n in (sizes or [])]
+    bad = sorted({n for n in wanted if n not in HOSTED_SIZES})
+    if bad or not wanted:
+        raise ValueError("The hosted demo runs the Small benchmark only "
+                         f"({', '.join(str(n) for n in HOSTED_SIZES)} names). Larger sizes need a local install.")
+
+
 def start(params: dict) -> str:
     """Write the parameters and launch the suite as a detached process. Returns the suite id."""
+    enforce_hosted_sizes(params.get("sizes"))
     with _start_lock():
         driver.require_no_offline()
         live = running_suite()

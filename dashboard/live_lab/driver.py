@@ -58,6 +58,11 @@ ACTIVE_STATES = ("starting", "running")
 STARTING_GRACE_S = 60
 
 
+def hosted() -> bool:
+    """True when the dashboard runs as a public hosted demo (``CIPHEROPS_HOSTED=1``): a reduced, size-limited surface."""
+    return os.environ.get("CIPHEROPS_HOSTED") == "1"
+
+
 class LabBusy(RuntimeError):
     """The lab is in use by a running benchmark suite or signing job."""
 

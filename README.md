@@ -65,6 +65,13 @@ bash scripts/run_benchmark.sh configs/quick.yaml  # or: a short offline run from
 The first image build compiles OpenSSL, liboqs and MTL from source and takes a while; later runs reuse it. Full
 instructions, Windows commands, tests and troubleshooting: [Getting started](docs/getting-started.md).
 
+## Hosted demo
+
+A public deployment sets `CIPHEROPS_HOSTED=1`. It then offers **Live, Compare, Benchmark and Learn** only; Setup and
+Reset are unreachable, including by URL. Benchmarks are limited to the **Small** size (20 names) and the launcher
+refuses larger ones; the offline harness is not offered. Everything else needs a local install: see
+[Quick start](#quick-start). With the variable unset, nothing changes.
+
 ## The dashboard
 
 | Tile | Use |
