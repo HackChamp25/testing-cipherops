@@ -7,7 +7,8 @@ can run CipherOps in the browser with nothing installed locally.
 
 ## What the dev container sets up
 
-- Python 3.12 with the dashboard requirements installed (`requirements-dashboard.txt`).
+- Python 3.12 (a dev container feature on a plain Debian base) with the dashboard requirements installed
+  (`requirements-dashboard.txt`).
 - Docker **inside** the codespace (docker-in-docker), so the compose files' bind mounts (`results/`, `configs/`)
   work exactly as they do locally.
 - Port 8501 forwarded and labelled "CipherOps dashboard".
@@ -35,6 +36,11 @@ From the terminal you can also use the command-line flow in [Getting started](ge
 and run the tests with `python -m pytest -m "not harness"`.
 
 ## Things to know
+
+- **If the container fails to build with `NO_PUBKEY 62D54FD4003F6525`.** That is the Yarn apt repository, whose signing
+  key was rotated; it comes from Microsoft's language-specific dev container images, which is why this configuration
+  uses the plain `base` image and adds Python as a feature. If you see it again, do not disable apt's signature
+  checks: switch the base image or remove the Yarn source in a Dockerfile step, and report the log.
 
 - **Builds are slow and a codespace stops when idle.** An image build or a full run takes tens of minutes to hours.
   Keep the browser tab open, or raise the idle timeout in your GitHub Codespaces settings. Builds and runs are
