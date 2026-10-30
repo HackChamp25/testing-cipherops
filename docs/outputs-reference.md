@@ -61,7 +61,7 @@ The configuration actually used, after command-line overrides (`--trials`, `--mo
 | `trials` / `warmup_trials` | 3 / 1 | measured trials per (dataset, mode); unmeasured warm-up runs per mode |
 | `modes` | all 5 | |
 | `control` | ed25519 | the mode that also runs as an A/A copy inside every trial; `null` = none |
-| `evolution` | k 1 and 10, 4 rounds each | evolving-zone experiment: `k` (changed RRsets per round), `rounds`, cached-ladder `ages`; absent = skipped |
+| `evolution` | k 1 and 10, 4 rounds each | evolving-zone experiment (**Zone updates** in the dashboard): `k` (changed RRsets per round), `rounds`, cached-ladder `ages`; absent = skipped |
 | `datasets` | small 20, medium 60, large 200 | names per zone |
 | `full_verify_sample` | 16 | MTL cold verifications per trial (`--full-verify`) |
 | `direct_sign_limit` | small none, medium 60, large 100 | SLH-DSA direct signs this many evenly spaced RRsets |

@@ -141,7 +141,7 @@ instead; this is stated wherever it matters and is not presented as a known-answ
 
 ## 10. The dashboard cannot disturb a measurement
 
-**Decision.** While a benchmark suite runs, every operation that touches the lab is refused; image builds and signing
+**Decision.** While a benchmark suite or an offline run is active, every operation that touches the lab or the CPU is refused (an offline run times on a dedicated core); image builds and signing
 run as background jobs with live logs; `dig` accepts only allow-listed options; clean-up removes files Docker created
 as root.
 

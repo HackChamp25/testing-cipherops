@@ -141,7 +141,7 @@ How the DNS draft (draft-fregly) carries this:
  |        |  6. stats.py       medians, CIs of the median           |
  |        |  7. report.py      report.md / .html / figures          |
  |        v                                                         |
- |   results/runs/<timestamp>-<run_name>/   (shared with Windows)   |
+ |   results/runs/<timestamp>-<run_name>/   (on the host)           |
  +------------------------------------------------------------------+
                  |
                  +--> scripts/make_pdf.ps1 turns report.html into a PDF
@@ -162,6 +162,7 @@ Three layers, each with one job:
 
 ```
 Cipherops/
+├── .devcontainer/          GitHub Codespaces setup (Python, Docker-in-Docker, port 8501)
 ├── configs/
 │   ├── scenarios.yaml      full PS-036 run (50 / 500 / 5000 names, 10 trials)
 │   └── quick.yaml          fast demo run (20 / 60 / 200 names, 3 trials)
@@ -179,7 +180,7 @@ Cipherops/
 │   ├── dnswire.py          builds real DNS answers, counts bytes, UDP/TCP model
 │   ├── cache.py            cache usage, measured and analytical
 │   ├── analytical.py       MTL draft section 12 size formulas
-│   ├── evolution.py        evolving-zone experiment and its tables
+│   ├── evolution.py        evolving-zone experiment and its tables (dashboard: Zone updates)
 │   ├── stats.py            summary statistics, median CIs
 │   ├── preflight.py        go/no-go gate (PS-036 "defer if unavailable")
 │   ├── envinfo.py          records hardware/software versions
@@ -187,7 +188,7 @@ Cipherops/
 │   ├── report.py           writes report.md, report.html, figures/
 │   ├── crosscheck.py       NSD server helper + byte-model cross-check
 │   └── live.py             live mode: real client, real NSD, pcap capture
-├── dashboard/              Streamlit live lab (app.py launches live_lab/app.py)
+├── dashboard/              Streamlit app (app.py launches live_lab/app.py)
 ├── scripts/
 │   ├── run_benchmark.sh    Linux/macOS: build image + run (start here)
 │   ├── run_benchmark.ps1   Windows equivalent
@@ -203,7 +204,9 @@ Cipherops/
 │   ├── methodology.md      measurement method in detail
 │   ├── architecture.md     this file
 │   ├── end-to-end-flow.md  what each of the 7 stages takes in and puts out
-│   └── outputs-reference.md  every output file and column
+│   ├── outputs-reference.md  every output file and column
+│   ├── getting-started.md, codespaces.md, scope-and-limits.md, README.md (index)
+│   └── learn/              background and two animated walkthroughs
 └── results/runs/<run_id>/  every run's outputs (section 9)
 ```
 
@@ -625,11 +628,21 @@ satisfies it. `build_html()` embeds images so the HTML is one file.
 
 ### 6.14 `dashboard/`
 
-The Streamlit live lab (`streamlit run dashboard/app.py`, which launches
-`dashboard/live_lab/app.py`). It drives the multi-zone lab in `ecosystem/`
-(setup, live queries and captures, the benchmark suite, compare). It does not
-read the offline `results/runs/` folders; the offline run's output is its
-`report.html`. See `dashboard/live_lab/README.md`.
+One Streamlit app (`streamlit run dashboard/live_lab/app.py`; `dashboard/app.py` launches it). It has six tiles:
+Setup, Live, Benchmark, Compare, Learn and Reset. It drives the multi-zone lab in `ecosystem/` and starts the
+offline harness as a background job.
+
+| Module | Role |
+|---|---|
+| `live_lab/app.py` | the pages and sidebars |
+| `live_lab/glossary.py` | the one list of labels and their explanations (the ⓘ icons) |
+| `live_lab/driver.py` | Docker and lab operations, and the rule that nothing disturbs a running benchmark |
+| `live_lab/suite.py`, `suite_report.py` | the simulated benchmark and its report |
+| `live_lab/offline_job.py` | runs `docker compose build` and the harness (`cipherops.runner run`) as a background job; state in `ecosystem/jobs/_offline/` |
+| `live_lab/build_job.py`, `prepare_job.py` | the image build and the signing as background jobs with live logs |
+| `live_lab/compare.py`, `compare_hub.py` | results of both paths reduced to one shape for the Compare tile; the offline side reads `results/runs/` |
+
+Offline and simulated results are never drawn together. See [the dashboard guide](../dashboard/live_lab/README.md).
 
 ### 6.15 `src/cipherops/crosscheck.py` and `src/cipherops/live.py`
 
@@ -647,12 +660,14 @@ helpers (`NSD`, `_udp`, `_tcp`, `signed_zone_text`, `load_run_zone`) that
 | `test_cache.py` | Measured cache counts exact signature bytes; MTL counts the ladder once; analytical rows per family. |
 | `test_harness.py` | (Docker only) Real signing in every mode: all signatures verify, every negative check rejected (including cross-message, wrong key, truncation), ECDSA wire form verifies, `mtlverify` and OpenSSL accept the artifacts, SLH-DSA signature is 7,856 B, MTL sizes within draft bounds, public key lengths match the DNSKEY field, artifacts round-trip. |
 | `test_crosscheck.py` | Signed zone file parses, every RRset signed; (Docker) NSD serves it. |
-| `test_dashboard.py` | Every live-lab tile renders without an exception. |
+| `test_dashboard.py` | Every tile, both Benchmark modes and each Compare view render without an exception. |
 | `test_stats.py` | The order-statistic confidence interval of the median: exact coverage figures, narrowing with more trials, empirical coverage matches the formula, labels warn when trials are too few. |
 | `test_lab_run.py` | Live-lab pass validity: SERVFAIL and timeouts are not latency; invalid passes are left out of the summary but their failures stay counted. |
-| `test_lab_guard.py` | Demo safety: lab operations are refused while a benchmark runs, a launching suite counts as active, `dig` accepts only allow-listed options, Prepare starts when `work/` is root-owned, root-owned folders are removed, the image build is a one-at-a-time background job. |
+| `test_lab_guard.py` | Demo safety: lab operations are refused while a benchmark runs, a launching suite counts as active, `dig` accepts only allow-listed options, signing starts when `work/` is root-owned, root-owned folders are removed, the image build is a one-at-a-time background job. |
 | `test_evolution.py` | The evolving-zone tables over synthetic frames with known answers, and the config checks. The harness gate for it is in `test_harness.py`. |
 | `test_results.py`, `test_control.py` | Paired per-trial ratios, the A/A control and its noise band, the timer-calibration summary. |
+| `test_offline_job.py` | The offline-harness job: command, progress parsing, run pick-up, and that it blocks other CPU-heavy work. No Docker. |
+| `test_learn.py` | The Learn pages need no network, and their size figures and draft versions agree with the formulas and the code. |
 | `test_compare_hub.py` | The shared algorithm frame for offline runs and live-lab suites, ratios to a baseline, run-against-run ratios and the comparability notes. |
 | `test_compare.py`, `test_live.py`, `test_prepare_job.py`, `test_prepare_story.py` | Dashboard helpers, packet decoding, the signing job and its replay (no Docker). |
 
@@ -671,7 +686,7 @@ docker run --rm --network none cipherops-bench:latest \
   the package.
 - `docker/compose.yml`: service `bench`; `cpuset` pins one core;
   `mem_limit: 4g`; `network_mode: none` (no Internet, no noise); mounts
-  `results/` and `configs/` from Windows. Service `live` is the same plus
+  `results/` and `configs/` from the host. Service `live` is the same plus
   `NET_ADMIN` (tc-netem on the container's own loopback).
 
 ---

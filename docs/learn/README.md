@@ -66,7 +66,7 @@ What this means:
 
 | If you want to know… | Read |
 |---|---|
-| What was built, what was selected and why, and what is **not** claimed | [README](../../README.md) |
+| What was built, what is **not** claimed, and which requirements are met | [README](../../README.md), [scope and limits](../scope-and-limits.md) |
 | How every number is measured, which are measured and which analytical, and how the statistics work | [methodology](../methodology.md) |
 | Why a choice was made (stack versions, the SLH-DSA form, the upstream mismatch) | [design decisions](../design-decisions.md) |
 | What each output file and column means | [outputs reference](../outputs-reference.md) |

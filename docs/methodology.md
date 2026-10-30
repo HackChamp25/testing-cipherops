@@ -9,8 +9,8 @@ numbers are estimates. It is the reference for every table in a run's
 - **Algorithm.** One supported PQC signature algorithm: **SLH-DSA-SHA2-128s**
   (FIPS 205, "pure" mode). It was chosen because its signatures are large
   (7,856 bytes) and slow to produce, the case MTL mode is designed for, and
-  because a DNSSEC draft for SLH-DSA with MTL exists. The README ("What was
-  selected, and why") gives the full rationale.
+  because a DNSSEC draft for SLH-DSA with MTL exists. [Design decisions](design-decisions.md)
+  §1 gives the full rationale.
 - **Reference implementation.** The **Verisign MTL C library**
   (`github.com/verisign/MTL`, pinned commit in the Dockerfile), the reference
   implementation of draft-harvey-cfrg-mtl-mode, selected with the mentor's
@@ -234,6 +234,8 @@ With few trials it is itself uncertain (see the coverage table above).
 
 ### 6.4 Evolving zone: MTL on a series that keeps growing
 
+The dashboard shows this experiment as **Compare → Zone updates**, in operations terms (records changed per update, re-sign time, stale resolver cache).
+
 Signing a whole zone once is MTL's best case. A real zone changes, so the experiment in `src/cipherops/evolution.py`
 (`mtlbench evolve` and `evolve-direct`) starts from each dataset, then runs rounds in which **k** RRsets change
 (`evolution:` in the config: `k`, `rounds`, `ages`). All of it is measured with the reference library and written
@@ -332,10 +334,12 @@ Measured MTL sizes are compared against the section 12 maximum formulas in
 
 ## 10. Live lab (second measurement path)
 
+The dashboard calls this path **Simulated (Verisign stack)**.
+
 `dashboard/live_lab` and `ecosystem/` run a multi-zone hierarchy (root, one
 TLD, leaf zones) with unmodified NSD servers and a validating Unbound, so the
 *resolver* behaviour of MTL can be observed. It is a separate pinned software
-stack from the offline harness (see the table in the README) and is used for
+stack from the offline harness (see [scope and limits](scope-and-limits.md#software-stacks)) and is used for
 different questions:
 
 | Question | Offline harness | Live lab |
