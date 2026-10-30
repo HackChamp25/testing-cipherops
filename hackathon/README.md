@@ -32,7 +32,7 @@ Akash Joshi · Anitha Natarajan · Indu Radhakrishnan (faculty).
 | | |
 | --- | --- |
 | [readout.md](readout.md) | the short readout: problem, what was done, results, issues found, next steps |
-| [feedback.md](feedback.md) | issues found in the implementations and drafts, the interop and results matrix, follow-ups |
+| [feedback.md](feedback.md) | findings, the interop and results matrix, follow-ups |
 | [results/](results/README.md) | frozen results, with where and how they ran |
 | [presentation/](presentation) | the deck: [revised 30 Oct 2026](presentation/A3-PS036-TC161_2026-10-30.pdf) and [original 13 Oct 2026](presentation/A3-PS036-TC161_2026-10-13.pdf) |
 | [../DELIVERABLES.md](../DELIVERABLES.md) | what is submitted, the PS-036 requirements, and open items |

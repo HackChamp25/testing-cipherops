@@ -502,7 +502,7 @@ def build_markdown(run: results.Run, figs: dict[str, str]) -> str:
             add(f"\n![{caption}]({figs[key]})\n\n*{caption}*\n")
 
     add("# Benchmarking MTL Mode for Post-Quantum DNSSEC Signatures")
-    add("### PS-036 · PQC DNSSEC MTL Benchmark Using a Reference Implementation · IETF 126 Hackathon\n")
+    add("### PS-036 · PQC DNSSEC MTL Benchmark Using a Reference Implementation · AIORI Hackathon 3\n")
     add(f"Run `{run.root.name}` · go/no-go gate: **{run.preflight.get('verdict', 'missing')}** · "
         f"{cfg['trials']} trials · seed {cfg['seed']} · stack `{env.get('stack', 'unknown')}` · "
         f"git `{env.get('git_sha', 'unknown')}`\n")

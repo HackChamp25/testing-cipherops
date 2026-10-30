@@ -1,7 +1,7 @@
-# Feedback to the drafts and implementations
+# Findings and interop matrix
 
-What we found while measuring, with the evidence and the state of each item. **Nothing here has been filed upstream
-yet**; each entry says what a report would contain.
+What we found while measuring, with the evidence and the state of each item. **Nothing here has been reported to the
+upstream projects yet**; each entry says what a report would contain.
 
 ## Interop and results matrix
 

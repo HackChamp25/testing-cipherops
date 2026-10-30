@@ -1,5 +1,5 @@
 # Benchmarking MTL Mode for Post-Quantum DNSSEC Signatures
-### PS-036 · PQC DNSSEC MTL Benchmark Using a Reference Implementation · IETF 126 Hackathon
+### PS-036 · PQC DNSSEC MTL Benchmark Using a Reference Implementation · AIORI Hackathon 3
 
 Run `20261030T074948Z-quick-demo` · go/no-go gate: **GO** · 3 trials · seed 20261005 · stack `latest` · git `90ecbc1f20cc3139d070ac97d943f05ea97ec50e`
 

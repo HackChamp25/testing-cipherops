@@ -1,7 +1,8 @@
 # Frozen results
 
-Results quoted by the submission are copied here so they cannot change when the tool is re-run. Nothing is edited after
-copying.
+Results quoted by the submission are copied here so they cannot change when the tool is re-run. The data is not edited
+after copying. The only change is that `report.md` and `report.html` were regenerated once from the same data after a
+wording change to the report subtitle; every number and figure is identical.
 
 ## quick-demo-20261030T074948Z
 
