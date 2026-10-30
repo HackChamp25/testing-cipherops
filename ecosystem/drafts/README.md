@@ -64,7 +64,7 @@ Related:
 ```
 ecosystem/configs/lab.yaml
 ecosystem/stacks/draft06.env
-ecosystem/reports/verisign-unbound-ds-ladder-issue.md
+ecosystem/reports/verisign-unbound-ds-ladder-issue.md   # not included in this repository
 ```
 
 A smaller smoke run also exists under

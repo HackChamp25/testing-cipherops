@@ -29,9 +29,9 @@ CipherOps measures what that changes, against classical DNSSEC and against plain
 
 | | |
 | :--- | :--- |
-| **Presentation** | [`A3-PS036-TC161.pptx.pdf`](A3-PS036-TC161.pptx.pdf) |
+| **Presentation** | [revised, 30 Oct 2026](A3-PS036-TC161_2026-10-30.pdf) · [original, 13 Oct 2026](A3-PS036-TC161_2026-10-13.pdf) |
 | **Project video** | [YouTube](https://youtu.be/FaVfeO5WTV8) |
-| **Try it** | [Codespaces](docs/codespaces.md) or [locally](docs/getting-started.md) |
+| **Working demo** | [Run it in your browser with Codespaces](docs/codespaces.md), or [locally](docs/getting-started.md) |
 | **How we measure** | [Methodology](docs/methodology.md) · [Architecture](docs/architecture.md) |
 
 Numbers live in each run's `report.html` under `results/runs/`, not in the documentation, so they cannot go stale.
@@ -96,5 +96,7 @@ The full index is [docs/README.md](docs/README.md).
 
 ## Team and license
 
-**A3-PS036-TC161**: Akash Joshi · Anitha · Induradhakrishnan. MIT, see [LICENSE](LICENSE). Verisign MTL, liboqs,
-OpenSSL and NSD keep their own licences at build time.
+**A3-PS036-TC161**: Akash Joshi · Anitha Natarajan · Indu Radhakrishnan (faculty). MIT, see [LICENSE](LICENSE). Verisign
+MTL, liboqs, OpenSSL, NSD and the rest keep their own licences and are built at pinned versions, never copied here: see
+[third-party notices](THIRD_PARTY_NOTICES.md). CipherOps is not affiliated with or endorsed by Verisign. To cite it, see
+[CITATION.cff](CITATION.cff).

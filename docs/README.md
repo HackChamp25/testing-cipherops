@@ -29,6 +29,7 @@ Start with the [README](../README.md). Then read in the order that matches what 
 
 ## Appendix
 
+- [Third-party notices](../THIRD_PARTY_NOTICES.md): licences of the software CipherOps builds on, and what to keep if you redistribute it.
 - [IETF draft notes](../ecosystem/drafts/README.md): working text for an Informational Internet-Draft based on the lab.
   It reports an earlier run with an earlier method; do not quote its numbers as current results.
 - [Brand assets](media/README.md)

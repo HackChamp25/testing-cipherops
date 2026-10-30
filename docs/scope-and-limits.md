@@ -36,6 +36,31 @@ What CipherOps claims, what it does not, and how the requirements of the problem
 - **The drafts are drafts.** MTL mode and its DNSSEC profiles are individual Internet-Drafts, not RFCs. Status:
   [Learn: where the IETF stands](learn/README.md#where-the-ietf-stands).
 
+## Benchmark practice
+
+What a result needs so that someone else can trust and repeat it, and where each point is met:
+
+- **Pinned, recorded environment.** Software comes from a stack profile; every run records versions, git commit
+  (and whether the tree was modified), CPU, memory, kernel, governor and image IDs (`environment.json`, `suite.json`).
+- **Controlled noise.** The offline harness runs on one dedicated core with no network, discards a warm-up run, seeds
+  every order, and measures an A/A control (a mode against itself) so a difference smaller than the noise floor is not
+  reported as a difference.
+- **Honest statistics.** Medians with a distribution-free interval whose real coverage is stated; too few trials are
+  labelled as such ([methodology §6.2](methodology.md#62-statistics)).
+- **No cherry-picking.** Reports are generated from the data, not typed in; failed queries are excluded from latency but
+  stay counted and warned about; measured, estimated and analytical numbers are labelled and never blended.
+- **Fail safe.** The go/no-go gate blocks a run when the reference library or fixtures are not available.
+- **Report like this.** Quote the run id and stack profile with every number, and say whether it is offline or
+  simulated. Do not present results as Verisign's, or as a product comparison.
+
+## Responsible use
+
+- The offline harness runs with `network_mode: none`; the simulated lab runs on an internal Docker bridge network, so
+  lab traffic does not leave your machine. Zones use reserved names (`bench.example.` offline, `.test` in the lab), not real domains.
+- Do not point the query or capture tools at servers you do not operate.
+- The software is built from third-party sources at pinned commits; see
+  [third-party notices](../THIRD_PARTY_NOTICES.md) before you redistribute images or binaries.
+
 ## Software stacks
 
 Every version lives in one file per **stack profile**, [`ecosystem/stacks/<profile>.env`](../ecosystem/stacks). The
